@@ -1,0 +1,11 @@
+{
+  "schema": 1, "agent": "clickhouse-doctor/0.2.0", "sent_at": "2026-10-09T14:23:02Z", "status": "ok",
+  "server": { "clickhouse_version": "25.12.1.649", "hostname": "db-prod-7.acme.internal", "product": "langfuse" },
+  "disks": [ { "disk": "10.0.3.17", "total_bytes": 1, "free_bytes": 1 } ],
+  "tables": [
+    { "db": "customer_acme", "table": "alex@company.example", "bytes": 1 },
+    { "db": "db_00a41f09c2d1e0b7", "table": "t_3f9a1c2e0b77d10", "bytes": 1 },
+    { "db": "default", "table": "inner_id_1b4e28ba2fa111d2883f0016d3cca427", "bytes": 1, "query": "SELECT 1" }
+  ],
+  "not_run": []
+}

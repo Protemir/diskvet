@@ -1,0 +1,13 @@
+# Minimal stand-in for Langfuse's clickhouse service: same service name,
+# same user and CLICKHOUSE_USER / CLICKHOUSE_PASSWORD env as Langfuse's compose file.
+name: chd-lf
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:${CH_VERSION:-25.12}
+    user: "101:101"            # as in Langfuse: docker exec runs as clickhouse, not root
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }

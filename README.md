@@ -1,0 +1,333 @@
+# clickhouse-doctor
+
+> Working name. The final name and the download links are not chosen yet:
+> `<you>` and `<site>` below are placeholders, and nothing is published.
+
+A read-only check-up for the ClickHouse that runs **inside** your self-hosted
+Langfuse, SigNoz or ClickStack. It finds what eats the disk and prints the
+exact commands to fix it.
+
+The usual story: the disk fills up, but your own data is small.
+
+- 66.86 GiB of `system.trace_log` next to less than 150 MiB of Langfuse data
+  ([langfuse#13123](https://github.com/langfuse/langfuse/issues/13123));
+- 80+ GB of system logs next to less than 500 MB of telemetry
+  ([SigNoz#12050](https://github.com/SigNoz/signoz/issues/12050));
+- a 10 Gi volume full in 10 days
+  ([ClickStack-helm-charts#275](https://github.com/ClickHouse/ClickStack-helm-charts/pull/275)).
+
+ClickHouse does not limit its own logs by default. This script shows how big
+they are and generates the fix, together with the traps that the fix hits in
+practice (see [Known gotchas](#known-gotchas)).
+
+Two files, both short enough to read before you run them:
+
+| File | What it is |
+|---|---|
+| `checks.sql` | every query the script runs: only `SELECT`, only `FROM system.*` |
+| `doctor.sh` | POSIX `sh` wrapper: runs the queries with `readonly=2`, renders the report |
+
+Apache-2.0. No registration, no network calls, nothing is sent anywhere.
+
+## Quick start: Langfuse with docker compose (30 seconds)
+
+On the machine where Langfuse's `docker-compose.yml` runs:
+
+```sh
+cd langfuse                     # the folder with Langfuse's docker-compose.yml
+curl -fsSLO https://github.com/<you>/clickhouse-doctor/releases/download/v0.2.0/doctor.sh
+curl -fsSLO https://github.com/<you>/clickhouse-doctor/releases/download/v0.2.0/checks.sql
+less checks.sql                 # read it first: SELECTs from system.* only
+
+sh doctor.sh report --docker auto > report.md
+```
+
+`--docker auto` finds the container itself: the compose service `clickhouse` in
+the current folder, otherwise the one running container whose image is
+`clickhouse-server`. It runs `clickhouse-client` inside that container with
+`docker exec -i`, so you need neither a ClickHouse client on the host nor an
+open port. When you don't pass `--user`, it uses the container's own
+`CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` (Langfuse's compose sets them), and the
+password never leaves the container.
+
+Other ways to connect:
+
+```sh
+sh doctor.sh report --docker signoz-clickhouse                # a container by name
+sh doctor.sh report --host 127.0.0.1 --user doctor --password '...'   # local clickhouse-client
+```
+
+## What it checks
+
+| # | Check | From | WARN | CRITICAL |
+|---|---|---|---|---|
+| 1 | System logs without TTL | `system.tables`, `system.parts` | no TTL and ≥ 1 GiB or ≥ 5% of the disk; an old copy `*_log_N` ≥ 1 GiB; TTL set but rows older than TTL + 2 days | no TTL and ≥ 10 GiB or ≥ 15% of the disk |
+| 2 | Disk space not in ClickHouse table parts | `system.disks` vs `bytes_on_disk` of all parts | ≥ 20% of the disk and ≥ 10 GiB | ≥ 30% of the disk and less than 20% free |
+| 3 | Disk usage and rough forecast | `system.disks`, `system.asynchronous_metric_log` | ≥ 80% used or full in ≤ 14 days | ≥ 90% used, less than 5 GiB free, or full in ≤ 7 days |
+| 4 | Growth per day | `system.part_log` (new parts in 24 h) | one table wrote ≥ 5% of the free space | ≥ 15% |
+| 5 | Too many parts | `system.parts`, `system.merge_tree_settings`, `system.events` | ≥ 300 parts in a partition, or rejected inserts | ≥ the table's `parts_to_delay_insert` |
+| 6 | Inactive and detached parts | `system.parts`, `system.detached_parts` | inactive parts stuck > 1 h; detached ≥ 1 GiB | stuck ≥ 10 GiB |
+| 7 | Deleted rows and stuck mutations | `system.parts` (`has_lightweight_delete`), `system.mutations` | ≥ 10% of a table in parts with deleted rows; a mutation older than 60 min | ≥ 30% and ≥ 10 GiB; a failing mutation or one older than a day |
+
+System logs without TTL between 100 MiB and 1 GiB are marked INFO. A check whose
+query fails (old version, missing grant, no `part_log`) shows `NOT_RUN` with the
+reason; the other checks still run.
+
+The report also has a short passport: ClickHouse version, which product the
+tables belong to (Langfuse, SigNoz, ClickStack or other, guessed from table
+names), product data vs ClickHouse's own logs, and version-specific warnings.
+
+Every problem comes with commands and how safe they are: `TRUNCATE` for the
+logs (with the one-time flag when a table is over the 50 GB drop limit), a
+generated `config.d` file with a TTL for every log that has none, the list of
+old `*_log_N` copies to drop, Docker log rotation, `APPLY DELETED MASK` for
+the exact partitions, `KILL MUTATION`, and `OPTIMIZE ... FINAL` only with a
+warning. **Nothing runs by itself.**
+
+## What it reads, and what it never reads
+
+It reads metadata from these system tables: `system.tables`, `system.parts`,
+`system.disks`, `system.detached_parts`, `system.merge_tree_settings`,
+`system.mutations`, `system.part_log`, `system.asynchronous_metric_log`,
+`system.asynchronous_metrics`, `system.events`, and, if allowed,
+`system.server_settings` (only `max_table_size_to_drop`).
+
+It never reads:
+
+- rows of your own tables (no `FROM` outside `system.*`, no table functions:
+  `tests/check_sql.sh` enforces this in CI);
+- `system.query_log`, query texts, mutation commands or error texts (for a
+  mutation it only reads whether the last attempt failed);
+- anything over the network: there are no network calls at all.
+
+The local report shows real database, table and partition names, because you
+need them to run the fixes. It stays on your machine.
+
+## Two ways to run it safely
+
+**A. With an existing user.** The wrapper passes `--readonly=2` and limits:
+`max_execution_time=30`, `max_result_rows=10000`, `result_overflow_mode=break`,
+`max_threads=2`, `max_memory_usage=500000000`, `log_comment=clickhouse-doctor`.
+This guarantees that nothing is changed. What is read is exactly what you see
+in `checks.sql`.
+
+**B. With a dedicated user, for security reviews.** Only this guarantees that
+product data can't be read. Since ClickHouse ~24.1 reading `system.*` needs
+explicit grants (`select_from_system_db_requires_grant`), so they are listed:
+
+```sql
+CREATE SETTINGS PROFILE IF NOT EXISTS doctor_profile SETTINGS
+    readonly = 1, max_execution_time = 30, max_result_rows = 10000,
+    result_overflow_mode = 'break', max_threads = 2, max_memory_usage = 500000000;
+
+CREATE USER IF NOT EXISTS doctor
+    IDENTIFIED WITH sha256_password BY '<long random password>'
+    HOST LOCAL
+    SETTINGS PROFILE 'doctor_profile';
+
+GRANT SHOW TABLES ON *.* TO doctor;   -- table metadata only, NOT data
+GRANT SELECT ON system.parts TO doctor;
+GRANT SELECT ON system.disks TO doctor;
+GRANT SELECT ON system.merge_tree_settings TO doctor;
+GRANT SELECT ON system.mutations TO doctor;
+GRANT SELECT ON system.detached_parts TO doctor;
+GRANT SELECT ON system.part_log TO doctor;
+GRANT SELECT ON system.asynchronous_metric_log TO doctor;
+GRANT SELECT ON system.asynchronous_metrics TO doctor;
+GRANT SELECT ON system.events TO doctor;
+```
+
+```sh
+sh doctor.sh report --docker auto --user doctor --password '<long random password>'
+```
+
+`GRANT SELECT ON system.*` is not given on purpose: `system.query_log` holds the
+query texts of all users.
+
+What we saw with this user on ClickHouse 24.8, 25.12 and 26.9:
+
+- a `readonly=1` profile refuses `--readonly=2` and the limit flags, so the
+  script notices it and runs without flags: the profile's own limits apply;
+- `SHOW TABLES ON *.*` is enough to see the parts of product tables in
+  `system.parts` and the tables in `system.tables`, but `SELECT` on a product
+  table and on `system.query_log` is refused;
+- `system.server_settings` is not granted, so the report assumes the default
+  drop limit (50 GB) and says so. Add `GRANT SELECT ON system.server_settings`
+  if you changed `max_table_size_to_drop`.
+
+## Example report (shortened)
+
+````markdown
+# ClickHouse check-up · 2026-10-09 06:40 UTC
+clickhouse-doctor 0.2.0 · ClickHouse 25.12.1.649 · detected: Langfuse · container langfuse-clickhouse-1
+Nothing was changed. Nothing was sent anywhere. Queries ran with readonly=2 and resource limits.
+
+| # | Check | Status |
+|---|---|---|
+| 1 | System logs without TTL | CRITICAL |
+| 2 | Disk space not in ClickHouse table parts | WARN |
+| 3 | Disk usage and rough forecast | WARN |
+| 4 | Growth per day | WARN |
+| 5 | Too many parts | OK |
+| 6 | Inactive and detached parts | OK |
+| 7 | Deleted rows and stuck mutations | WARN |
+
+## 1. System logs without TTL: CRITICAL
+
+88.7 GiB of ClickHouse's own logs vs 5.4 GiB of Langfuse data. 6 logs have no TTL (79.1 GiB together).
+
+| Table | Size | Rows | TTL | Oldest row | Status |
+|---|---|---|---|---|---|
+| system.trace_log | 58.3 GiB | 912.3M | none | 212 d | CRITICAL |
+| system.text_log | 14.2 GiB | 45.1M | none | 212 d | CRITICAL |
+| system.query_log | 6.1 GiB | 9.1M | none | 212 d | WARN |
+| system.trace_log_0 | 2.0 GiB | 31.2M | old copy | 300 d | WARN |
+
+**Fix A: free space now.** Safe for your data, no restart: it deletes only ClickHouse's own log rows.
+```sql
+TRUNCATE TABLE system.text_log;
+TRUNCATE TABLE system.query_log;
+```
+system.trace_log (58.3 GiB) is over the drop limit (max_table_size_to_drop = 50 GB), so ClickHouse
+refuses a plain TRUNCATE. Create the one-time flag right before it (one TRUNCATE uses it up):
+```sh
+docker exec langfuse-clickhouse-1 sh -c 'touch /var/lib/clickhouse/flags/force_drop_table && chmod 666 /var/lib/clickhouse/flags/force_drop_table'
+```
+```sql
+TRUNCATE TABLE system.trace_log;
+```
+
+**Fix B: stop it coming back.** Safe; needs a ClickHouse restart (about 10 s). Keeps 7 days of each log.
+Save as `clickhouse-ttl.xml` ...
+…
+---
+This is a snapshot. It can't tell when the disk will really run out, or whether your trace_log is normal for a Langfuse of your size.
+Free beta until Nov 7: hourly snapshot, email before the disk fills → <site>/beta
+````
+
+The full example is what `sh doctor.sh report --replay tests/fixtures/alex.tsv`
+prints.
+
+## `--print-payload`: what a snapshot would contain
+
+```sh
+sh doctor.sh --print-payload --docker auto
+```
+
+prints the JSON that a future hourly snapshot would send, so you can review it
+before anything is ever sent. **Sending is not implemented**: `push` only says
+"not available yet".
+
+- Only the fields listed in `tests/payload_keys.txt`: sizes, row and part
+  counts, TTL, insert limits, counters, disk size and free space, product and
+  ClickHouse version. CI fails on any other key.
+- Never: host names, IPs, ClickHouse cluster names, users, paths, UUIDs,
+  `engine_full`, query texts, mutation ids or commands, error texts, partition
+  names or values.
+- Names of system tables and of known Langfuse, SigNoz and ClickStack tables
+  are kept. Every other database and table name becomes a salted hash:
+  `db_` / `t_` + 16 hex digits of `sipHash64(salt, name)`, computed by your
+  ClickHouse. Disks other than `default` become `disk_1`, `disk_2`, ...
+- The salt lives only on your server, in `/etc/clickhouse-doctor.env`
+  (`--env` to change), as `SALT=<64 hex chars>`:
+
+  ```sh
+  (umask 077; printf 'SALT=%s\n' "$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')" > /etc/clickhouse-doctor.env)
+  ```
+
+  Without the file the script uses a one-time random salt and says so on
+  stderr. **Keep the file:** a new salt gives new hashes, and the history of
+  your own tables starts from zero.
+
+## Known gotchas
+
+These are the traps the report handles for you. Each was checked on ClickHouse
+24.8, 25.12 and 26.9 in Docker (`tests/run.sh`).
+
+- **TRUNCATE refuses tables over 50 GB.** `max_table_size_to_drop` (default
+  50 GB = 46.6 GiB) also applies to `TRUNCATE` and `DROP` of system logs. Create
+  `/var/lib/clickhouse/flags/force_drop_table` (with `chmod 666`, the server
+  deletes it) right before the command. One command uses the flag up, so create
+  it again before the next big table. On 24.8+ this also works without the flag:
+  `TRUNCATE TABLE system.trace_log SETTINGS max_table_size_to_drop = 0`.
+- **A TTL change creates `*_log_N` copies.** `<ttl>` in `config.d` needs a
+  restart (`SYSTEM RELOAD CONFIG` is not enough). On restart ClickHouse renames
+  the old table to `trace_log_0` (then `_1`, ...) with all its rows and starts
+  a new one. So truncate first, restart second, drop the copies third. The
+  report lists the copies from `system.tables`, not from a fixed list.
+- **`opentelemetry_span_log` is special.** The default server config defines it
+  with `<engine>`. A plain `<ttl>` for it stops ClickHouse from starting:
+  `If 'engine' is specified for system table, TTL parameters should be specified
+  directly inside 'engine'`. The generated file puts its TTL inside `<engine>`
+  (on `finish_date`). If your own config defines other logs with `<engine>`, do
+  the same for them.
+- **Docker container logs.** Space outside ClickHouse's parts is often Docker's
+  `*-json.log` without rotation
+  ([langfuse#16339](https://github.com/langfuse/langfuse/issues/16339): 89.1 GiB).
+  The script can't see these files; check 2 shows how much is outside and how
+  to rotate.
+- **Lightweight deletes keep the space.** `DELETE FROM` only marks rows; the
+  space comes back when the part is merged or the mask is applied. Old
+  partitions are rarely merged. The report prints `APPLY DELETED MASK IN
+  PARTITION ID '...'` for the exact partitions (only locally). The script can't
+  count deleted rows without reading your data, so it shows the share of the
+  table in affected parts, an upper bound.
+- **Langfuse + ClickHouse 26.8+: update Langfuse first.** Older Langfuse sends
+  DateTime64 values as JSON numbers; ClickHouse 26.8+ reads them differently and
+  stores `9999-12-31 23:59:59`
+  ([langfuse#16858](https://github.com/langfuse/langfuse/issues/16858), fixed in
+  [PR #16892](https://github.com/langfuse/langfuse/pull/16892)). We reproduced
+  it on 26.9: the row lands in partition `999912`, while 24.8 and 25.12 store the
+  right date. The report counts such partitions and warns before the upgrade.
+- **ClickHouse 24.x `part_log` has no rows for system tables**, so check 4 can't
+  show the growth of ClickHouse's own logs there (25.12 and 26.9 do record them).
+- **`free_space` already subtracts `keep_free_space_bytes`**, and so does
+  `total_space`: with 1 GiB of `keep_free_space_bytes`, `system.disks` showed
+  `total_space` exactly 1 GiB below `df`'s size and `free_space` about 1 GiB
+  below `df`'s available space. The script uses the values as they are, so its
+  percentages can differ from `df` by that amount.
+- **`DelayedInserts` / `RejectedInserts` count only since the last restart**
+  (`system.events` is reset), and they show up only after the first event. The
+  report says "since the server started".
+
+## Tested on
+
+| ClickHouse | Image | Shells | Coverage |
+|---|---|---|---|
+| 24.8.14.39 | `clickhouse/clickhouse-server:24.8` | Git Bash (Windows), dash + mawk | full `tests/run.sh` |
+| 25.12.11.4 | `clickhouse/clickhouse-server:25.12` | Git Bash, dash + mawk, busybox ash + busybox awk | full `tests/run.sh` |
+| 26.9.1.1629 | `clickhouse/clickhouse-server:latest` | Git Bash, dash + mawk, busybox ash + busybox awk | full `tests/run.sh` |
+| 24.8.14.39 | `clickhouse/clickhouse-server:24.8-alpine` | busybox ash + busybox awk | report and payload run, no seeded problems |
+| 24.1.2.5 | `clickhouse/clickhouse-server:24.1.2-alpine` (SigNoz's) | busybox ash + busybox awk | report and payload run; a fresh 24.1 has no `part_log` until the first flush, check 4 then falls back to `system.parts` |
+
+Not tested yet: a real Langfuse, SigNoz or ClickStack install, replicated
+clusters, Kubernetes, disks on object storage (the script skips remote disks),
+macOS.
+
+## Requirements
+
+- POSIX `sh` (dash, busybox ash, bash), `awk` (gawk, mawk, busybox awk), `sed`,
+  `od`, `date`. No `jq`, no Python.
+- `docker` for `--docker`, or `clickhouse-client` / `clickhouse client` on the
+  machine for `--host`.
+- ClickHouse 24.8 or newer is what CI covers.
+
+## Development
+
+```sh
+sh tests/replay.sh              # offline: fixtures, SQL safety, payload privacy
+sh tests/check_sql.sh           # checks.sql: SELECT from system.* only
+sh tests/run.sh                 # Docker: ClickHouse 24.8, 25.12, latest (~2 min each)
+sh tests/auto.sh                # Docker: --docker auto with a Langfuse-like compose file
+```
+
+`tests/run.sh` seeds each server with the problems above, runs the script from
+the host and inside the container (dash, busybox), as Variant B, then runs the
+fix commands from the report and checks that they work. `tests/auto.sh` starts
+a compose service named `clickhouse` with `CLICKHOUSE_USER` /
+`CLICKHOUSE_PASSWORD`, like Langfuse's, and checks in `system.query_log` that
+the script ran as that user and sent only `SELECT` queries.
+
+## License
+
+[Apache-2.0](LICENSE).

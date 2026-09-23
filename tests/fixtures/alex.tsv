@@ -1,0 +1,39 @@
+@@	passport	ok
+passport	25.12.1.649	864000	langfuse	0	5798205849	95241216819	0
+@@	drop_limit	ok
+drop_limit	max_table_size_to_drop	50000000000
+@@	system_logs	ok
+system_logs	trace_log	0	0	0	62599690649	912345678	212	event_date	toYYYYMM(event_date)	event_date, event_time	161061273600
+system_logs	text_log	0	0	0	15247133900	45123456	212	event_date	toYYYYMM(event_date)	event_date, event_time	161061273600
+system_logs	query_log	0	0	0	6549825126	9123456	212	event_date	toYYYYMM(event_date)	event_date, event_time	161061273600
+system_logs	trace_log_0	1	0	0	2147483648	31234567	300	event_date	toYYYYMM(event_date)	event_date, event_time	161061273600
+system_logs	metric_log	0	0	0	524288000	612345	212	event_date	toYYYYMM(event_date)	event_date, event_time	161061273600
+system_logs	processors_profile_log	0	1	30	300000000	1234567	45	event_date	toYYYYMM(event_date)	event_date, event_time	161061273600
+system_logs	opentelemetry_span_log	0	0	0	1048576	1234	12	finish_date	toYYYYMM(finish_date)	finish_date, finish_time_us	161061273600
+system_logs	asynchronous_insert_log	0	1	3	1000000	123	2	event_date	event_date	event_date, event_time	161061273600
+system_logs	crash_log	0	0	0	0	0	0	event_date			161061273600
+@@	not_in_parts	ok
+not_in_parts	default	161061273600	27058293965	101036953190	104857600	0
+@@	disk_now	ok
+disk_now	default	/var/lib/clickhouse/	161061273600	27058293965	27058293965	0
+@@	disk_history	ok
+disk_history	default	168	167	1610612736
+@@	disk_history_kv	fail	optional	Code: 47. Unknown expression identifier 'key' in scope SELECT key AS disk (UNKNOWN_IDENTIFIER)
+@@	growth_24h	ok
+growth_24h	system	trace_log	1503238553	96
+growth_24h	default	observations	107374182	1440
+@@	growth_parts	ok
+@@	too_many_parts	ok
+too_many_parts	server				214	1000	3000	0	0
+too_many_parts	partition	default	observations	202609	214	1000	3000	0	0
+too_many_parts	partition	default	traces	202609	120	1000	3000	0	0
+@@	inactive_parts	ok
+inactive_parts	inactive	default	observations	12	104857600	0	0	1		
+@@	deleted_rows	ok
+deleted_rows	default	observations	202608	3	1932735283	4198330532
+@@	mutations	ok
+@@	tables	ok
+tables	system	trace_log	system	trace_log	0	62599690649	912345678	38	38	212
+tables	default	observations	default	observations	0	4198330532	51234567	260	214	0
+tables	customer_acme	payments_eu	db_00a41f09c2d1e0b7	t_3f9a1c2e0b77d104	0	1048576	1000	1	1	0
+tables	system	processors_profile_log	system	processors_profile_log	1	300000000	1234567	12	12	45

@@ -1,0 +1,33 @@
+@@	passport	ok
+passport	26.9.1.1629	3600	langfuse	1	21474836480	48318382080	5
+@@	drop_limit	fail	optional	Code: 497. doctor: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.server_settings. (ACCESS_DENIED)
+@@	system_logs	ok
+system_logs	text_log	0	0	0	21474836480	90000000	30	event_date	toYYYYMM(event_date)	event_date, event_time	107374182400
+system_logs	trace_log	0	0	0	5368709120	60000000	30	event_date	toYYYYMM(event_date)	event_date, event_time	107374182400
+system_logs	query_log_1	1	0	0	64424509440	1000000	90	event_date	toYYYYMM(event_date)	event_date, event_time	107374182400
+system_logs	query_log_2	1	0	0	1048576	100	120	event_date	toYYYYMM(event_date)	event_date, event_time	107374182400
+@@	not_in_parts	ok
+not_in_parts	default	107374182400	3221225472	42949672960	0	2147483648
+@@	disk_now	ok
+disk_now	default	/data/clickhouse	107374182400	3221225472	3221225472	0
+@@	disk_history	ok
+@@	disk_history_kv	ok
+disk_history_kv	default	100	99	2147483648
+@@	growth_24h	ok
+growth_24h	default	events_full	1073741824	3000
+@@	growth_parts	ok
+@@	too_many_parts	ok
+too_many_parts	server				1200	1000	3000	523	17
+too_many_parts	partition	default	events_full	202609	1200	1000	3000	0	0
+too_many_parts	partition	customer_acme	clicks	20260923	350	1000	3000	0	0
+@@	inactive_parts	ok
+inactive_parts	inactive	default	events_full	40	12884901888	35	12348030976	3	Candidate for deletion	
+inactive_parts	detached	default	traces	3	2147483648	0	0	0	broken-on-start, detached by user	202608_1_1_0 202608_2_2_0 202608_3_3_0
+@@	deleted_rows	ok
+deleted_rows	default	traces	202608	10	12884901888	21474836480
+deleted_rows	default	traces	202607	2	1073741824	21474836480
+@@	mutations	ok
+mutations	default	traces	mutation_42.txt	3000	12	1
+mutations	default	scores	mutation_7.txt	90	3	0
+@@	tables	ok
+tables	default	traces	default	traces	0	21474836480	123456789	40	12	0

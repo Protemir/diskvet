@@ -1,0 +1,9 @@
+* text=auto eol=lf
+*.sh eol=lf
+*.sql eol=lf
+*.tsv eol=lf
+*.json eol=lf
+*.xml eol=lf
+*.yml eol=lf
+*.md eol=lf
+LICENSE eol=lf

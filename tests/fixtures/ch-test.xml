@@ -1,0 +1,14 @@
+<!-- Test-only server config for tests/run.sh (copied into config.d). -->
+<clickhouse>
+    <!-- 10 MiB instead of 50 GB, so the force_drop_table recipe can be tested
+         without 50 GB of data. -->
+    <max_table_size_to_drop>10485760</max_table_size_to_drop>
+    <!-- Does system.disks.free_space already subtract keep_free_space? (plan, point 7) -->
+    <storage_configuration>
+        <disks>
+            <default>
+                <keep_free_space_bytes>1073741824</keep_free_space_bytes>
+            </default>
+        </disks>
+    </storage_configuration>
+</clickhouse>

@@ -1,0 +1,47 @@
+# Every key that may appear in the --print-payload JSON. tests/check_payload.sh
+# fails on any other key. Adding a key here is a privacy decision: say why in the PR.
+# top level
+schema
+agent
+sent_at
+status
+server
+disks
+tables
+not_run
+# server
+clickhouse_version
+uptime_s
+product
+replicated
+product_bytes
+system_log_bytes
+year_9999_parts
+parts_to_delay_insert
+parts_to_throw_insert
+delayed_inserts
+rejected_inserts
+max_parts_in_partition
+mutations_pending
+mutations_failing
+# disks
+disk
+total_bytes
+free_bytes
+parts_bytes
+# tables
+db
+table
+has_ttl
+ttl_days
+bytes
+rows
+active_parts
+oldest_days
+written_bytes_24h
+lwd_parts
+lwd_parts_bytes
+inactive_parts
+inactive_bytes
+detached_parts
+detached_bytes

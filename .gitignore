@@ -1,0 +1,8 @@
+# test output: reports contain real table names of the test servers
+tests/out/
+*.log
+# never commit real salts or keys
+*.env
+!tests/fixtures/test.env
+report.md
+clickhouse-ttl.xml
