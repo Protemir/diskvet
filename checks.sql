@@ -1,8 +1,12 @@
 -- checks.sql: every query clickhouse-doctor runs against your ClickHouse.
 --
 -- Rules (enforced by tests/check_sql.sh in CI):
---   * only SELECT, and only FROM / JOIN system.* tables or subqueries;
---   * no table functions (url, remote, remoteSecure, file, s3, cluster, input, ...);
+--   * only SELECT, and only FROM / JOIN a fixed list of system tables or subqueries
+--     (tables, parts, disks, detached_parts, merge_tree_settings, mutations,
+--     part_log, asynchronous_metric_log, asynchronous_metrics, events,
+--     server_settings); never system.query_log or other logs with query texts;
+--   * no table functions (url, remote, remoteSecure, file, s3, cluster, input, ...),
+--     no dictGet / joinGet, no "IN <table>", no comma joins, no query parameters;
 --   * no SETTINGS inside SQL: the wrapper sets readonly=2 and resource limits;
 --   * one query per check, the first column is check_id and equals the query id;
 --   * if a query fails (old version, missing grant, no part_log), only that
@@ -10,9 +14,10 @@
 --
 -- Each query starts with a line "-- @query <id> [tag]". Tags:
 --   optional  a failure is expected on some versions and is not reported;
---   payload   runs only for --print-payload. It computes salted hashes of your
---             own database and table names with {salt:String}; the salt is read
---             from your env file and is never sent anywhere.
+--   payload   runs only for --print-payload.
+--
+-- Besides these queries the wrapper sends exactly one more: the probe
+-- SELECT getSetting('readonly'), to confirm the session is read-only.
 --
 -- Nothing here reads rows of your own tables. system.parts, system.tables and
 -- friends contain metadata only (names, sizes, counts, dates).
@@ -48,7 +53,8 @@ CROSS JOIN
     SELECT
         sumIf(bytes_on_disk, database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')) AS product_bytes,
         sumIf(bytes_on_disk, database = 'system' AND match(table, '_log(_[0-9]+)?$'))                AS system_log_bytes,
-        countIf(database != 'system' AND startsWith(partition_id, '9999'))                           AS year_9999_parts
+        -- partition IDs 9999, 999912, 99991231 (year, month, day); hashed IDs of other keys don't count
+        countIf(database != 'system' AND match(partition_id, '^9999([0-9][0-9])?([0-9][0-9])?$'))   AS year_9999_parts
     FROM system.parts
     WHERE active
 ) AS p;
@@ -376,25 +382,26 @@ LIMIT 100;
 
 -- @query tables payload
 -- Payload only: per-table sizes for the snapshot. Names of system tables and
--- of known Langfuse / SigNoz / ClickStack tables are kept; every other
--- database and table name becomes db_/t_ + 16 hex of sipHash64(salt, name).
+-- of known Langfuse / SigNoz / ClickStack tables are kept (keep_db / keep_tbl = 1);
+-- every other database and table name is replaced by the wrapper with
+-- db_/t_ + 16 hex of sipHash64(salt, name), computed by `clickhouse local` on
+-- your side: the salt is never sent to the server. Columns 4 and 5 must stay
+-- keep_db and keep_tbl (doctor.sh, hash_names).
 SELECT
     'tables'                                                            AS check_id,
     p.database                                                          AS db,
     p.table                                                             AS tbl,
-    if(p.database IN ('system', 'INFORMATION_SCHEMA', 'information_schema', 'default',
-                      'signoz_traces', 'signoz_logs', 'signoz_metrics', 'signoz_analytics',
-                      'signoz_meter', 'signoz_metadata'),
-       p.database,
-       concat('db_', leftPad(lower(hex(sipHash64({salt:String}, p.database))), 16, '0')))  AS db_out,
-    multiIf(
+    toUInt8(p.database IN ('system', 'INFORMATION_SCHEMA', 'information_schema', 'default',
+                           'signoz_traces', 'signoz_logs', 'signoz_metrics', 'signoz_analytics',
+                           'signoz_meter', 'signoz_metadata'))           AS keep_db,
+    toUInt8(multiIf(
         match(p.table, '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'),
-            concat('t_', leftPad(lower(hex(sipHash64({salt:String}, p.database, p.table))), 16, '0')),
+            0,
         p.database IN ('system', 'INFORMATION_SCHEMA', 'information_schema'),
-            p.table,
+            1,
         p.database IN ('signoz_traces', 'signoz_logs', 'signoz_metrics', 'signoz_analytics',
                        'signoz_meter', 'signoz_metadata'),
-            p.table,
+            1,
         p.table IN ('traces', 'observations', 'scores', 'event_log', 'blob_storage_file_log',
                     'schema_migrations', 'project_environments', 'dataset_run_items',
                     'dataset_run_items_rmt', 'events', 'events_core', 'events_full',
@@ -405,8 +412,8 @@ SELECT
                     'otel_metrics_gauge', 'otel_metrics_sum', 'otel_metrics_histogram',
                     'otel_metrics_exponential_histogram', 'otel_metrics_summary',
                     'hyperdx_sessions'),
-            p.table,
-        concat('t_', leftPad(lower(hex(sipHash64({salt:String}, p.database, p.table))), 16, '0')))  AS tbl_out,
+            1,
+        0))                                                             AS keep_tbl,
     toUInt8(positionCaseInsensitive(t.engine_full, ' TTL ') > 0)        AS has_ttl,
     p.table_bytes                                                       AS size_bytes,
     p.table_rows                                                        AS size_rows,

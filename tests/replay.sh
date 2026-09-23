@@ -32,6 +32,13 @@ else
     n=$(grep -c '^FAIL' "$out/bad.txt")
     if [ "$n" -ge 7 ]; then ok "check_sql.sh rejects bad_checks.sql ($n findings)"; else fail "check_sql.sh found only $n problems in bad_checks.sql"; fi
 fi
+sh tests/check_sql.sh tests/fixtures/bad_checks_tricky.sql >"$out/tricky.txt" 2>&1
+missed=""
+sed -n 's/^-- @query \([a-z0-9_]*\).*/\1/p' tests/fixtures/bad_checks_tricky.sql >"$out/tricky.ids"
+while read -r q; do
+    grep -q "^FAIL: query $q:" "$out/tricky.txt" || missed="$missed $q"
+done <"$out/tricky.ids"
+if [ -z "$missed" ]; then ok "check_sql.sh catches every trick in bad_checks_tricky.sql (strings, comments, comma joins, IN, dictGet, heredocs, query logs)"; else fail "check_sql.sh missed:$missed"; fi
 if sh tests/check_payload.sh tests/fixtures/bad_payload.json customer_acme >"$out/badp.txt" 2>&1; then
     fail "check_payload.sh accepted tests/fixtures/bad_payload.json"
 else

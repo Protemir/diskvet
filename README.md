@@ -24,10 +24,11 @@ Two files, both short enough to read before you run them:
 
 | File | What it is |
 |---|---|
-| `checks.sql` | every query the script runs: only `SELECT`, only `FROM system.*` |
+| `checks.sql` | every query the script runs (plus one read-only probe): only `SELECT`, only `FROM system.*` |
 | `doctor.sh` | POSIX `sh` wrapper: runs the queries with `readonly=2`, renders the report |
 
-Apache-2.0. No registration, no network calls, nothing is sent anywhere.
+Apache-2.0. No registration. The script talks only to your ClickHouse (or
+`docker exec` into its container); nothing is sent anywhere else.
 
 ## Quick start: Langfuse with docker compose (30 seconds)
 
@@ -90,15 +91,19 @@ It reads metadata from these system tables: `system.tables`, `system.parts`,
 `system.disks`, `system.detached_parts`, `system.merge_tree_settings`,
 `system.mutations`, `system.part_log`, `system.asynchronous_metric_log`,
 `system.asynchronous_metrics`, `system.events`, and, if allowed,
-`system.server_settings` (only `max_table_size_to_drop`).
+`system.server_settings` (only `max_table_size_to_drop`). Besides the queries
+in `checks.sql` it sends one probe, `SELECT getSetting('readonly')`, to confirm
+that the session is read-only.
 
 It never reads:
 
-- rows of your own tables (no `FROM` outside `system.*`, no table functions:
-  `tests/check_sql.sh` enforces this in CI);
+- rows of your own tables: `FROM` / `JOIN` only the system tables above or
+  subqueries, no comma joins, no `IN <table>`, no table functions, no
+  `dictGet` / `joinGet`. `tests/check_sql.sh` enforces this in CI; it reads
+  string literals and comments the way ClickHouse does, so a `--` inside a
+  string or an escaped quote can't hide a query from it;
 - `system.query_log`, query texts, mutation commands or error texts (for a
-  mutation it only reads whether the last attempt failed);
-- anything over the network: there are no network calls at all.
+  mutation it only reads whether the last attempt failed).
 
 The local report shows real database, table and partition names, because you
 need them to run the fixes. It stays on your machine.
@@ -110,6 +115,13 @@ need them to run the fixes. It stays on your machine.
 `max_threads=2`, `max_memory_usage=500000000`, `log_comment=clickhouse-doctor`.
 This guarantees that nothing is changed. What is read is exactly what you see
 in `checks.sql`.
+
+Before the checks the script asks the server whether the session really is
+read-only. If the user's profile refuses the limit flags (a `readonly=1`
+profile, or constraints on `max_threads` and the like), it runs with
+`--readonly=1` alone and the user's own limits apply. If the server refuses
+read-only mode for this user altogether, the script stops without running
+anything (exit code 3). The first lines of the report say which case it was.
 
 **B. With a dedicated user, for security reviews.** Only this guarantees that
 product data can't be read. Since ClickHouse ~24.1 reading `system.*` needs
@@ -147,7 +159,8 @@ query texts of all users.
 What we saw with this user on ClickHouse 24.8, 25.12 and 26.9:
 
 - a `readonly=1` profile refuses `--readonly=2` and the limit flags, so the
-  script notices it and runs without flags: the profile's own limits apply;
+  script notices it and runs with `--readonly=1` only: the profile's own
+  limits apply;
 - `SHOW TABLES ON *.*` is enough to see the parts of product tables in
   `system.parts` and the tables in `system.tables`, but `SELECT` on a product
   table and on `system.query_log` is refused;
@@ -226,10 +239,14 @@ before anything is ever sent. **Sending is not implemented**: `push` only says
   names or values.
 - Names of system tables and of known Langfuse, SigNoz and ClickStack tables
   are kept. Every other database and table name becomes a salted hash:
-  `db_` / `t_` + 16 hex digits of `sipHash64(salt, name)`, computed by your
-  ClickHouse. Disks other than `default` become `disk_1`, `disk_2`, ...
+  `db_` / `t_` + 16 hex digits of `sipHash64(salt, name)`. The hash is computed
+  by `clickhouse local` on your side (inside the container with `--docker`),
+  which gets the salt on stdin: the salt never reaches the ClickHouse server,
+  so it is not in `system.query_log`, `system.text_log`, the server log files
+  or the process list. Disks other than `default` become `disk_1`, `disk_2`, ...
 - The salt lives only on your server, in `/etc/clickhouse-doctor.env`
-  (`--env` to change), as `SALT=<64 hex chars>`:
+  (`--env` to change), as `SALT=<64 hex chars>` (at least 32 characters, or
+  the script refuses it):
 
   ```sh
   (umask 077; printf 'SALT=%s\n' "$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')" > /etc/clickhouse-doctor.env)
@@ -248,8 +265,13 @@ These are the traps the report handles for you. Each was checked on ClickHouse
   50 GB = 46.6 GiB) also applies to `TRUNCATE` and `DROP` of system logs. Create
   `/var/lib/clickhouse/flags/force_drop_table` (with `chmod 666`, the server
   deletes it) right before the command. One command uses the flag up, so create
-  it again before the next big table. On 24.8+ this also works without the flag:
-  `TRUNCATE TABLE system.trace_log SETTINGS max_table_size_to_drop = 0`.
+  it again before the next big table. The size that counts is the sum of
+  `bytes_on_disk` of the active parts, and only a table bigger than the limit
+  is refused; the report shows the flag already from 95% of the limit. On
+  ClickHouse 24.1 and newer this also works without the flag (tested on 24.1,
+  24.3, 24.8, 25.12, 26.9):
+  `TRUNCATE TABLE system.trace_log SETTINGS max_table_size_to_drop = 0`, and the
+  same `SETTINGS` for `DROP TABLE`.
 - **A TTL change creates `*_log_N` copies.** `<ttl>` in `config.d` needs a
   restart (`SYSTEM RELOAD CONFIG` is not enough). On restart ClickHouse renames
   the old table to `trace_log_0` (then `_1`, ...) with all its rows and starts
@@ -285,7 +307,10 @@ These are the traps the report handles for you. Each was checked on ClickHouse
   `total_space`: with 1 GiB of `keep_free_space_bytes`, `system.disks` showed
   `total_space` exactly 1 GiB below `df`'s size and `free_space` about 1 GiB
   below `df`'s available space. The script uses the values as they are, so its
-  percentages can differ from `df` by that amount.
+  percentages can differ from `df` by that amount. Also, `free_space` is what a
+  non-root user may still write: on ext4 about 5% of the disk is reserved for
+  root, so "used" in the report is `df`'s used plus that reserve (51 GiB on our
+  1 TB test disk), and check 2 counts the reserve as "not in table parts".
 - **`DelayedInserts` / `RejectedInserts` count only since the last restart**
   (`system.events` is reset), and they show up only after the first event. The
   report says "since the server started".
@@ -298,7 +323,10 @@ These are the traps the report handles for you. Each was checked on ClickHouse
 | 25.12.11.4 | `clickhouse/clickhouse-server:25.12` | Git Bash, dash + mawk, busybox ash + busybox awk | full `tests/run.sh` |
 | 26.9.1.1629 | `clickhouse/clickhouse-server:latest` | Git Bash, dash + mawk, busybox ash + busybox awk | full `tests/run.sh` |
 | 24.8.14.39 | `clickhouse/clickhouse-server:24.8-alpine` | busybox ash + busybox awk | report and payload run, no seeded problems |
-| 24.1.2.5 | `clickhouse/clickhouse-server:24.1.2-alpine` (SigNoz's) | busybox ash + busybox awk | report and payload run; a fresh 24.1 has no `part_log` until the first flush, check 4 then falls back to `system.parts` |
+| 24.1.2.5 | `clickhouse/clickhouse-server:24.1.2-alpine` (SigNoz's) | busybox ash + busybox awk | report and payload run; a fresh 24.1 has no `part_log` until the first flush, check 4 then falls back to `system.parts`. By hand: `TRUNCATE` / `DROP ... SETTINGS max_table_size_to_drop = 0` and `APPLY DELETED MASK IN PARTITION ID` work (24.3 too for the first) |
+
+A clean server with nothing seeded (fresh container, default config) gets OK on
+all seven checks on 24.1, 24.8, 25.12 and 26.9.
 
 Not tested yet: a real Langfuse, SigNoz or ClickStack install, replicated
 clusters, Kubernetes, disks on object storage (the script skips remote disks),
@@ -310,20 +338,25 @@ macOS.
   `od`, `date`. No `jq`, no Python.
 - `docker` for `--docker`, or `clickhouse-client` / `clickhouse client` on the
   machine for `--host`.
+- For `--print-payload` also `clickhouse local` (to hash names): it is in every
+  ClickHouse image and package; with `--docker` the container's copy is used.
 - ClickHouse 24.8 or newer is what CI covers.
 
 ## Development
 
 ```sh
 sh tests/replay.sh              # offline: fixtures, SQL safety, payload privacy
-sh tests/check_sql.sh           # checks.sql: SELECT from system.* only
+sh tests/check_sql.sh           # checks.sql: SELECT from the allowed system tables only
 sh tests/run.sh                 # Docker: ClickHouse 24.8, 25.12, latest (~2 min each)
 sh tests/auto.sh                # Docker: --docker auto with a Langfuse-like compose file
 ```
 
 `tests/run.sh` seeds each server with the problems above, runs the script from
-the host and inside the container (dash, busybox), as Variant B, then runs the
-fix commands from the report and checks that they work. `tests/auto.sh` starts
+the host and inside the container (dash, busybox), as Variant B and as users
+with setting constraints, checks in `system.query_log` that every query ran
+read-only and that the salt never reached the server, then runs the fix
+commands from the report (both the flag and the `SETTINGS` variant for tables
+over the drop limit) and checks that they work. `tests/auto.sh` starts
 a compose service named `clickhouse` with `CLICKHOUSE_USER` /
 `CLICKHOUSE_PASSWORD`, like Langfuse's, and checks in `system.query_log` that
 the script ran as that user and sent only `SELECT` queries.

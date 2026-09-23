@@ -36,8 +36,7 @@ while [ $i -lt 120 ] && [ $up -lt 3 ]; do
 done
 name=$(docker inspect --format '{{.Name}}' "$id" | tr -d '\r' | sed 's|^/||')
 
-sh "$ROOT/doctor.sh" report --docker auto >"$OUT/auto-report.md" 2>"$OUT/auto-report.err"
-if [ $? -eq 0 ]; then ok "report with --docker auto from the compose folder"; else fail "report: $(cat "$OUT/auto-report.err")"; fi
+if sh "$ROOT/doctor.sh" report --docker auto >"$OUT/auto-report.md" 2>"$OUT/auto-report.err"; then ok "report with --docker auto from the compose folder"; else fail "report: $(cat "$OUT/auto-report.err")"; fi
 has "$OUT/auto-report.md" "container $name" "found the compose service 'clickhouse' ($name)"
 n=$(grep -c '^| [1-7] | .* | NOT_RUN |$' "$OUT/auto-report.md")
 rows=$(grep -c '^| [1-7] | ' "$OUT/auto-report.md")
@@ -47,6 +46,18 @@ x=$(docker exec "$id" clickhouse-client --user clickhouse --password clickhouse 
 if [ "$x" = clickhouse ]; then ok "queries ran as the container's CLICKHOUSE_USER, tagged log_comment=clickhouse-doctor"; else fail "users seen in query_log: '$x'"; fi
 x=$(docker exec "$id" clickhouse-client --user clickhouse --password clickhouse -q "SELECT countIf(query_kind != 'Select') FROM system.query_log WHERE log_comment = 'clickhouse-doctor' AND type = 'QueryFinish'" 2>&1)
 if [ "$x" = 0 ]; then ok "query_log: every query of the script was a SELECT"; else fail "non-SELECT queries in query_log: $x"; fi
+
+# --print-payload: names are hashed by clickhouse local inside the container, as uid 101
+docker exec "$id" clickhouse-client --user clickhouse --password clickhouse --multiquery \
+    -q "CREATE DATABASE IF NOT EXISTS customer_acme; CREATE TABLE IF NOT EXISTS customer_acme.payments_eu (id UInt64) ENGINE = MergeTree ORDER BY id; INSERT INTO customer_acme.payments_eu VALUES (1)" >/dev/null 2>&1
+sh "$ROOT/doctor.sh" --print-payload --docker auto --env "$ROOT/tests/fixtures/test.env" >"$OUT/auto-payload.json" 2>"$OUT/auto-payload.err"
+salt=$(sed -n 's/^SALT=//p' "$ROOT/tests/fixtures/test.env")
+if sh "$ROOT/tests/check_payload.sh" "$OUT/auto-payload.json" customer_acme payments_eu "$name" "$salt" >"$OUT/auto-payload-check.txt" 2>&1 \
+    && grep -q '"db": "db_[0-9a-f]*", "table": "t_[0-9a-f]*"' "$OUT/auto-payload.json"; then
+    ok "--print-payload with --docker auto: customer names hashed inside the container (clickhouse local as uid 101)"
+else
+    fail "payload: $(cat "$OUT/auto-payload-check.txt" "$OUT/auto-payload.err")"
+fi
 
 # The flag command from the report, as the container's own user (uid 101 in Langfuse's compose)
 who=$(docker exec "$name" id -un 2>&1)

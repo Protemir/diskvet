@@ -21,8 +21,8 @@ fail=0
 bad() { printf 'FAIL: %s\n' "$*"; fail=1; }
 
 # 1. keys
-grep -oE '"[A-Za-z0-9_]+"[[:space:]]*:' "$p" | sed -E 's/[":[:space:]]//g' | sort -u | while read -r k; do
-    grep -qx "$k" "$keys" || echo "$k"
+grep -oE '"[^"]*"[[:space:]]*:' "$p" | sed -E 's/^"//; s/"[[:space:]]*:$//' | sort -u | while IFS= read -r k; do
+    grep -qxF -- "$k" "$keys" || echo "$k"
 done >"${TMPDIR:-/tmp}/chk_pk.$$"
 if [ -s "${TMPDIR:-/tmp}/chk_pk.$$" ]; then bad "keys not in payload_keys.txt: $(tr '\n' ' ' <"${TMPDIR:-/tmp}/chk_pk.$$")"; fi
 rm -f "${TMPDIR:-/tmp}/chk_pk.$$"
@@ -53,7 +53,7 @@ names=$(wc -l <"${TMPDIR:-/tmp}/chk_pn.$$" | tr -d ' ')
 rm -f "${TMPDIR:-/tmp}/chk_pn.$$"
 
 # 5. no string values other than the known ones
-grep -oE '"[a-z_0-9]+": "[^"]*"' "$p" | sed -E 's/": .*//; s/"//g' | sort -u | while read -r k; do
+grep -oE '"[^"]*": "[^"]*"' "$p" | sed -E 's/": .*//; s/^"//' | sort -u | while IFS= read -r k; do
     case $k in
         agent|sent_at|status|clickhouse_version|product|db|table|disk) ;;
         *) echo "$k" ;;

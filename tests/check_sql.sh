@@ -2,73 +2,147 @@
 # Static safety test for checks.sql. No server needed.
 #   sh tests/check_sql.sh [checks.sql]
 # Fails when checks.sql could read anything but system.* metadata or change anything:
-#   - FROM / JOIN must be followed by system.<table> or a subquery "(";
-#   - no table functions (url, remote, remoteSecure, file, s3, cluster, input, ...);
-#   - no SETTINGS and no FORMAT inside SQL (the wrapper sets them);
-#   - no statements other than SELECT (INSERT, ALTER, DROP, TRUNCATE, CREATE, ...);
+#   - FROM / JOIN must be followed by a subquery "(" or by one of the system
+#     tables in ALLOWED below (so never system.query_log, system.processes, ...);
+#   - no comma joins ("FROM system.parts, other.table") and no "IN <table>";
+#   - no table functions (url, remote, remoteSecure, file, s3, cluster, input, ...)
+#     and no functions that read other tables or dictionaries (dictGet, joinGet, ...);
+#   - no SETTINGS, no FORMAT and no INTO OUTFILE inside SQL (the wrapper sets them);
+#   - no statements other than SELECT (INSERT, ALTER, DROP, TRUNCATE, CREATE, SYSTEM, ...);
 #   - one statement per "-- @query <id>" block, starting with SELECT or WITH,
 #     whose first string literal (the check_id column) equals <id>.
-# Comments and string literals are ignored, so a comment or a message that
-# mentions TRUNCATE does not count.
+# The SQL is tokenized the way ClickHouse reads it: string literals with \ and ''
+# escapes, "--" and "/* */" comments only outside strings. Characters the
+# checks do not need outside string literals (quoted identifiers, "#" comments,
+# $$ heredocs, {query parameters}, backslashes) are refused, so nothing can
+# hide code from this test. Every finding names the query.
 set -u
 f=${1:-$(dirname "$0")/../checks.sql}
 [ -r "$f" ] || { echo "cannot read $f"; exit 2; }
-fail=0
-bad() { printf 'FAIL: %s\n' "$*"; fail=1; }
+out=${TMPDIR:-/tmp}/chk_sql.$$
+trap 'rm -f "$out"' EXIT
 
-# SQL without comments and with every string literal emptied, upper-cased, one line.
-code=$(sed -e 's/--.*$//' "$f" | sed -e "s/'[^']*'/''/g" | tr '\n\t' '  ' | tr '[:lower:]' '[:upper:]' | tr -s ' ')
-
-# 1. FROM / JOIN targets
-targets=$(printf '%s\n' "$code" | grep -oE '(^|[^A-Z0-9_])(FROM|JOIN) +[^ ]+' | sed -E 's/^[^A-Z]*//')
-printf '%s\n' "$targets" | grep -vE '^(FROM|JOIN) +(SYSTEM\.[A-Z0-9_]+|\()' | grep . >"${TMPDIR:-/tmp}/chk_sql.$$" && {
-    while read -r t; do bad "reads from something that is not system.* or a subquery: $t"; done <"${TMPDIR:-/tmp}/chk_sql.$$"
+awk -v Q="'" '
+BEGIN {
+    split("TABLES PARTS DISKS DETACHED_PARTS MERGE_TREE_SETTINGS MUTATIONS PART_LOG " \
+          "ASYNCHRONOUS_METRIC_LOG ASYNCHRONOUS_METRICS EVENTS SERVER_SETTINGS", a, " ")
+    for (i in a) ALLOWED[a[i]] = 1
+    # table functions, and functions that read other tables, dictionaries or identities
+    split("URL REMOTE REMOTESECURE FILE S3 S3CLUSTER CLUSTER CLUSTERALLREPLICAS INPUT HDFS " \
+          "HDFSCLUSTER MYSQL POSTGRESQL JDBC ODBC MONGODB REDIS SQLITE AZUREBLOBSTORAGE " \
+          "AZUREBLOBSTORAGECLUSTER GCS OSS COSN ICEBERG ICEBERGS3 DELTALAKE HUDI MERGE " \
+          "EXECUTABLE DICTIONARY VIEW VALUES GENERATERANDOM NUMBERS NUMBERS_MT ZEROS ZEROS_MT " \
+          "FORMAT FUZZJSON FUZZQUERY LOOP ARROWFLIGHT PROMETHEUSQUERY TIMESERIESDATA " \
+          "TIMESERIESMETRICS TIMESERIESTAGS MERGETREEINDEX MERGETREEPROJECTION " \
+          "JOINGET JOINGETORNULL DICTGET DICTGETORDEFAULT DICTGETORNULL DICTHAS DICTISIN " \
+          "DICTGETHIERARCHY DICTGETCHILDREN DICTGETDESCENDANTS DICTGETALL " \
+          "HOSTNAME FQDN GETMACRO SERVERUUID CURRENTUSER USER CURRENTPROFILES CURRENTROLES " \
+          "ENABLEDPROFILES ENABLEDROLES DEFAULTPROFILES DEFAULTROLES", b, " ")
+    for (i in b) BADFN[b[i]] = 1
+    split("INSERT ALTER DROP TRUNCATE CREATE DELETE UPDATE RENAME ATTACH DETACH OPTIMIZE " \
+          "KILL GRANT REVOKE EXCHANGE UNDROP BACKUP RESTORE REPLACE UPSERT MOVE SET USE " \
+          "EXPLAIN WATCH CHECK DESCRIBE SHOW SYSTEM SETTINGS OUTFILE INFILE", c, " ")
+    for (i in c) BADKW[c[i]] = 1
+    # words that may follow a table in FROM / JOIN (anything else is an alias)
+    split("WHERE PREWHERE GROUP ORDER LIMIT OFFSET HAVING JOIN LEFT RIGHT INNER OUTER " \
+          "FULL CROSS ANY ALL ASOF SEMI ANTI ARRAY GLOBAL ON USING UNION EXCEPT " \
+          "INTERSECT FINAL SAMPLE WINDOW QUALIFY SETTINGS FORMAT INTO PASTE", d, " ")
+    for (i in d) FOLLOW[d[i]] = 1
+    nq = 0
 }
-rm -f "${TMPDIR:-/tmp}/chk_sql.$$"
-[ -n "$targets" ] || bad "no FROM found at all (parser broken?)"
+function bad(msg) { printf "FAIL: query %s: %s\n", id, msg; nbad++ }
 
-# 2. table functions
-tf='URL|REMOTE|REMOTESECURE|FILE|S3|S3CLUSTER|CLUSTER|CLUSTERALLREPLICAS|INPUT|HDFS|HDFSCLUSTER|MYSQL|POSTGRESQL|JDBC|ODBC|MONGODB|REDIS|SQLITE|AZUREBLOBSTORAGE|GCS|OSS|COSN|ICEBERG|DELTALAKE|HUDI|MERGE|EXECUTABLE|DICTIONARY|VIEW|VALUES|GENERATERANDOM|NUMBERS|ZEROS|FORMAT|FUZZJSON|LOOP|ARROWFLIGHT|PROMETHEUSQUERY|TIMESERIESDATA'
-if printf '%s\n' "$code" | grep -qE "(^|[^A-Z0-9_])($tf) *\("; then
-    bad "table function used: $(printf '%s\n' "$code" | grep -oE "(^|[^A-Z0-9_])($tf) *\(" | head -n 3 | tr '\n' ' ')"
-fi
-
-# 3. SETTINGS / FORMAT / INTO OUTFILE
-printf '%s\n' "$code" | grep -qE '(^|[^A-Z0-9_])SETTINGS([^A-Z0-9_]|$)' && bad "SETTINGS inside SQL (limits belong to the wrapper)"
-printf '%s\n' "$code" | grep -qE '(^|[^A-Z0-9_])FORMAT +[A-Z]' && bad "FORMAT clause inside SQL (the wrapper sets the format)"
-printf '%s\n' "$code" | grep -qE '(^|[^A-Z0-9_])(OUTFILE|INFILE)([^A-Z0-9_]|$)' && bad "INTO OUTFILE / INFILE"
-
-# 4. anything that is not a SELECT
-kw='INSERT|ALTER|DROP|TRUNCATE|CREATE|DELETE|UPDATE|RENAME|ATTACH|DETACH|OPTIMIZE|KILL|GRANT|REVOKE|EXCHANGE|UNDROP|BACKUP|RESTORE|REPLACE|UPSERT|MOVE|SET|USE|EXPLAIN|WATCH|CHECK|DESCRIBE|SHOW'
-hits=$(printf '%s\n' "$code" | grep -oE "(^|[^A-Z0-9_.])($kw)([^A-Z0-9_]|$)" | sed -E 's/[^A-Z]//g' | sort -u | tr '\n' ' ')
-[ -z "$hits" ] || bad "non-SELECT keywords: $hits"
-# SYSTEM as a statement (SYSTEM STOP MERGES ...), not system.<table>
-printf '%s\n' "$code" | grep -qE '(^|[^A-Z0-9_])SYSTEM +[A-Z]' && bad "SYSTEM statement"
-
-# 5. per-query structure
-awk -v q="'" '
-    function flush(   c, s, first, lit) {
-        if (id == "") return
-        c = body
-        gsub(/--[^\n]*/, "", c)                     # comments
-        s = c
-        lit = q "[^" q "]*" q                         # a string literal; q is a single quote
-        if (match(s, lit)) first = substr(s, RSTART + 1, RLENGTH - 2); else first = ""
-        gsub(lit, q q, c)
-        gsub(/[ \t\n]+/, " ", c); sub(/^ /, "", c); sub(/ $/, "", c)
-        sub(/;$/, "", c)
-        if (toupper(c) !~ /^(SELECT|WITH) /) printf "FAIL: query %s does not start with SELECT or WITH\n", id
-        if (index(c, ";") > 0) printf "FAIL: query %s has more than one statement\n", id
-        if (first != id) printf "FAIL: query %s: first string literal (check_id) is [%s]\n", id, first
-        nq++
+# Tokenize body into T[1..nt]: upper-case words, "(" ")" "," ";" and the
+# placeholder LIT for every string literal. Sets first (the first literal).
+function tokenize(b,   n, i, ch, nx, j, lit, code) {
+    n = length(b); i = 1; code = ""; first = ""; nlit = 0
+    while (i <= n) {
+        ch = substr(b, i, 1); nx = substr(b, i + 1, 1)
+        if (ch == "-" && nx == "-") {                       # -- comment
+            j = index(substr(b, i), "\n"); i = (j == 0) ? n + 1 : i + j; code = code " "; continue
+        }
+        if (ch == "/" && nx == "*") {                       # /* comment */
+            j = index(substr(b, i + 2), "*/")
+            if (j == 0) { bad("unterminated /* comment"); return 0 }
+            i = i + 2 + j + 1; code = code " "; continue
+        }
+        if (ch == Q) {                                      # string literal
+            j = i + 1; lit = ""
+            while (1) {
+                if (j > n) { bad("unterminated string literal"); return 0 }
+                ch = substr(b, j, 1)
+                if (ch == "\\") { lit = lit substr(b, j, 2); j += 2; continue }
+                if (ch == Q) {
+                    if (substr(b, j + 1, 1) == Q) { lit = lit Q; j += 2; continue }
+                    break
+                }
+                lit = lit ch; j++
+            }
+            nlit++; if (nlit == 1) first = lit
+            code = code " LIT "; i = j + 1; continue
+        }
+        if (ch ~ /[A-Za-z0-9_.]/) { code = code toupper(ch); i++; continue }
+        if (index(" \t\r\n", ch)) { code = code " "; i++; continue }
+        if (index("(),;*+/%=<>!-[]", ch)) { code = code " " ch " "; i++; continue }
+        bad("character [" ch "] outside a string literal is not allowed (quoted identifiers, # comments, $$ strings, {parameters} and backslashes could hide code)")
+        return 0
     }
-    /^-- @query / { flush(); id = $3; body = ""; next }
-    id != "" { body = body $0 "\n" }
-    END { flush(); if (nq == 0) print "FAIL: no -- @query blocks"; else printf "info: %d queries\n", nq }
-' "$f" >"${TMPDIR:-/tmp}/chk_q.$$"
-grep '^info:' "${TMPDIR:-/tmp}/chk_q.$$"
-if grep -q '^FAIL' "${TMPDIR:-/tmp}/chk_q.$$"; then grep '^FAIL' "${TMPDIR:-/tmp}/chk_q.$$"; fail=1; fi
-rm -f "${TMPDIR:-/tmp}/chk_q.$$"
+    nt = split(code, T, " ")
+    return 1
+}
 
-if [ "$fail" -eq 0 ]; then echo "check_sql: OK ($f)"; else echo "check_sql: FAILED ($f)"; fi
-exit "$fail"
+# index of the token after the group that starts at T[k] == "("
+function skip_group(k,   depth) {
+    depth = 0
+    for (; k <= nt; k++) {
+        if (T[k] == "(") depth++
+        else if (T[k] == ")") { depth--; if (depth == 0) return k + 1 }
+    }
+    return nt + 1
+}
+
+function flush(   k, t, nxt, tbl, after, stmt_end) {
+    if (id == "") return
+    nq++
+    if (!tokenize(body)) return
+    if (nt == 0) { bad("empty"); return }
+    if (T[1] != "SELECT" && T[1] != "WITH") bad("does not start with SELECT or WITH")
+    stmt_end = nt
+    if (T[nt] == ";") stmt_end = nt - 1
+    if (first != id) bad("first string literal (check_id) is [" first "], want [" id "]")
+    for (k = 1; k <= stmt_end; k++) {
+        t = T[k]; nxt = (k < nt) ? T[k + 1] : ""
+        if (t == ";") bad("more than one statement")
+        if (t in BADKW && nxt != "(") bad("keyword " t " (only SELECT is allowed, no SETTINGS / OUTFILE)")
+        if (t == "FORMAT" && nxt != "(") bad("FORMAT clause (the wrapper sets the format)")
+        if (t in BADFN && nxt == "(") bad("function " t "() reads outside system metadata or reveals identities")
+        if (t == "IN" && nxt != "(") bad("IN " nxt ": IN must be followed by a list or a subquery in parentheses")
+        if (t ~ /^SYSTEM\./) {
+            tbl = substr(t, 8)
+            if (!(tbl in ALLOWED)) bad("system table " t " is not on the allowed list")
+        }
+        if (t == "FROM" || t == "JOIN") {
+            if (nxt == "(") after = skip_group(k + 1)
+            else if (nxt ~ /^SYSTEM\.[A-Z0-9_]+$/) after = k + 2
+            else { bad(t " " nxt ": reads from something that is not an allowed system table or a subquery"); continue }
+            # optional alias, then a comma would be a comma join
+            if (T[after] == "AS") after += 2
+            else if (T[after] ~ /^[A-Z_][A-Z0-9_]*$/ && !(T[after] in FOLLOW) && T[after] != "LIT") after++
+            if (T[after] == ",") bad("comma join after " t " " nxt)
+        }
+    }
+}
+/^-- @query / { flush(); id = $3; body = ""; next }
+id != "" { body = body $0 "\n" }
+END {
+    flush()
+    if (nq == 0) { print "FAIL: no -- @query blocks"; nbad++ }
+    printf "info: %d queries\n", nq
+    exit (nbad > 0)
+}
+' "$f" >"$out"
+rc=$?
+cat "$out"
+if [ "$rc" -eq 0 ] && ! grep -q '^FAIL' "$out"; then echo "check_sql: OK ($f)"; exit 0; fi
+echo "check_sql: FAILED ($f)"
+exit 1

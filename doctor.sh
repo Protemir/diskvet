@@ -48,10 +48,10 @@ Other options:
   --replay FILE               render from a file saved with --save-raw, without a server
   --version, --help
 
-Every query is in checks.sql: SELECT only, FROM system.* only. Queries run with
---readonly=2 and limits (30 s, 10000 rows, 2 threads, 500 MB). If the user has a
-readonly=1 profile and may not change settings, the script runs without these
-flags and the profile's own limits apply.
+Every query is in checks.sql: SELECT only, FROM system.* only (plus one probe,
+SELECT getSetting('readonly')). Queries run with --readonly=2 and limits (30 s,
+10000 rows, 2 threads, 500 MB). If the user's profile refuses the limits, they
+run with --readonly=1 only; if the session can't be made read-only, nothing runs.
 EOF
 }
 
@@ -151,6 +151,8 @@ unreachable_json() {
 
 # Inside the container: use the image's CLICKHOUSE_USER / CLICKHOUSE_PASSWORD
 # when no user was given. The password stays inside the container.
+# Single quotes on purpose: this runs inside the container, not here.
+# shellcheck disable=SC2016
 inner='m=$1; shift; if [ "$m" = env ]; then if [ -n "${CLICKHOUSE_PASSWORD:-}" ]; then set -- --password "$CLICKHOUSE_PASSWORD" "$@"; fi; if [ -n "${CLICKHOUSE_USER:-}" ]; then set -- --user "$CLICKHOUSE_USER" "$@"; fi; fi; exec clickhouse-client "$@"'
 
 safe_flags="--readonly=2 --max_execution_time=30 --max_result_rows=10000 --result_overflow_mode=break --max_threads=2 --max_memory_usage=500000000 --log_comment=$NAME"
@@ -169,7 +171,7 @@ run_query() {
     # shellcheck disable=SC2086
     set -- $safe_flags --format=TSV "$@"
     if [ -n "$container" ]; then
-        if [ -n "$user" ] || [ -n "$password" ]; then _m=explicit; else _m=env; fi
+        if [ -n "$user" ] || [ -n "$password" ]; then _m='explicit'; else _m='env'; fi
         docker exec -i "$container" sh -c "$inner" sh "$_m" "$@" <"$_in" >"$_out" 2>"$_err"
     else
         # $client may be "clickhouse client": split on purpose.
@@ -198,6 +200,42 @@ find_container() {
     container=$_id
 }
 
+# Salted hashes of your own database and table names, for --print-payload.
+# The rows of the "tables" query go through `clickhouse local` (inside the
+# container with --docker, else on this machine): the salt travels only on
+# stdin, so it never reaches the server's query_log, text_log or log files,
+# and never shows up in the process list. Columns 4 and 5 of each row come in
+# as "keep this name" flags and go out as the name or its hash:
+# db_ / t_ + 16 hex of sipHash64(salt, db) / sipHash64(salt, db, table).
+hash_names() {
+    _st='salt String, c1 String, db String, tbl String, keep_db UInt8, keep_tbl UInt8, c6 String, c7 String, c8 String, c9 String, c10 String, c11 String'
+    _sql="SELECT c1, db, tbl,
+        if(keep_db = 1, db, concat('db_', leftPad(lower(hex(sipHash64(salt, db))), 16, '0'))),
+        if(keep_tbl = 1, tbl, concat('t_', leftPad(lower(hex(sipHash64(salt, db, tbl))), 16, '0'))),
+        c6, c7, c8, c9, c10, c11
+    FROM table"
+    tr -d '\r' <"$tmp/o.tables" | while IFS= read -r _line; do printf '%s\t%s\n' "$salt" "$_line"; done >"$tmp/h.in"
+    : >"$tmp/h.out"
+    [ -s "$tmp/h.in" ] || return 0
+    if [ -n "$container" ]; then
+        docker exec -i -w /tmp "$container" clickhouse local --input-format TSV --output-format TSV \
+            --structure "$_st" --query "$_sql" <"$tmp/h.in" >"$tmp/h.out" 2>"$tmp/h.err" || return 1
+    else
+        if command -v clickhouse-local >/dev/null 2>&1; then _local=clickhouse-local
+        elif command -v clickhouse >/dev/null 2>&1; then _local="clickhouse local"
+        else printf 'clickhouse-local not found (needed to hash names on this machine)\n' >"$tmp/h.err"; return 1
+        fi
+        # From the temp dir, so a config.xml in the current folder is not picked up.
+        # $_local may be "clickhouse local": split on purpose.
+        # shellcheck disable=SC2086
+        (cd "$tmp" && $_local --input-format TSV --output-format TSV \
+            --structure "$_st" --query "$_sql" <"$tmp/h.in" >"$tmp/h.out" 2>"$tmp/h.err") || return 1
+    fi
+    # every row must come back, with the names replaced
+    [ "$(grep -c . "$tmp/h.in")" = "$(tr -d '\r' <"$tmp/h.out" | grep -c .)" ] || {
+        printf 'clickhouse local returned a different number of rows\n' >>"$tmp/h.err"; return 1; }
+}
+
 # ---------------------------------------------------------------- run the checks
 stream=$tmp/stream.tsv
 container_name=""
@@ -208,7 +246,6 @@ if [ -n "$replay" ]; then
     container_name=$docker_arg
     [ "$container_name" = auto ] && container_name=clickhouse
     run_mode="Rendered from saved query results (--replay)."
-    salt_note=""
 else
     [ -r "$checks_file" ] || die "cannot read $checks_file (keep checks.sql next to the script or pass --checks FILE)"
 
@@ -245,27 +282,50 @@ else
     ' "$checks_file" || die "cannot parse $checks_file"
     [ -s "$tmp/index" ] || die "no queries found in $checks_file"
 
-    # Probe: can we connect, and may we pass the read-only flags?
-    printf 'SELECT 1\n' >"$tmp/probe.sql"
-    if ! run_query "$tmp/probe.sql" "$tmp/probe.out" "$tmp/probe.err"; then
-        if grep -Eq 'Code: (164|452)|READONLY|SETTING_CONSTRAINT_VIOLATION' "$tmp/probe.err"; then
+    # Probe (the only query that is not in checks.sql): can we connect, and is
+    # the session really read-only? Try readonly=2 with the limits; if the
+    # user's profile refuses extra settings (readonly=1 profile, or constraints
+    # on the limits), readonly=1 alone; else no flags, but only if the profile
+    # itself is read-only.
+    printf "SELECT getSetting('readonly')\n" >"$tmp/probe.sql"
+    probe() {
+        ro=""
+        run_query "$tmp/probe.sql" "$tmp/probe.out" "$tmp/probe.err" || return 1
+        ro=$(tr -d '\r\n\t ' <"$tmp/probe.out")
+    }
+    refused() { grep -Eq 'Code: (164|452)|READONLY|SETTING_CONSTRAINT_VIOLATION' "$tmp/probe.err"; }
+    cannot_run() {
+        [ "$cmd" = payload ] && unreachable_json
+        note "cannot run queries: $*"
+        exit 3
+    }
+    if probe; then
+        [ "$ro" = 2 ] || cannot_run "readonly=2 did not take effect (the server reports readonly=$ro), so nothing was run"
+    elif refused; then
+        safe_flags="--readonly=1"
+        if probe; then
+            [ "$ro" = 1 ] || cannot_run "readonly=1 did not take effect (the server reports readonly=$ro), so nothing was run"
+            run_mode="Queries ran with readonly=1. The server refused the limit flags for this user (read-only profile or setting constraints), so the user's own limits apply."
+            note "the server refused the limit flags for this user: running with --readonly=1 only, the user's own limits apply"
+        elif refused; then
             safe_flags=""
-            run_mode="Queries ran under the user's read-only profile (the server refused extra settings, so the profile's own limits apply)."
-            note "this user has a readonly=1 profile: running without --readonly=2 and limit flags"
-            if ! run_query "$tmp/probe.sql" "$tmp/probe.out" "$tmp/probe.err"; then
-                [ "$cmd" = payload ] && unreachable_json
-                note "cannot run queries: $(err_line "$tmp/probe.err")"
-                exit 3
+            if probe; then
+                case $ro in
+                    1|2) run_mode="Queries ran under the user's read-only profile (readonly=$ro). The server refused extra settings, so the profile's own limits apply."
+                         note "the server refused all extra settings for this user: running under its read-only profile (readonly=$ro)" ;;
+                    *)   cannot_run "the server refuses readonly=2 and readonly=1 for this user, and the user is not read-only, so nothing was run. Use a read-only user (README, variant B)." ;;
+                esac
+            else
+                cannot_run "$(err_line "$tmp/probe.err")"
             fi
         else
-            [ "$cmd" = payload ] && unreachable_json
-            note "cannot run queries: $(err_line "$tmp/probe.err")"
-            exit 3
+            cannot_run "$(err_line "$tmp/probe.err")"
         fi
+    else
+        cannot_run "$(err_line "$tmp/probe.err")"
     fi
 
     salt=""
-    salt_note=""
     if [ "$cmd" = payload ]; then
         if [ -r "$env_file" ]; then
             salt=$(sed -n 's/^[[:space:]]*SALT[[:space:]]*=[[:space:]]*//p' "$env_file" | sed -n '1p' | tr -d "\"' \r")
@@ -274,6 +334,7 @@ else
             case $salt in
                 *[!0-9A-Za-z_-]*) die "SALT in $env_file may contain only letters, digits, '_' and '-'" ;;
             esac
+            [ "${#salt}" -ge 32 ] || die "SALT in $env_file is too short (${#salt} characters, need at least 32; 64 random hex characters are best, see README)"
         else
             salt=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
             [ -n "$salt" ] || die "cannot read /dev/urandom for a salt"
@@ -285,7 +346,18 @@ else
     while read -r qid qtag; do
         [ -n "$qid" ] || continue
         if [ "$qtag" = payload ] && [ "$cmd" != payload ]; then continue; fi
-        if run_query "$tmp/q.$qid" "$tmp/o.$qid" "$tmp/e.$qid" ${salt:+"--param_salt=$salt"}; then
+        if run_query "$tmp/q.$qid" "$tmp/o.$qid" "$tmp/e.$qid"; then
+            if [ "$qid" = tables ]; then
+                # never let a real name through: without hashes the rows are dropped
+                if hash_names; then
+                    printf '@@\t%s\tok\n' "$qid" >>"$stream"
+                    tr -d '\r' <"$tmp/h.out" >>"$stream"
+                else
+                    printf '@@\t%s\tfail\t%s\t%s\n' "$qid" "${qtag:-required}" "cannot hash table names: $(err_line "$tmp/h.err")" >>"$stream"
+                    note "cannot hash table names, so the payload has no tables: $(err_line "$tmp/h.err")"
+                fi
+                continue
+            fi
             printf '@@\t%s\tok\n' "$qid" >>"$stream"
             tr -d '\r' <"$tmp/o.$qid" >>"$stream"
         else
@@ -360,12 +432,24 @@ function hage(m) {
 }
 function cell(s) { gsub(/\|/, "\\|", s); return s }
 function notrun(q) { return "Could not run: " qerr[q] "\n" }
-function sq(s) { gsub(/'/, "''", s); return s }
+# Values arrive TSV-escaped (\\ \' \t \n ...). ClickHouse reads the same escapes
+# inside 'strings' and `identifiers`, so they are kept as they are; only a
+# character TSV does not escape needs it: ' (never raw in TSV) and `.
+function bsq(s, q,   out, i, c) {
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") { out = out substr(s, i, 2); i++; continue }   # an escape: keep both characters
+        if (c == q) out = out "\\"
+        out = out c
+    }
+    return out
+}
+function sq(s) { return bsq(s, "'") }
 function ident(s) {
     # quote a database/table name for SQL when it is not a plain identifier
     if (s ~ /^[A-Za-z_][A-Za-z0-9_]*$/) return s
-    gsub(/`/, "``", s)
-    return "`" s "`"
+    return "`" bsq(s, "`") "`"
 }
 function fq(db, t) { return ident(db) "." ident(t) }
 function shcmd(s) {
@@ -424,7 +508,8 @@ function drop_block(verb, fqname, bytes,   s) {
         s = s " (one " verb " uses it up; create it again before the next big table):\n"
         s = s "```sh\n" shcmd("touch " flag_path " && chmod 666 " flag_path) "\n```\n"
         s = s "```sql\n" verb " TABLE " fqname ";\n```\n"
-        s = s "Or, on ClickHouse 24.8 and newer, without the flag: `" verb " TABLE " fqname " SETTINGS max_table_size_to_drop = 0;`\n"
+        if (vmaj == 0 || vmaj >= 24)
+            s = s "Or, on ClickHouse 24.1 and newer, without the flag: `" verb " TABLE " fqname " SETTINGS max_table_size_to_drop = 0;`\n"
         return s
     }
     return ""
@@ -450,8 +535,9 @@ function check1(   i, f, name, is_old, has_ttl, tdays, b, rows, od, dcol, pexpr,
         if (is_old) {
             copies_n++; copies_b += b
             rs = (b >= GiB) ? "WARN" : "INFO"
-            drops = drops "DROP TABLE system." name ";\n"
-            dropbig = dropbig drop_block("DROP", "system." name, b)
+            # a copy over the drop limit gets its own block with the flag, not a plain DROP
+            if (drop_limit > 0 && b > 0.95 * drop_limit) dropbig = dropbig drop_block("DROP", "system." name, b)
+            else drops = drops "DROP TABLE system." name ";\n"
         } else if (!has_ttl) {
             nottl_n++; nottl_b += b
             if (b >= 10 * GiB || p >= 15) rs = "CRITICAL"
@@ -463,7 +549,7 @@ function check1(   i, f, name, is_old, has_ttl, tdays, b, rows, od, dcol, pexpr,
             }
             if (name == "opentelemetry_span_log") {
                 xml = xml "    <" name ">\n"
-                xml = xml "        <!-- the default config defines this log with <engine>, so the TTL goes inside <engine> -->\n"
+                xml = xml "        <!-- the default config sets an engine for this log, so its TTL goes inside the engine -->\n"
                 xml = xml "        <engine>ENGINE = MergeTree"
                 if (pexpr != "") xml = xml " PARTITION BY " pexpr
                 xml = xml " ORDER BY (" sexpr ") TTL " dcol " + INTERVAL " ttl_days " DAY DELETE</engine>\n"
@@ -495,7 +581,7 @@ function check1(   i, f, name, is_old, has_ttl, tdays, b, rows, od, dcol, pexpr,
         s = s big
         if (!drop_known) {
             s = s "The drop limit is unknown (max_table_size_to_drop: " limit_text() "). If a TRUNCATE fails with Code 359,"
-            s = s " add `SETTINGS max_table_size_to_drop = 0` to it (ClickHouse 24.8+), or create the one-time flag first: `"
+            s = s " add `SETTINGS max_table_size_to_drop = 0` to it (ClickHouse 24.1+), or create the one-time flag first: `"
             s = s shcmd("touch " flag_path " && chmod 666 " flag_path) "`\n"
         }
     }
@@ -511,9 +597,10 @@ function check1(   i, f, name, is_old, has_ttl, tdays, b, rows, od, dcol, pexpr,
         s = s "If ClickHouse does not start and its log says `TTL parameters should be specified directly inside 'engine'`,"
         s = s " your config defines that log with `<engine>`: put the TTL inside that `<engine>` (like opentelemetry_span_log above) or remove the log from this file.\n"
     }
-    if (drops != "") {
+    if (drops != "" || dropbig != "") {
         s = s "\n**Fix C: drop old copies.** Irreversible, safe for your data: ClickHouse no longer writes to these tables.\n"
-        s = s "```sql\n" drops "```\n" dropbig
+        if (drops != "") s = s "```sql\n" drops "```\n"
+        s = s dropbig
     }
     if (oldttl != "") {
         s = s "\n**TTL is set but old rows are still there.** ClickHouse removes expired rows during merges (by default at most every 4 h, merge_with_ttl_timeout).\n"
@@ -540,7 +627,8 @@ function check2(   i, f, s, total, free, parts, inact, det, used, inparts, notin
         tbl = tbl "| " cell(f[2]) " | " hs(total) " | " hs(used) " | " hs(inparts) " | " hs(notin) " (" fpct(p) ") | " rs " |\n"
         one = "Disk " f[2] ": " hs(total) ", used " hs(used) ". ClickHouse table parts: " hs(inparts)
         one = one " (inactive " hs(inact) ", detached " hs(det) ").\n"
-        one = one "Not in table parts: " hs(notin) " (" fpct(p) " of the disk): Docker logs and images, other services (MinIO, Postgres), OS files. The script can't see which.\n"
+        one = one "Not in table parts: " hs(notin) " (" fpct(p) " of the disk): Docker logs and images, other services (MinIO, Postgres), OS files,"
+        one = one " and the blocks the file system reserves for root (often 5% on ext4). The script can't see which.\n"
     }
     if (n["not_in_parts"] == 1) s = one; else s = tbl
     if (RANK[st[2]] >= RANK["WARN"]) {

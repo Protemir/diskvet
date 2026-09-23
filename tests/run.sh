@@ -113,8 +113,7 @@ for V in $VERSIONS; do
 
     # ------------------------------------------------------------ 1. from this machine
     R=$F-report.md
-    sh doctor.sh report --docker "$C" >"$R" 2>"$F-report.err"
-    if [ $? -eq 0 ]; then ok "report from the host (--docker $C)"; else fail "report exit code: $(cat "$F-report.err")"; fi
+    if sh doctor.sh report --docker "$C" >"$R" 2>"$F-report.err"; then ok "report from the host (--docker $C)"; else fail "report exit code: $(cat "$F-report.err")"; fi
     expect "$R" 1 WARN                    # 1.2 GiB trace_log without TTL
     expect "$R" 2 'OK|WARN|CRITICAL'      # depends on the Docker host disk
     expect "$R" 3 'OK|WARN|CRITICAL'
@@ -143,11 +142,19 @@ for V in $VERSIONS; do
     # ------------------------------------------------------------ payload
     P=$F-payload.json
     sh doctor.sh --print-payload --docker "$C" --env tests/fixtures/test.env >"$P" 2>"$F-payload.err"
-    if sh tests/check_payload.sh "$P" customer_acme payments_eu events_eu hot_eu broken_mut archive_eu mutation_ 202609 example.com "$C" >"$F-payload-check.txt" 2>&1; then
-        ok "payload passes check_payload.sh (keys, names, forbidden strings)"
+    if sh tests/check_payload.sh "$P" customer_acme payments_eu events_eu hot_eu broken_mut archive_eu mutation_ 202609 example.com "$C" "$SALT" >"$F-payload-check.txt" 2>&1; then
+        ok "payload passes check_payload.sh (keys, names, forbidden strings, the salt)"
     else
         fail "payload: $(cat "$F-payload-check.txt")"
     fi
+    # the salt is hashed with clickhouse local: it must not reach the server's logs
+    # (checked before this test itself sends the salt in the queries below)
+    ch -q "SYSTEM FLUSH LOGS"
+    s1=$(printf '%s' "$SALT" | cut -c1-10); s2=$(printf '%s' "$SALT" | cut -c11-24)   # split, so this query's own text doesn't match
+    x=$(chq "SELECT (SELECT count() FROM system.query_log WHERE position(query, concat('$s1', '$s2')) > 0) + (SELECT count() FROM system.text_log WHERE position(message, concat('$s1', '$s2')) > 0)")
+    if [ "$x" = 0 ]; then ok "the salt is not in system.query_log or system.text_log"; else fail "the salt reached the server logs: $x rows"; fi
+    x=$(chq "SELECT arrayStringConcat(groupUniqArray(Settings['readonly']), ',') FROM system.query_log WHERE log_comment = 'clickhouse-doctor' AND type = 'QueryFinish'")
+    if [ "$x" = 2 ]; then ok "every query of the script ran with readonly=2 (system.query_log)"; else fail "readonly seen in query_log: '$x'"; fi
     hdb=$(chq "SELECT concat('db_', leftPad(lower(hex(sipHash64('$SALT', 'customer_acme'))), 16, '0'))")
     htb=$(chq "SELECT concat('t_', leftPad(lower(hex(sipHash64('$SALT', 'customer_acme', 'payments_eu'))), 16, '0'))")
     has "$P" "\"db\": \"$hdb\", \"table\": \"$htb\"" "customer_acme.payments_eu is $hdb.$htb"
@@ -198,6 +205,15 @@ for V in $VERSIONS; do
         if [ "$(summary "$F-report-busybox.md")" = "$(summary "$R")" ]; then ok "inside the container with busybox ash + busybox awk: same statuses"; else fail "busybox statuses differ: $(summary "$F-report-busybox.md" | tr '\n' ' ')"; fi
         docker exec "$C" sh -c 'PATH=/tmp/bb:$PATH busybox sh /tmp/chd/doctor.sh report --replay /tmp/chd/tests/fixtures/alex.tsv' >"$F-replay-busybox.md" 2>&1
         if diff "$F-replay-host.md" "$F-replay-busybox.md" | grep -v '^[<>] # ClickHouse check-up' | grep -q '^[<>]'; then fail "busybox awk renders the fixture differently (see $F-replay-*.md)"; else ok "busybox awk renders the fixture byte-for-byte like the host awk"; fi
+        # no clickhouse local on PATH: names can't be hashed, so no table may leave
+        docker exec "$C" sh -c 'mkdir -p /tmp/nobin && printf "#!/bin/sh\nexec /usr/bin/clickhouse client \"\$@\"\n" >/tmp/nobin/clickhouse-client && chmod +x /tmp/nobin/clickhouse-client'
+        docker exec "$C" sh -c 'bb=$(command -v busybox); PATH=/tmp/nobin:/tmp/bb "$bb" sh /tmp/chd/doctor.sh --print-payload --host 127.0.0.1' >"$F-payload-nohash.json" 2>"$F-payload-nohash.err"
+        if grep -q '"not_run": \[.*"tables"' "$F-payload-nohash.json" && grep -q '"tables": \[ \]' "$F-payload-nohash.json" \
+            && grep -q 'cannot hash table names' "$F-payload-nohash.err" && sh tests/check_payload.sh "$F-payload-nohash.json" customer_acme payments_eu >/dev/null 2>&1; then
+            ok "without clickhouse local: no tables in the payload, tables in not_run, reason on stderr"
+        else
+            fail "without clickhouse local: $(tail -3 "$F-payload-nohash.json") $(cat "$F-payload-nohash.err")"
+        fi
     else
         echo "  skip  busybox is not in this image"
     fi
@@ -208,7 +224,8 @@ for V in $VERSIONS; do
     sed "s/__PASSWORD__/$PW/" tests/variant_b.sql | ch --multiquery >"$F-variant-b.txt" 2>&1 || fail "variant_b.sql: $(tail -2 "$F-variant-b.txt")"
     B=$F-report-variant-b.md
     sh doctor.sh report --docker "$C" --user doctor --password "$PW" >"$B" 2>"$F-report-variant-b.err"
-    has "$F-report-variant-b.err" "readonly=1 profile" "Variant B: detected the read-only profile, ran without flags"
+    has "$F-report-variant-b.err" "running with --readonly=1 only" "Variant B: the profile refuses the limit flags, ran with readonly=1 only"
+    has "$B" "Queries ran with readonly=1." "Variant B: the report says how it ran"
     nr=$(grep -c '^| [1-7] | .* | NOT_RUN |$' "$B")
     if [ "$nr" = 0 ]; then ok "Variant B: all 7 checks ran"; else fail "Variant B: $nr checks NOT_RUN"; fi
     has "$B" "customer_acme.events_eu | 20" "Variant B user sees parts of product tables (GRANT SHOW TABLES ON *.*)"
@@ -220,6 +237,25 @@ for V in $VERSIONS; do
     sh doctor.sh --print-payload --docker "$C" --user doctor --password "$PW" --env tests/fixtures/test.env >"$F-payload-variant-b.json" 2>/dev/null
     if sh tests/check_payload.sh "$F-payload-variant-b.json" customer_acme payments_eu >/dev/null 2>&1; then ok "Variant B payload passes check_payload.sh"; else fail "Variant B payload"; fi
     has "$F-payload-variant-b.json" "\"db\": \"$hdb\", \"table\": \"$htb\"" "Variant B: same hashes as the admin run"
+    # A normal (not read-only) user whose profile forbids changing max_threads:
+    # the limits are refused, but the queries must still run read-only.
+    ch --multiquery >"$F-constraint.txt" 2>&1 <<EOF
+CREATE SETTINGS PROFILE IF NOT EXISTS cons_profile SETTINGS max_threads = 4 CONST;
+CREATE USER IF NOT EXISTS cons IDENTIFIED WITH sha256_password BY '$PW' HOST LOCAL SETTINGS PROFILE 'cons_profile';
+GRANT SELECT ON system.* TO cons;
+GRANT SHOW TABLES ON *.* TO cons;
+CREATE SETTINGS PROFILE IF NOT EXISTS rw_profile SETTINGS readonly = 0 CONST;
+CREATE USER IF NOT EXISTS rw IDENTIFIED WITH sha256_password BY '$PW' HOST LOCAL SETTINGS PROFILE 'rw_profile';
+GRANT SELECT ON system.* TO rw;
+EOF
+    sh doctor.sh report --docker "$C" --user cons --password "$PW" >"$F-report-constraint.md" 2>"$F-report-constraint.err"
+    has "$F-report-constraint.err" "running with --readonly=1 only" "user with a setting constraint: limits refused, still read-only"
+    ch -q "SYSTEM FLUSH LOGS"
+    x=$(chq "SELECT arrayStringConcat(groupUniqArray(Settings['readonly']), ',') FROM system.query_log WHERE user = 'cons' AND type = 'QueryFinish'")
+    if [ "$x" = 1 ]; then ok "user with a setting constraint: every query ran with readonly=1 (system.query_log)"; else fail "user with a setting constraint: readonly in query_log '$x'"; fi
+    sh doctor.sh report --docker "$C" --user rw --password "$PW" >"$F-report-rw.md" 2>"$F-report-rw.err"
+    rc=$?
+    if [ $rc -eq 3 ] && grep -q "nothing was run" "$F-report-rw.err"; then ok "user that can't be made read-only: refused, exit 3"; else fail "user that can't be made read-only: rc=$rc $(cat "$F-report-rw.err")"; fi
 
     # ------------------------------------------------------------ 4. fix commands from the report
     # Fix A: trace_log is over the 10 MiB test drop limit
@@ -230,9 +266,18 @@ for V in $VERSIONS; do
     x=$(chq "TRUNCATE TABLE system.trace_log")
     if [ -z "$x" ]; then ok "TRUNCATE after the flag works"; else fail "TRUNCATE after the flag: $x"; fi
     if docker exec "$C" test -e /var/lib/clickhouse/flags/force_drop_table; then fail "flag still there after TRUNCATE"; else ok "the flag is used up by one TRUNCATE"; fi
+    # Fix A without the flag: the report's "SETTINGS max_table_size_to_drop = 0" variant
+    ch -q "INSERT INTO system.trace_log (event_date, event_time, trace) SELECT today(), now(), arrayMap(x -> rand64(number + x), range(100)) FROM numbers(150000)"
+    sh doctor.sh report --docker "$C" >"$F-report-big-again.md" 2>/dev/null
+    alt=$(grep -o 'TRUNCATE TABLE system\.trace_log SETTINGS max_table_size_to_drop = 0;' "$F-report-big-again.md" | sed -n 1p)
+    x=$(chq "${alt:-SELECT 'no SETTINGS variant in the report'}")
+    left=$(chq "SELECT count() FROM system.trace_log")
+    if [ -n "$alt" ] && [ -z "$x" ] && [ "$left" -lt 1000 ]; then ok "TRUNCATE ... SETTINGS max_table_size_to_drop = 0 from the report works without the flag"; else fail "SETTINGS variant: '$alt' -> $x ($left rows left)"; fi
+    # rows for the next step: after the restart they become trace_log_0, over the drop limit
+    ch -q "INSERT INTO system.trace_log (event_date, event_time, trace) SELECT today(), now(), arrayMap(x -> rand64(number + x), range(100)) FROM numbers(30000)"
     # Fix B: generated TTL config, restart
     awk '/^```xml$/ { f = 1; next } f && /^```$/ { exit } f { print }' "$R" >"$F-ttl.xml"
-    if grep -q '<ttl>' "$F-ttl.xml"; then ok "TTL config extracted ($(grep -c '<ttl>\|<engine>' "$F-ttl.xml") logs)"; else fail "no TTL config in the report"; fi
+    if grep -q '<ttl>' "$F-ttl.xml"; then ok "TTL config extracted ($(grep -c '</ttl>\|DELETE</engine>' "$F-ttl.xml") logs)"; else fail "no TTL config in the report"; fi
     notll_before=$(chq "SELECT count() FROM system.tables WHERE database = 'system' AND match(name, '_log\$') AND endsWith(engine, 'MergeTree') AND positionCaseInsensitive(engine_full, ' TTL ') = 0")
     docker exec -i "$C" sh -c 'cat > /etc/clickhouse-server/config.d/clickhouse-ttl.xml' <"$F-ttl.xml"
     t0=$(date +%s)
@@ -254,8 +299,15 @@ for V in $VERSIONS; do
     expect "$R2" 1 'OK|INFO'
     sql_of_section "$R2" 1 | grep '^DROP TABLE system\.' >"$F-drops.sql"
     nd=$(grep -c . "$F-drops.sql")
-    if [ "$nd" = "$copies" ]; then ok "report lists all $nd copies for DROP"; else fail "report lists $nd DROPs for $copies copies"; fi
-    ch --multiquery <"$F-drops.sql" >"$F-drops.txt" 2>&1 || fail "DROP: $(tail -2 "$F-drops.txt")"
+    if [ "$nd" = "$copies" ]; then ok "report lists all $nd copies for DROP, each once"; else fail "report lists $nd DROPs for $copies copies"; fi
+    # trace_log_0 is over the 10 MiB drop limit: the report gives it the flag and the SETTINGS variant
+    grep -o 'DROP TABLE system\.[A-Za-z0-9_]* SETTINGS max_table_size_to_drop = 0;' "$R2" >"$F-drops-big.sql"
+    if grep -qx 'DROP TABLE system.trace_log_0 SETTINGS max_table_size_to_drop = 0;' "$F-drops-big.sql"; then ok "big copy trace_log_0 gets the flag and the SETTINGS variant"; else fail "no SETTINGS variant for trace_log_0: $(cat "$F-drops-big.sql")"; fi
+    x=$(chq "DROP TABLE system.trace_log_0")
+    case $x in *"Code: 359"*) ok "plain DROP of the big copy is refused (Code 359)" ;; *) fail "plain DROP of the big copy was not refused: $x" ;; esac
+    sed 's/ SETTINGS max_table_size_to_drop = 0;$/;/' "$F-drops-big.sql" >"$F-drops-big-plain.sql"
+    grep -vxF -f "$F-drops-big-plain.sql" "$F-drops.sql" | cat - "$F-drops-big.sql" >"$F-drops-run.sql"
+    ch --multiquery <"$F-drops-run.sql" >"$F-drops.txt" 2>&1 || fail "DROP: $(tail -2 "$F-drops.txt")"
     left=$(chq "SELECT count() FROM system.tables WHERE database = 'system' AND match(name, '_log_[0-9]+\$')")
     if [ "$left" = 0 ]; then ok "DROP commands from the report removed every copy"; else fail "$left copies left"; fi
     # Checks 5, 6, 7: run the SQL the first report printed (merges started again by the restart anyway)
