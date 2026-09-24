@@ -1,0 +1,38 @@
+name: A suggested fix is wrong or unsafe
+description: The report told you to run something that failed, did nothing, or was risky.
+labels: ["wrong-fix"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks — this is the most useful report you can send. Please **don't paste
+        real database, table or host names** if they are private; `db_…`/`t_…`
+        placeholders are fine.
+  - type: input
+    id: version
+    attributes:
+      label: diskvet and ClickHouse versions
+      description: The second line of the report, e.g. "diskvet 0.2.1 · ClickHouse 25.12.11.4 · detected: Langfuse"
+    validations:
+      required: true
+  - type: dropdown
+    id: product
+    attributes:
+      label: What runs this ClickHouse?
+      options: [Langfuse, SigNoz, ClickStack, Plausible, Other]
+    validations:
+      required: true
+  - type: input
+    id: check
+    attributes:
+      label: Which check (1–7)?
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: The command from the report and what happened
+      description: Paste the command and the exact error or result.
+      render: text
+    validations:
+      required: true

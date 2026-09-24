@@ -20,6 +20,10 @@ ClickHouse does not limit its own logs by default. This script shows how big
 they are and generates the fix, together with the traps that the fix hits in
 practice (see [Known gotchas](#known-gotchas)).
 
+Prefer to fix it by hand? Read the guide:
+**[Why ClickHouse® fills the disk in self-hosted Langfuse and SigNoz, and how to fix it](docs/guide.md)**
+— every command in it was run on ClickHouse 24.8, 25.12 and 26.9.
+
 Two files, both short enough to read before you run them:
 
 | File | What it is |
