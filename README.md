@@ -372,9 +372,11 @@ one-off run can't do: an hourly snapshot (exactly the `--print-payload` JSON,
 nothing more), an email **before** the disk fills, a signal when snapshots stop
 arriving, and a short weekly report. Free beta: October 8 – November 7, 2026.
 
-To hear when it opens, watch this repository (Watch → Custom → Releases). Found
-a problem the script misses, or a wrong fix? Open an issue — that's the most
-useful thing you can do.
+**Want in? Comment in [Early access (discussion #1)](https://github.com/Protemir/diskvet/discussions/1)**
+with what runs your ClickHouse and roughly how big the disk is; you'll get a
+reply there when the beta opens. Found a problem the script misses, or a wrong
+fix? [Open an issue](https://github.com/Protemir/diskvet/issues/new/choose) —
+that's the most useful thing you can do.
 
 ## Sources
 
