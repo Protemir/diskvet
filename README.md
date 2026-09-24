@@ -42,6 +42,8 @@ On the machine where Langfuse's `docker-compose.yml` runs:
 cd langfuse                     # the folder with Langfuse's docker-compose.yml
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/SHA256SUMS
+sha256sum -c SHA256SUMS         # optional: both files match the release (macOS: shasum -a 256 -c)
 less checks.sql                 # read it first: SELECTs from system.* only
 
 sh diskvet.sh report --docker auto > report.md
@@ -176,7 +178,7 @@ What we saw with this user on ClickHouse 24.8, 25.12 and 26.9:
 
 ````markdown
 # ClickHouse check-up · 2026-10-09 06:40 UTC
-diskvet 0.2.1 · ClickHouse 25.12.1.649 · detected: Langfuse · container langfuse-clickhouse-1
+diskvet 0.2.2 · ClickHouse 25.12.1.649 · detected: Langfuse · container langfuse-clickhouse-1
 Nothing was changed. Nothing was sent anywhere. Queries ran with readonly=2 and resource limits.
 
 | # | Check | Status |
@@ -219,7 +221,7 @@ Save as `clickhouse-ttl.xml` ...
 …
 ---
 This is a snapshot. It can't tell when the disk will really run out, or whether your trace_log is normal for a Langfuse of your size.
-Want an email before the disk fills? Hourly snapshots, free beta Oct 8 - Nov 7: https://github.com/Protemir/diskvet#early-access
+Want an email before the disk fills? Join early access (free beta): https://github.com/Protemir/diskvet#early-access
 ````
 
 The full example is what `sh diskvet.sh report --replay tests/fixtures/alex.tsv`
@@ -367,10 +369,11 @@ the script ran as that user and sent only `SELECT` queries.
 
 ## Early access
 
-The script is free and stays free. Separately, we're building the part a
+The script is free and stays free. Separately, I'm building the part a
 one-off run can't do: an hourly snapshot (exactly the `--print-payload` JSON,
 nothing more), an email **before** the disk fills, a signal when snapshots stop
-arriving, and a short weekly report. Free beta: October 8 – November 7, 2026.
+arriving, and a short weekly report. The free beta opens in October 2026 and
+runs for 30 days; after that the hourly part becomes a paid plan.
 
 **Want in? Comment in [Early access (discussion #1)](https://github.com/Protemir/diskvet/discussions/1)**
 with what runs your ClickHouse and roughly how big the disk is; you'll get a

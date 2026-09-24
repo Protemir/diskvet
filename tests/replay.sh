@@ -65,7 +65,7 @@ has "$r" "Not in table parts: 30.7 GiB" "space not in parts"
 has "$r" "95% full in ~12 days" "rough forecast"
 has "$r" "APPLY DELETED MASK IN PARTITION ID '202608';" "APPLY DELETED MASK with the real partition"
 has "$r" "Before upgrading ClickHouse to 26.8+, update Langfuse first" "Langfuse version heads-up"
-has "$r" "free beta Oct 8 - Nov 7" "beta line"
+has "$r" "Join early access (free beta)" "beta line"
 has "$r" "github.com/Protemir/diskvet#early-access" "beta URL"
 
 p=$out/alex.json

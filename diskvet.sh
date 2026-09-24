@@ -14,7 +14,7 @@
 #   sh diskvet.sh --help
 
 NAME=diskvet
-VERSION=0.2.1
+VERSION=0.2.2
 BETA_URL='https://github.com/Protemir/diskvet#early-access'
 
 # Git Bash on Windows rewrites arguments that look like /paths before they
@@ -927,7 +927,7 @@ function report(   i, s, notes) {
     }
     print "---"
     print "This is a snapshot. It can't tell when the disk will really run out, or whether your " ((top_log != "") ? top_log : "trace_log") " is normal for " ((product == "other") ? "a ClickHouse" : "a " plabel) " of your size."
-    print "Want an email before the disk fills? Hourly snapshots, free beta Oct 8 - Nov 7: " beta_url
+    print "Want an email before the disk fills? Join early access (free beta): " beta_url
 }
 
 # ---------------------------------------------------------------- payload
