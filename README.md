@@ -99,7 +99,7 @@ It never reads:
 
 - rows of your own tables: `FROM` / `JOIN` only the system tables above or
   subqueries, no comma joins, no `IN <table>`, no table functions, no
-  `dictGet` / `joinGet`. `tests/check_sql.sh` enforces this in CI; it reads
+  `dictGet` / `joinGet`. `tests/check_sql.sh` enforces this in the test suite; it reads
   string literals and comments the way ClickHouse does, so a `--` inside a
   string or an escaped quote can't hide a query from it;
 - `system.query_log`, query texts, mutation commands or error texts (for a
@@ -233,7 +233,7 @@ before anything is ever sent. **Sending is not implemented**: `push` only says
 
 - Only the fields listed in `tests/payload_keys.txt`: sizes, row and part
   counts, TTL, insert limits, counters, disk size and free space, product and
-  ClickHouse version. CI fails on any other key.
+  ClickHouse version. `tests/check_payload.sh` fails on any other key.
 - Never: host names, IPs, ClickHouse cluster names, users, paths, UUIDs,
   `engine_full`, query texts, mutation ids or commands, error texts, partition
   names or values.
@@ -340,7 +340,7 @@ macOS.
   machine for `--host`.
 - For `--print-payload` also `clickhouse local` (to hash names): it is in every
   ClickHouse image and package; with `--docker` the container's copy is used.
-- ClickHouse 24.8 or newer is what CI covers.
+- ClickHouse 24.8 or newer is what the test suite covers (24.1 also runs, see [Tested on](#tested-on)).
 
 ## Development
 
