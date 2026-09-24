@@ -126,7 +126,7 @@ ClickHouse writes its own diagnostics into tables in the `system` database:
 says it plainly: "By default, table growth is unlimited."
 
 Recent [default configs](https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml)
-set a TTL only for a few small logs (`processors_profile_log` keeps 30 days),
+set a TTL only for a few small logs (since 25.9, `processors_profile_log` keeps 30 days),
 not for the big ones. Two defaults make the big ones grow fast:
 
 - the query profiler is on and writes stack samples of running queries into `trace_log`;
