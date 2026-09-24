@@ -37,7 +37,7 @@ commands run as the `clickhouse` user, not root. The report's flag command
 
 `trace_log`, `text_log`, `query_log` and `metric_log` without TTL are the usual
 suspects ([langfuse#13123](https://github.com/langfuse/langfuse/issues/13123):
-66.86 GiB of `trace_log` next to less than 150 MiB of Langfuse data). Check 1 of
+66.86 GiB of `trace_log` next to about 51 MiB in the Langfuse tables (traces, observations, scores)). Check 1 of
 the report gives the order of fixes: `TRUNCATE` now (with the one-time flag for
 tables over 50 GB), then the TTL file and a restart, then `DROP` of the
 `*_log_N` copies the restart leaves behind.

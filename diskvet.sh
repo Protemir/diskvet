@@ -14,7 +14,7 @@
 #   sh diskvet.sh --help
 
 NAME=diskvet
-VERSION=0.2.0
+VERSION=0.2.1
 BETA_URL='https://github.com/Protemir/diskvet#early-access'
 
 # Git Bash on Windows rewrites arguments that look like /paths before they
@@ -503,9 +503,15 @@ function limit_text(   s) {
 # SQL (and the one-time flag when needed) to TRUNCATE or DROP one table.
 function drop_block(verb, fqname, bytes,   s) {
     if (drop_limit > 0 && bytes > 0.95 * drop_limit) {
-        s = fqname " (" hs(bytes) ") is over the drop limit (max_table_size_to_drop = " limit_text() ")"
-        s = s ", so ClickHouse refuses a plain " verb ". Create the one-time flag right before it"
-        s = s " (one " verb " uses it up; create it again before the next big table):\n"
+        if (bytes > drop_limit) {
+            s = fqname " (" hs(bytes) ") is over the drop limit (max_table_size_to_drop = " limit_text() ")"
+            s = s ", so ClickHouse refuses a plain " verb "."
+        } else {
+            s = fqname " (" hs(bytes) ") is close to the drop limit (max_table_size_to_drop = " limit_text() ")"
+            s = s " and may pass it by the time you run " verb "."
+        }
+        s = s " Create the one-time flag right before it"
+        s = s " (the first " verb " that needs the flag uses it up; create it again before the next big table):\n"
         s = s "```sh\n" shcmd("touch " flag_path " && chmod 666 " flag_path) "\n```\n"
         s = s "```sql\n" verb " TABLE " fqname ";\n```\n"
         if (vmaj == 0 || vmaj >= 24)
@@ -639,7 +645,8 @@ function check2(   i, f, s, total, free, parts, inact, det, used, inparts, notin
         s = s "In `docker-compose.yml`, for every service (or once in the Docker daemon config `/etc/docker/daemon.json`: `{\"log-driver\": \"json-file\", \"log-opts\": {\"max-size\": \"50m\", \"max-file\": \"3\"}}` and `sudo systemctl restart docker`):\n"
         s = s "```yaml\n    logging:\n      driver: json-file\n      options:\n        max-size: \"50m\"\n        max-file: \"3\"\n```\n"
         s = s "Then `docker compose up -d --force-recreate`: log settings apply only to recreated containers."
-        s = s " To free space right away without a restart: `sudo truncate -s 0 /var/lib/docker/containers/<id>/<id>-json.log` (deletes that container's old log lines).\n"
+        s = s " Recreating a container also removes its old log file and frees the space (in langfuse#16339 this gave back 81 GiB)."
+        s = s " Don't truncate or rotate Docker's `*-json.log` files with outside tools: Docker owns them (Langfuse's self-hosting README says the same).\n"
     } else {
         s = s "\nIf this part grows, the usual cause is Docker container logs without rotation (langfuse#16339).\n"
     }

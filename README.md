@@ -9,7 +9,7 @@ ClickHouse, Inc. See [Trademarks](#trademarks).*
 
 The usual story: the disk fills up, but your own data is small.
 
-- 66.86 GiB of `system.trace_log` next to less than 150 MiB of Langfuse data
+- 66.86 GiB of `system.trace_log` next to about 51 MiB in the Langfuse tables (traces, observations, scores)
   ([langfuse#13123](https://github.com/langfuse/langfuse/issues/13123));
 - 80+ GB of system logs next to less than 500 MB of telemetry
   ([SigNoz#12050](https://github.com/SigNoz/signoz/issues/12050));
@@ -36,8 +36,8 @@ On the machine where Langfuse's `docker-compose.yml` runs:
 
 ```sh
 cd langfuse                     # the folder with Langfuse's docker-compose.yml
-curl -fsSLO https://github.com/Protemir/diskvet/releases/download/v0.2.0/diskvet.sh
-curl -fsSLO https://github.com/Protemir/diskvet/releases/download/v0.2.0/checks.sql
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
 less checks.sql                 # read it first: SELECTs from system.* only
 
 sh diskvet.sh report --docker auto > report.md
@@ -172,7 +172,7 @@ What we saw with this user on ClickHouse 24.8, 25.12 and 26.9:
 
 ````markdown
 # ClickHouse check-up · 2026-10-09 06:40 UTC
-diskvet 0.2.0 · ClickHouse 25.12.1.649 · detected: Langfuse · container langfuse-clickhouse-1
+diskvet 0.2.1 · ClickHouse 25.12.1.649 · detected: Langfuse · container langfuse-clickhouse-1
 Nothing was changed. Nothing was sent anywhere. Queries ran with readonly=2 and resource limits.
 
 | # | Check | Status |
@@ -202,7 +202,7 @@ TRUNCATE TABLE system.text_log;
 TRUNCATE TABLE system.query_log;
 ```
 system.trace_log (58.3 GiB) is over the drop limit (max_table_size_to_drop = 50 GB), so ClickHouse
-refuses a plain TRUNCATE. Create the one-time flag right before it (one TRUNCATE uses it up):
+refuses a plain TRUNCATE. Create the one-time flag right before it (the first TRUNCATE that needs the flag uses it up; create it again before the next big table):
 ```sh
 docker exec langfuse-clickhouse-1 sh -c 'touch /var/lib/clickhouse/flags/force_drop_table && chmod 666 /var/lib/clickhouse/flags/force_drop_table'
 ```
@@ -264,7 +264,7 @@ These are the traps the report handles for you. Each was checked on ClickHouse
 - **TRUNCATE refuses tables over 50 GB.** `max_table_size_to_drop` (default
   50 GB = 46.6 GiB) also applies to `TRUNCATE` and `DROP` of system logs. Create
   `/var/lib/clickhouse/flags/force_drop_table` (with `chmod 666`, the server
-  deletes it) right before the command. One command uses the flag up, so create
+  deletes it) right before the command. The first command that needs the flag uses it up, so create
   it again before the next big table. The size that counts is the sum of
   `bytes_on_disk` of the active parts, and only a table bigger than the limit
   is refused; the report shows the flag already from 95% of the limit. On
