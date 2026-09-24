@@ -1,11 +1,11 @@
-# clickhouse-doctor
+# diskvet
 
-> Working name. The final name and the download links are not chosen yet:
-> `<you>` and `<site>` below are placeholders, and nothing is published.
+**A read-only disk check-up for ClickHouse®** — for the ClickHouse that runs
+**inside** your self-hosted Langfuse, SigNoz or ClickStack. It finds what eats
+the disk and prints the exact commands to fix it.
 
-A read-only check-up for the ClickHouse that runs **inside** your self-hosted
-Langfuse, SigNoz or ClickStack. It finds what eats the disk and prints the
-exact commands to fix it.
+*diskvet is an independent project, not affiliated with or endorsed by
+ClickHouse, Inc. See [Trademarks](#trademarks).*
 
 The usual story: the disk fills up, but your own data is small.
 
@@ -25,7 +25,7 @@ Two files, both short enough to read before you run them:
 | File | What it is |
 |---|---|
 | `checks.sql` | every query the script runs (plus one read-only probe): only `SELECT`, only `FROM system.*` |
-| `doctor.sh` | POSIX `sh` wrapper: runs the queries with `readonly=2`, renders the report |
+| `diskvet.sh` | POSIX `sh` wrapper: runs the queries with `readonly=2`, renders the report |
 
 Apache-2.0. No registration. The script talks only to your ClickHouse (or
 `docker exec` into its container); nothing is sent anywhere else.
@@ -36,11 +36,11 @@ On the machine where Langfuse's `docker-compose.yml` runs:
 
 ```sh
 cd langfuse                     # the folder with Langfuse's docker-compose.yml
-curl -fsSLO https://github.com/<you>/clickhouse-doctor/releases/download/v0.2.0/doctor.sh
-curl -fsSLO https://github.com/<you>/clickhouse-doctor/releases/download/v0.2.0/checks.sql
+curl -fsSLO https://github.com/Protemir/diskvet/releases/download/v0.2.0/diskvet.sh
+curl -fsSLO https://github.com/Protemir/diskvet/releases/download/v0.2.0/checks.sql
 less checks.sql                 # read it first: SELECTs from system.* only
 
-sh doctor.sh report --docker auto > report.md
+sh diskvet.sh report --docker auto > report.md
 ```
 
 `--docker auto` finds the container itself: the compose service `clickhouse` in
@@ -54,8 +54,8 @@ password never leaves the container.
 Other ways to connect:
 
 ```sh
-sh doctor.sh report --docker signoz-clickhouse                # a container by name
-sh doctor.sh report --host 127.0.0.1 --user doctor --password '...'   # local clickhouse-client
+sh diskvet.sh report --docker signoz-clickhouse                # a container by name
+sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # local clickhouse-client
 ```
 
 ## What it checks
@@ -112,7 +112,7 @@ need them to run the fixes. It stays on your machine.
 
 **A. With an existing user.** The wrapper passes `--readonly=2` and limits:
 `max_execution_time=30`, `max_result_rows=10000`, `result_overflow_mode=break`,
-`max_threads=2`, `max_memory_usage=500000000`, `log_comment=clickhouse-doctor`.
+`max_threads=2`, `max_memory_usage=500000000`, `log_comment=diskvet`.
 This guarantees that nothing is changed. What is read is exactly what you see
 in `checks.sql`.
 
@@ -128,29 +128,29 @@ product data can't be read. Since ClickHouse ~24.1 reading `system.*` needs
 explicit grants (`select_from_system_db_requires_grant`), so they are listed:
 
 ```sql
-CREATE SETTINGS PROFILE IF NOT EXISTS doctor_profile SETTINGS
+CREATE SETTINGS PROFILE IF NOT EXISTS diskvet_profile SETTINGS
     readonly = 1, max_execution_time = 30, max_result_rows = 10000,
     result_overflow_mode = 'break', max_threads = 2, max_memory_usage = 500000000;
 
-CREATE USER IF NOT EXISTS doctor
+CREATE USER IF NOT EXISTS diskvet
     IDENTIFIED WITH sha256_password BY '<long random password>'
     HOST LOCAL
-    SETTINGS PROFILE 'doctor_profile';
+    SETTINGS PROFILE 'diskvet_profile';
 
-GRANT SHOW TABLES ON *.* TO doctor;   -- table metadata only, NOT data
-GRANT SELECT ON system.parts TO doctor;
-GRANT SELECT ON system.disks TO doctor;
-GRANT SELECT ON system.merge_tree_settings TO doctor;
-GRANT SELECT ON system.mutations TO doctor;
-GRANT SELECT ON system.detached_parts TO doctor;
-GRANT SELECT ON system.part_log TO doctor;
-GRANT SELECT ON system.asynchronous_metric_log TO doctor;
-GRANT SELECT ON system.asynchronous_metrics TO doctor;
-GRANT SELECT ON system.events TO doctor;
+GRANT SHOW TABLES ON *.* TO diskvet;   -- table metadata only, NOT data
+GRANT SELECT ON system.parts TO diskvet;
+GRANT SELECT ON system.disks TO diskvet;
+GRANT SELECT ON system.merge_tree_settings TO diskvet;
+GRANT SELECT ON system.mutations TO diskvet;
+GRANT SELECT ON system.detached_parts TO diskvet;
+GRANT SELECT ON system.part_log TO diskvet;
+GRANT SELECT ON system.asynchronous_metric_log TO diskvet;
+GRANT SELECT ON system.asynchronous_metrics TO diskvet;
+GRANT SELECT ON system.events TO diskvet;
 ```
 
 ```sh
-sh doctor.sh report --docker auto --user doctor --password '<long random password>'
+sh diskvet.sh report --docker auto --user diskvet --password '<long random password>'
 ```
 
 `GRANT SELECT ON system.*` is not given on purpose: `system.query_log` holds the
@@ -172,7 +172,7 @@ What we saw with this user on ClickHouse 24.8, 25.12 and 26.9:
 
 ````markdown
 # ClickHouse check-up · 2026-10-09 06:40 UTC
-clickhouse-doctor 0.2.0 · ClickHouse 25.12.1.649 · detected: Langfuse · container langfuse-clickhouse-1
+diskvet 0.2.0 · ClickHouse 25.12.1.649 · detected: Langfuse · container langfuse-clickhouse-1
 Nothing was changed. Nothing was sent anywhere. Queries ran with readonly=2 and resource limits.
 
 | # | Check | Status |
@@ -215,16 +215,16 @@ Save as `clickhouse-ttl.xml` ...
 …
 ---
 This is a snapshot. It can't tell when the disk will really run out, or whether your trace_log is normal for a Langfuse of your size.
-Free beta until Nov 7: hourly snapshot, email before the disk fills → <site>/beta
+Want an email before the disk fills? Hourly snapshots, free beta Oct 8 - Nov 7: https://github.com/Protemir/diskvet#early-access
 ````
 
-The full example is what `sh doctor.sh report --replay tests/fixtures/alex.tsv`
+The full example is what `sh diskvet.sh report --replay tests/fixtures/alex.tsv`
 prints.
 
 ## `--print-payload`: what a snapshot would contain
 
 ```sh
-sh doctor.sh --print-payload --docker auto
+sh diskvet.sh --print-payload --docker auto
 ```
 
 prints the JSON that a future hourly snapshot would send, so you can review it
@@ -244,12 +244,12 @@ before anything is ever sent. **Sending is not implemented**: `push` only says
   which gets the salt on stdin: the salt never reaches the ClickHouse server,
   so it is not in `system.query_log`, `system.text_log`, the server log files
   or the process list. Disks other than `default` become `disk_1`, `disk_2`, ...
-- The salt lives only on your server, in `/etc/clickhouse-doctor.env`
+- The salt lives only on your server, in `/etc/diskvet.env`
   (`--env` to change), as `SALT=<64 hex chars>` (at least 32 characters, or
   the script refuses it):
 
   ```sh
-  (umask 077; printf 'SALT=%s\n' "$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')" > /etc/clickhouse-doctor.env)
+  (umask 077; printf 'SALT=%s\n' "$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')" > /etc/diskvet.env)
   ```
 
   Without the file the script uses a one-time random salt and says so on
@@ -360,6 +360,50 @@ over the drop limit) and checks that they work. `tests/auto.sh` starts
 a compose service named `clickhouse` with `CLICKHOUSE_USER` /
 `CLICKHOUSE_PASSWORD`, like Langfuse's, and checks in `system.query_log` that
 the script ran as that user and sent only `SELECT` queries.
+
+## Early access
+
+The script is free and stays free. Separately, we're building the part a
+one-off run can't do: an hourly snapshot (exactly the `--print-payload` JSON,
+nothing more), an email **before** the disk fills, a signal when snapshots stop
+arriving, and a short weekly report. Free beta: October 8 – November 7, 2026.
+
+To hear when it opens, watch this repository (Watch → Custom → Releases). Found
+a problem the script misses, or a wrong fix? Open an issue — that's the most
+useful thing you can do.
+
+## Sources
+
+Every fix the report suggests comes from public documentation or public issues:
+
+| Topic | Source |
+|---|---|
+| System logs have no size limit by default; `*_log_N` copies after a schema or config change | [System tables overview](https://clickhouse.com/docs/operations/system-tables/overview) |
+| `<ttl>` and `<engine>` for system logs in `config.d` | [Server settings: query_log and other logs](https://clickhouse.com/docs/operations/server-configuration-parameters/settings); the `opentelemetry_span_log` trap: [ClickHouse#88366](https://github.com/ClickHouse/ClickHouse/issues/88366) |
+| `TRUNCATE`, the 50 GB drop limit and the `force_drop_table` flag | [TRUNCATE](https://clickhouse.com/docs/sql-reference/statements/truncate), [`max_table_size_to_drop` (server)](https://clickhouse.com/docs/operations/server-configuration-parameters/settings), [`max_table_size_to_drop` (query setting)](https://clickhouse.com/docs/operations/settings/settings) |
+| Parts, active/inactive, `has_lightweight_delete` | [system.parts](https://clickhouse.com/docs/operations/system-tables/parts) |
+| Disk size and free space | [system.disks](https://clickhouse.com/docs/operations/system-tables/disks) |
+| Growth in the last 24 h | [system.part_log](https://clickhouse.com/docs/operations/system-tables/part_log) |
+| Rough disk forecast | [system.asynchronous_metric_log](https://clickhouse.com/docs/operations/system-tables/asynchronous_metric_log) |
+| Too many parts: `parts_to_delay_insert`, `parts_to_throw_insert` | [MergeTree settings](https://clickhouse.com/docs/operations/settings/merge-tree-settings) |
+| Lightweight deletes and `APPLY DELETED MASK` | [DELETE](https://clickhouse.com/docs/sql-reference/statements/delete), [APPLY DELETED MASK](https://clickhouse.com/docs/sql-reference/statements/alter/apply-deleted-mask) |
+| Stuck mutations, `KILL MUTATION` | [system.mutations](https://clickhouse.com/docs/operations/system-tables/mutations), [KILL](https://clickhouse.com/docs/sql-reference/statements/kill) |
+| Detached parts, `DROP DETACHED PART` | [Manipulating partitions and parts](https://clickhouse.com/docs/sql-reference/statements/alter/partition) |
+| `readonly` levels | [Permissions for queries](https://clickhouse.com/docs/operations/settings/permissions-for-queries) |
+| Grants for the dedicated user | [GRANT](https://clickhouse.com/docs/sql-reference/statements/grant) |
+| Hashing names on your side | [clickhouse-local](https://clickhouse.com/docs/operations/utilities/clickhouse-local), [sipHash64](https://clickhouse.com/docs/sql-reference/functions/hash-functions) |
+| Docker log rotation | [json-file logging driver](https://docs.docker.com/engine/logging/drivers/json-file/) |
+
+The version-specific behaviour listed under [Known gotchas](#known-gotchas) was
+reproduced on stock `clickhouse/clickhouse-server` images by `tests/run.sh`.
+
+## Trademarks
+
+ClickHouse is a registered trademark of ClickHouse, Inc.
+([clickhouse.com](https://clickhouse.com)). diskvet is an independent open-source
+project and is not affiliated with, endorsed by or sponsored by ClickHouse, Inc.
+Langfuse, SigNoz and ClickStack are trademarks of their respective owners and
+are mentioned only to describe compatibility.
 
 ## License
 

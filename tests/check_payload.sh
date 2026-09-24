@@ -31,7 +31,7 @@ rm -f "${TMPDIR:-/tmp}/chk_pk.$$"
 grep -qE '"schema": 1,' "$p" || bad "schema is not 1"
 grep -qE '"status": "(ok|ch_unreachable)"' "$p" || bad "status is not ok / ch_unreachable"
 grep -qE '"sent_at": "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"' "$p" || bad "sent_at is not UTC ISO-8601"
-grep -qE '"agent": "clickhouse-doctor/[0-9]+\.[0-9]+\.[0-9]+"' "$p" || bad "agent is not name/version"
+grep -qE '"agent": "diskvet/[0-9]+\.[0-9]+\.[0-9]+"' "$p" || bad "agent is not name/version"
 
 # 3. version on its own
 if grep -q '"clickhouse_version"' "$p"; then

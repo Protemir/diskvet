@@ -2,7 +2,7 @@
 # Offline tests: render saved query results (tests/fixtures/*.tsv) and check the
 # statuses, the fix commands and the payload. No server needed, so this also
 # runs under dash, busybox ash + busybox awk, and mawk:
-#   sh tests/replay.sh            # uses ./doctor.sh
+#   sh tests/replay.sh            # uses ./diskvet.sh
 #   busybox sh tests/replay.sh
 set -u
 cd "$(dirname "$0")/.." || exit 2
@@ -48,7 +48,7 @@ fi
 
 echo "== alex.tsv: Langfuse on 25.12, the example from the plan"
 r=$out/alex.md
-sh doctor.sh report --replay tests/fixtures/alex.tsv --docker langfuse-clickhouse-1 >"$r" 2>"$out/alex.err"
+sh diskvet.sh report --replay tests/fixtures/alex.tsv --docker langfuse-clickhouse-1 >"$r" 2>"$out/alex.err"
 statuses "$r" "CRITICAL WARN WARN WARN OK OK WARN"
 has "$r" "detected: Langfuse" "product detected"
 has "$r" "88.7 GiB of ClickHouse's own logs vs 5.4 GiB of Langfuse data" "logs vs data line"
@@ -65,11 +65,11 @@ has "$r" "Not in table parts: 30.7 GiB" "space not in parts"
 has "$r" "95% full in ~12 days" "rough forecast"
 has "$r" "APPLY DELETED MASK IN PARTITION ID '202608';" "APPLY DELETED MASK with the real partition"
 has "$r" "Before upgrading ClickHouse to 26.8+, update Langfuse first" "Langfuse version heads-up"
-has "$r" "Free beta until Nov 7" "beta line"
-has "$r" "<site>/beta" "beta URL placeholder"
+has "$r" "free beta Oct 8 - Nov 7" "beta line"
+has "$r" "github.com/Protemir/diskvet#early-access" "beta URL"
 
 p=$out/alex.json
-sh doctor.sh --print-payload --replay tests/fixtures/alex.tsv >"$p" 2>/dev/null
+sh diskvet.sh --print-payload --replay tests/fixtures/alex.tsv >"$p" 2>/dev/null
 if sh tests/check_payload.sh "$p" customer_acme payments_eu 202608 langfuse-clickhouse-1 >"$out/p.txt" 2>&1; then ok "payload passes check_payload.sh"; else fail "payload: $(cat "$out/p.txt")"; fi
 has "$p" '"db": "db_00a41f09c2d1e0b7", "table": "t_3f9a1c2e0b77d104"' "customer table stays hashed"
 has "$p" '"table": "observations"' "Langfuse table name kept"
@@ -78,7 +78,7 @@ has "$p" '"lwd_parts": 3, "lwd_parts_bytes": 1932735283' "lightweight delete cou
 
 echo "== worst.tsv: everything on fire, ClickHouse 26.9, restricted user"
 r=$out/worst.md
-sh doctor.sh report --replay tests/fixtures/worst.tsv >"$r" 2>/dev/null
+sh diskvet.sh report --replay tests/fixtures/worst.tsv >"$r" 2>/dev/null
 statuses "$r" "CRITICAL CRITICAL CRITICAL CRITICAL CRITICAL CRITICAL CRITICAL"
 has "$r" "50 GB, the default: this user can't read system.server_settings" "unknown drop limit is said out loud"
 has "$r" "DROP TABLE system.query_log_1;" "old copy _1"
@@ -94,27 +94,27 @@ has "$r" "5 active parts in partitions of year 9999" "year 9999 partitions (lang
 has "$r" "ClickHouse 26.9 with Langfuse: make sure your Langfuse includes the DateTime64 fix" "26.8+ heads-up"
 has "$r" "/data/clickhouse/flags/force_drop_table" "flag path follows the disk path"
 p=$out/worst.json
-sh doctor.sh --print-payload --replay tests/fixtures/worst.tsv >"$p" 2>/dev/null
+sh diskvet.sh --print-payload --replay tests/fixtures/worst.tsv >"$p" 2>/dev/null
 if sh tests/check_payload.sh "$p" customer_acme mutation_42 202608_1_1_0 >"$out/p2.txt" 2>&1; then ok "payload passes check_payload.sh"; else fail "payload: $(cat "$out/p2.txt")"; fi
 has "$p" '"rejected_inserts": 17' "rejected inserts in payload"
 has "$p" '"mutations_failing": 1' "failing mutations in payload"
 
 echo "== notrun.tsv: every query failed"
 r=$out/notrun.md
-sh doctor.sh report --replay tests/fixtures/notrun.tsv >"$r" 2>/dev/null
+sh diskvet.sh report --replay tests/fixtures/notrun.tsv >"$r" 2>/dev/null
 statuses "$r" "NOT_RUN NOT_RUN NOT_RUN NOT_RUN NOT_RUN NOT_RUN NOT_RUN"
 has "$r" "Could not run: Code: 60. Table system.part_log does not exist." "reason shown"
 p=$out/notrun.json
-sh doctor.sh --print-payload --replay tests/fixtures/notrun.tsv >"$p" 2>/dev/null
+sh diskvet.sh --print-payload --replay tests/fixtures/notrun.tsv >"$p" 2>/dev/null
 has "$p" '"not_run": ["passport", "system_logs", "not_in_parts", "disk_now", "growth_24h", "too_many_parts", "inactive_parts", "deleted_rows", "mutations", "tables"]' "not_run lists required queries only"
 if sh tests/check_payload.sh "$p" >"$out/p3.txt" 2>&1; then ok "empty payload passes check_payload.sh"; else fail "payload: $(cat "$out/p3.txt")"; fi
 
 echo "== command line"
-sh doctor.sh push >/dev/null 2>"$out/push.err"
+sh diskvet.sh push >/dev/null 2>"$out/push.err"
 if [ $? -eq 2 ] && grep -q "not available yet" "$out/push.err"; then ok "push says not available yet"; else fail "push"; fi
-sh doctor.sh --bogus >/dev/null 2>&1
+sh diskvet.sh --bogus >/dev/null 2>&1
 if [ $? -eq 2 ]; then ok "unknown option rejected"; else fail "unknown option accepted"; fi
-if sh doctor.sh --help | grep -q -- '--print-payload'; then ok "--help"; else fail "--help"; fi
+if sh diskvet.sh --help | grep -q -- '--print-payload'; then ok "--help"; else fail "--help"; fi
 
 echo
 echo "replay: $PASS passed, $FAIL failed"

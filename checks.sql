@@ -1,4 +1,4 @@
--- checks.sql: every query clickhouse-doctor runs against your ClickHouse.
+-- checks.sql: every query diskvet runs against your ClickHouse.
 --
 -- Rules (enforced by tests/check_sql.sh in CI):
 --   * only SELECT, and only FROM / JOIN a fixed list of system tables or subqueries
@@ -386,7 +386,7 @@ LIMIT 100;
 -- every other database and table name is replaced by the wrapper with
 -- db_/t_ + 16 hex of sipHash64(salt, name), computed by `clickhouse local` on
 -- your side: the salt is never sent to the server. Columns 4 and 5 must stay
--- keep_db and keep_tbl (doctor.sh, hash_names).
+-- keep_db and keep_tbl (diskvet.sh, hash_names).
 SELECT
     'tables'                                                            AS check_id,
     p.database                                                          AS db,

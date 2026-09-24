@@ -1,6 +1,6 @@
 @@	passport	ok
 passport	26.9.1.1629	3600	langfuse	1	21474836480	48318382080	5
-@@	drop_limit	fail	optional	Code: 497. doctor: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.server_settings. (ACCESS_DENIED)
+@@	drop_limit	fail	optional	Code: 497. diskvet: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.server_settings. (ACCESS_DENIED)
 @@	system_logs	ok
 system_logs	text_log	0	0	0	21474836480	90000000	30	event_date	toYYYYMM(event_date)	event_date, event_time	107374182400
 system_logs	trace_log	0	0	0	5368709120	60000000	30	event_date	toYYYYMM(event_date)	event_date, event_time	107374182400

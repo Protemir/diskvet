@@ -7,7 +7,7 @@
 # For every version it starts a throw-away container, seeds the problems from
 # tests/seed.sql (plus 1.2 GiB of synthetic trace_log rows, 310 tiny inserts,
 # fake disk history), then:
-#   1. runs doctor.sh from this machine with --docker <container>;
+#   1. runs diskvet.sh from this machine with --docker <container>;
 #   2. runs it inside the container with /bin/sh (dash) and busybox ash;
 #   3. runs it as the Variant B user (readonly=1 profile, narrow grants);
 #   4. runs the fix commands printed by the report and checks that they work:
@@ -26,7 +26,7 @@ OUT=${OUT:-$ROOT/tests/out}
 mkdir -p "$OUT"
 VERSIONS=${*:-24.8 25.12 latest}
 SALT=$(sed -n 's/^SALT=//p' tests/fixtures/test.env)
-PW=doctor-test-$(od -An -tx1 -N8 /dev/urandom | tr -d ' \n')
+PW=diskvet-test-$(od -An -tx1 -N8 /dev/urandom | tr -d ' \n')
 TOTAL_PASS=0
 TOTAL_FAIL=0
 
@@ -82,7 +82,7 @@ for V in $VERSIONS; do
         fail "image clickhouse/clickhouse-server:$V"
         TOTAL_FAIL=$((TOTAL_FAIL + 1)); continue
     fi
-    docker cp "$(hostpath "$ROOT/tests/fixtures/ch-test.xml")" "$C:/etc/clickhouse-server/config.d/zz-doctor-test.xml" >/dev/null
+    docker cp "$(hostpath "$ROOT/tests/fixtures/ch-test.xml")" "$C:/etc/clickhouse-server/config.d/zz-diskvet-test.xml" >/dev/null
     docker start "$C" >/dev/null
     if ! wait_ready; then
         fail "server did not start"; docker logs --tail 30 "$C"
@@ -113,7 +113,7 @@ for V in $VERSIONS; do
 
     # ------------------------------------------------------------ 1. from this machine
     R=$F-report.md
-    if sh doctor.sh report --docker "$C" >"$R" 2>"$F-report.err"; then ok "report from the host (--docker $C)"; else fail "report exit code: $(cat "$F-report.err")"; fi
+    if sh diskvet.sh report --docker "$C" >"$R" 2>"$F-report.err"; then ok "report from the host (--docker $C)"; else fail "report exit code: $(cat "$F-report.err")"; fi
     expect "$R" 1 WARN                    # 1.2 GiB trace_log without TTL
     expect "$R" 2 'OK|WARN|CRITICAL'      # depends on the Docker host disk
     expect "$R" 3 'OK|WARN|CRITICAL'
@@ -133,7 +133,7 @@ for V in $VERSIONS; do
     has "$R" "95% full in ~" "rough forecast from fake history"
     has "$R" "max_table_size_to_drop = 10.0 MiB" "drop limit read from system.server_settings"
     has "$R" "Nothing was changed. Nothing was sent anywhere." "promise line"
-    has "$R" "<site>/beta" "beta line"
+    has "$R" "github.com/Protemir/diskvet#early-access" "beta line"
     case $VER in
         2[6-9].*|[3-9]?.*) has "$R" "partitions of year 9999" "year-9999 partition noticed (26.8+ numeric DateTime64)" ;;
         *) hasnt "$R" "partitions of year 9999" "no year-9999 partition before 26.8" ;;
@@ -141,7 +141,7 @@ for V in $VERSIONS; do
 
     # ------------------------------------------------------------ payload
     P=$F-payload.json
-    sh doctor.sh --print-payload --docker "$C" --env tests/fixtures/test.env >"$P" 2>"$F-payload.err"
+    sh diskvet.sh --print-payload --docker "$C" --env tests/fixtures/test.env >"$P" 2>"$F-payload.err"
     if sh tests/check_payload.sh "$P" customer_acme payments_eu events_eu hot_eu broken_mut archive_eu mutation_ 202609 example.com "$C" "$SALT" >"$F-payload-check.txt" 2>&1; then
         ok "payload passes check_payload.sh (keys, names, forbidden strings, the salt)"
     else
@@ -153,7 +153,7 @@ for V in $VERSIONS; do
     s1=$(printf '%s' "$SALT" | cut -c1-10); s2=$(printf '%s' "$SALT" | cut -c11-24)   # split, so this query's own text doesn't match
     x=$(chq "SELECT (SELECT count() FROM system.query_log WHERE position(query, concat('$s1', '$s2')) > 0) + (SELECT count() FROM system.text_log WHERE position(message, concat('$s1', '$s2')) > 0)")
     if [ "$x" = 0 ]; then ok "the salt is not in system.query_log or system.text_log"; else fail "the salt reached the server logs: $x rows"; fi
-    x=$(chq "SELECT arrayStringConcat(groupUniqArray(Settings['readonly']), ',') FROM system.query_log WHERE log_comment = 'clickhouse-doctor' AND type = 'QueryFinish'")
+    x=$(chq "SELECT arrayStringConcat(groupUniqArray(Settings['readonly']), ',') FROM system.query_log WHERE log_comment = 'diskvet' AND type = 'QueryFinish'")
     if [ "$x" = 2 ]; then ok "every query of the script ran with readonly=2 (system.query_log)"; else fail "readonly seen in query_log: '$x'"; fi
     hdb=$(chq "SELECT concat('db_', leftPad(lower(hex(sipHash64('$SALT', 'customer_acme'))), 16, '0'))")
     htb=$(chq "SELECT concat('t_', leftPad(lower(hex(sipHash64('$SALT', 'customer_acme', 'payments_eu'))), 16, '0'))")
@@ -163,7 +163,7 @@ for V in $VERSIONS; do
     has "$P" '"product": "langfuse"' "product in payload"
     v=$(docker exec -i "$C" clickhouse local --input-format JSONAsString --structure 'j String' -q 'SELECT isValidJSON(j) FROM table' <"$P" 2>&1)
     if [ "$v" = 1 ]; then ok "payload is valid JSON"; else fail "payload JSON: $v"; fi
-    sh doctor.sh --print-payload --docker "$C" --env /nonexistent/doctor.env >"$F-payload-random.json" 2>"$F-payload-random.err"
+    sh diskvet.sh --print-payload --docker "$C" --env /nonexistent/diskvet.env >"$F-payload-random.json" 2>"$F-payload-random.err"
     has "$F-payload-random.err" "one-time random salt" "no env file: random salt, said on stderr"
     hasnt "$F-payload-random.json" "$hdb" "random salt gives other hashes"
 
@@ -192,22 +192,22 @@ for V in $VERSIONS; do
 
     # ------------------------------------------------------------ 2. inside the container
     docker exec "$C" mkdir -p /tmp/chd
-    docker exec -i "$C" sh -c 'cat > /tmp/chd/doctor.sh' <doctor.sh
+    docker exec -i "$C" sh -c 'cat > /tmp/chd/diskvet.sh' <diskvet.sh
     docker exec -i "$C" sh -c 'cat > /tmp/chd/checks.sql' <checks.sql
-    docker exec "$C" sh /tmp/chd/doctor.sh report --host 127.0.0.1 >"$F-report-dash.md" 2>"$F-report-dash.err"
+    docker exec "$C" sh /tmp/chd/diskvet.sh report --host 127.0.0.1 >"$F-report-dash.md" 2>"$F-report-dash.err"
     if [ "$(summary "$F-report-dash.md")" = "$(summary "$R")" ] && [ -n "$(summary "$R")" ]; then ok "inside the container with /bin/sh (dash): same statuses"; else fail "dash statuses differ: $(summary "$F-report-dash.md" | tr '\n' ' ')"; fi
-    docker exec "$C" sh /tmp/chd/doctor.sh --print-payload --host 127.0.0.1 >"$F-payload-dash.json" 2>/dev/null
+    docker exec "$C" sh /tmp/chd/diskvet.sh --print-payload --host 127.0.0.1 >"$F-payload-dash.json" 2>/dev/null
     if sh tests/check_payload.sh "$F-payload-dash.json" customer_acme payments_eu >/dev/null 2>&1; then ok "payload from dash passes check_payload.sh"; else fail "payload from dash"; fi
     docker exec -i "$C" sh -c 'mkdir -p /tmp/chd/tests/fixtures && cat > /tmp/chd/tests/fixtures/alex.tsv' <tests/fixtures/alex.tsv
-    sh doctor.sh report --replay tests/fixtures/alex.tsv >"$F-replay-host.md" 2>&1
+    sh diskvet.sh report --replay tests/fixtures/alex.tsv >"$F-replay-host.md" 2>&1
     if docker exec "$C" sh -c 'command -v busybox' >/dev/null 2>&1; then
-        docker exec "$C" sh -c 'mkdir -p /tmp/bb && busybox --install -s /tmp/bb 2>/dev/null; PATH=/tmp/bb:$PATH busybox sh /tmp/chd/doctor.sh report --host 127.0.0.1' >"$F-report-busybox.md" 2>"$F-report-busybox.err"
+        docker exec "$C" sh -c 'mkdir -p /tmp/bb && busybox --install -s /tmp/bb 2>/dev/null; PATH=/tmp/bb:$PATH busybox sh /tmp/chd/diskvet.sh report --host 127.0.0.1' >"$F-report-busybox.md" 2>"$F-report-busybox.err"
         if [ "$(summary "$F-report-busybox.md")" = "$(summary "$R")" ]; then ok "inside the container with busybox ash + busybox awk: same statuses"; else fail "busybox statuses differ: $(summary "$F-report-busybox.md" | tr '\n' ' ')"; fi
-        docker exec "$C" sh -c 'PATH=/tmp/bb:$PATH busybox sh /tmp/chd/doctor.sh report --replay /tmp/chd/tests/fixtures/alex.tsv' >"$F-replay-busybox.md" 2>&1
+        docker exec "$C" sh -c 'PATH=/tmp/bb:$PATH busybox sh /tmp/chd/diskvet.sh report --replay /tmp/chd/tests/fixtures/alex.tsv' >"$F-replay-busybox.md" 2>&1
         if diff "$F-replay-host.md" "$F-replay-busybox.md" | grep -v '^[<>] # ClickHouse check-up' | grep -q '^[<>]'; then fail "busybox awk renders the fixture differently (see $F-replay-*.md)"; else ok "busybox awk renders the fixture byte-for-byte like the host awk"; fi
         # no clickhouse local on PATH: names can't be hashed, so no table may leave
         docker exec "$C" sh -c 'mkdir -p /tmp/nobin && printf "#!/bin/sh\nexec /usr/bin/clickhouse client \"\$@\"\n" >/tmp/nobin/clickhouse-client && chmod +x /tmp/nobin/clickhouse-client'
-        docker exec "$C" sh -c 'bb=$(command -v busybox); PATH=/tmp/nobin:/tmp/bb "$bb" sh /tmp/chd/doctor.sh --print-payload --host 127.0.0.1' >"$F-payload-nohash.json" 2>"$F-payload-nohash.err"
+        docker exec "$C" sh -c 'bb=$(command -v busybox); PATH=/tmp/nobin:/tmp/bb "$bb" sh /tmp/chd/diskvet.sh --print-payload --host 127.0.0.1' >"$F-payload-nohash.json" 2>"$F-payload-nohash.err"
         if grep -q '"not_run": \[.*"tables"' "$F-payload-nohash.json" && grep -q '"tables": \[ \]' "$F-payload-nohash.json" \
             && grep -q 'cannot hash table names' "$F-payload-nohash.err" && sh tests/check_payload.sh "$F-payload-nohash.json" customer_acme payments_eu >/dev/null 2>&1; then
             ok "without clickhouse local: no tables in the payload, tables in not_run, reason on stderr"
@@ -217,24 +217,24 @@ for V in $VERSIONS; do
     else
         echo "  skip  busybox is not in this image"
     fi
-    docker exec "$C" sh /tmp/chd/doctor.sh report --replay /tmp/chd/tests/fixtures/alex.tsv >"$F-replay-mawk.md" 2>&1 || true
+    docker exec "$C" sh /tmp/chd/diskvet.sh report --replay /tmp/chd/tests/fixtures/alex.tsv >"$F-replay-mawk.md" 2>&1 || true
     if [ -s "$F-replay-mawk.md" ] && ! diff "$F-replay-host.md" "$F-replay-mawk.md" | grep -v '^[<>] # ClickHouse check-up' | grep -q '^[<>]'; then ok "mawk renders the fixture like the host awk"; else fail "mawk renders the fixture differently"; fi
 
     # ------------------------------------------------------------ 3. Variant B
     sed "s/__PASSWORD__/$PW/" tests/variant_b.sql | ch --multiquery >"$F-variant-b.txt" 2>&1 || fail "variant_b.sql: $(tail -2 "$F-variant-b.txt")"
     B=$F-report-variant-b.md
-    sh doctor.sh report --docker "$C" --user doctor --password "$PW" >"$B" 2>"$F-report-variant-b.err"
+    sh diskvet.sh report --docker "$C" --user diskvet --password "$PW" >"$B" 2>"$F-report-variant-b.err"
     has "$F-report-variant-b.err" "running with --readonly=1 only" "Variant B: the profile refuses the limit flags, ran with readonly=1 only"
     has "$B" "Queries ran with readonly=1." "Variant B: the report says how it ran"
     nr=$(grep -c '^| [1-7] | .* | NOT_RUN |$' "$B")
     if [ "$nr" = 0 ]; then ok "Variant B: all 7 checks ran"; else fail "Variant B: $nr checks NOT_RUN"; fi
     has "$B" "customer_acme.events_eu | 20" "Variant B user sees parts of product tables (GRANT SHOW TABLES ON *.*)"
     has "$B" "the default: this user can't read system.server_settings" "Variant B: drop limit unknown, said so"
-    x=$(docker exec "$C" clickhouse-client --user doctor --password "$PW" -q "SELECT count() FROM customer_acme.payments_eu" 2>&1)
+    x=$(docker exec "$C" clickhouse-client --user diskvet --password "$PW" -q "SELECT count() FROM customer_acme.payments_eu" 2>&1)
     case $x in *ACCESS_DENIED*|*"Not enough privileges"*) ok "Variant B user cannot read product rows" ;; *) fail "Variant B user read product rows: $x" ;; esac
-    x=$(docker exec "$C" clickhouse-client --user doctor --password "$PW" -q "SELECT count() FROM system.query_log" 2>&1)
+    x=$(docker exec "$C" clickhouse-client --user diskvet --password "$PW" -q "SELECT count() FROM system.query_log" 2>&1)
     case $x in *ACCESS_DENIED*|*"Not enough privileges"*) ok "Variant B user cannot read system.query_log" ;; *) fail "Variant B user read query_log: $x" ;; esac
-    sh doctor.sh --print-payload --docker "$C" --user doctor --password "$PW" --env tests/fixtures/test.env >"$F-payload-variant-b.json" 2>/dev/null
+    sh diskvet.sh --print-payload --docker "$C" --user diskvet --password "$PW" --env tests/fixtures/test.env >"$F-payload-variant-b.json" 2>/dev/null
     if sh tests/check_payload.sh "$F-payload-variant-b.json" customer_acme payments_eu >/dev/null 2>&1; then ok "Variant B payload passes check_payload.sh"; else fail "Variant B payload"; fi
     has "$F-payload-variant-b.json" "\"db\": \"$hdb\", \"table\": \"$htb\"" "Variant B: same hashes as the admin run"
     # A normal (not read-only) user whose profile forbids changing max_threads:
@@ -248,12 +248,12 @@ CREATE SETTINGS PROFILE IF NOT EXISTS rw_profile SETTINGS readonly = 0 CONST;
 CREATE USER IF NOT EXISTS rw IDENTIFIED WITH sha256_password BY '$PW' HOST LOCAL SETTINGS PROFILE 'rw_profile';
 GRANT SELECT ON system.* TO rw;
 EOF
-    sh doctor.sh report --docker "$C" --user cons --password "$PW" >"$F-report-constraint.md" 2>"$F-report-constraint.err"
+    sh diskvet.sh report --docker "$C" --user cons --password "$PW" >"$F-report-constraint.md" 2>"$F-report-constraint.err"
     has "$F-report-constraint.err" "running with --readonly=1 only" "user with a setting constraint: limits refused, still read-only"
     ch -q "SYSTEM FLUSH LOGS"
     x=$(chq "SELECT arrayStringConcat(groupUniqArray(Settings['readonly']), ',') FROM system.query_log WHERE user = 'cons' AND type = 'QueryFinish'")
     if [ "$x" = 1 ]; then ok "user with a setting constraint: every query ran with readonly=1 (system.query_log)"; else fail "user with a setting constraint: readonly in query_log '$x'"; fi
-    sh doctor.sh report --docker "$C" --user rw --password "$PW" >"$F-report-rw.md" 2>"$F-report-rw.err"
+    sh diskvet.sh report --docker "$C" --user rw --password "$PW" >"$F-report-rw.md" 2>"$F-report-rw.err"
     rc=$?
     if [ $rc -eq 3 ] && grep -q "nothing was run" "$F-report-rw.err"; then ok "user that can't be made read-only: refused, exit 3"; else fail "user that can't be made read-only: rc=$rc $(cat "$F-report-rw.err")"; fi
 
@@ -268,7 +268,7 @@ EOF
     if docker exec "$C" test -e /var/lib/clickhouse/flags/force_drop_table; then fail "flag still there after TRUNCATE"; else ok "the flag is used up by one TRUNCATE"; fi
     # Fix A without the flag: the report's "SETTINGS max_table_size_to_drop = 0" variant
     ch -q "INSERT INTO system.trace_log (event_date, event_time, trace) SELECT today(), now(), arrayMap(x -> rand64(number + x), range(100)) FROM numbers(150000)"
-    sh doctor.sh report --docker "$C" >"$F-report-big-again.md" 2>/dev/null
+    sh diskvet.sh report --docker "$C" >"$F-report-big-again.md" 2>/dev/null
     alt=$(grep -o 'TRUNCATE TABLE system\.trace_log SETTINGS max_table_size_to_drop = 0;' "$F-report-big-again.md" | sed -n 1p)
     x=$(chq "${alt:-SELECT 'no SETTINGS variant in the report'}")
     left=$(chq "SELECT count() FROM system.trace_log")
@@ -295,7 +295,7 @@ EOF
     case $otel in *finish_date*) ok "opentelemetry_span_log TTL on finish_date: $otel" ;; *) fail "opentelemetry_span_log TTL: '$otel'" ;; esac
     # Fix C: the second report lists the copies; drop them
     R2=$F-report-after-ttl.md
-    sh doctor.sh report --docker "$C" >"$R2" 2>/dev/null
+    sh diskvet.sh report --docker "$C" >"$R2" 2>/dev/null
     expect "$R2" 1 'OK|INFO'
     sql_of_section "$R2" 1 | grep '^DROP TABLE system\.' >"$F-drops.sql"
     nd=$(grep -c . "$F-drops.sql")
@@ -330,7 +330,7 @@ EOF
     parts=$(chq "SELECT count() FROM system.parts WHERE active AND database = 'customer_acme' AND table = 'events_eu'")
     if [ "$parts" -lt 10 ]; then ok "OPTIMIZE ... FINAL merged events_eu (310 -> $parts parts)"; else fail "events_eu still has $parts parts"; fi
     R3=$F-report-after-fixes.md
-    sh doctor.sh report --docker "$C" >"$R3" 2>/dev/null
+    sh diskvet.sh report --docker "$C" >"$R3" 2>/dev/null
     expect "$R3" 5 'OK'
     expect "$R3" 6 'OK'
     expect "$R3" 7 'OK'

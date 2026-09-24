@@ -1,5 +1,5 @@
 {
-  "schema": 1, "agent": "clickhouse-doctor/0.2.0", "sent_at": "2026-10-09T14:23:02Z", "status": "ok",
+  "schema": 1, "agent": "diskvet/0.2.0", "sent_at": "2026-10-09T14:23:02Z", "status": "ok",
   "server": { "clickhouse_version": "25.12.1.649", "hostname": "db-prod-7.acme.internal", "cluster-name": "prod eu", "product": "langfuse" },
   "disks": [ { "disk": "10.0.3.17", "total_bytes": 1, "free_bytes": 1 } ],
   "tables": [

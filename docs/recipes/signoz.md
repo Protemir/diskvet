@@ -12,7 +12,7 @@ issue tracker and from tests on plain ClickHouse images.
 
 ```sh
 cd signoz/deploy/docker             # the folder with SigNoz's docker-compose.yaml
-sh doctor.sh report --docker auto > report.md
+sh diskvet.sh report --docker auto > report.md
 ```
 
 If `--docker auto` finds nothing or finds several containers, pass the name:
@@ -21,9 +21,9 @@ If `--docker auto` finds nothing or finds several containers, pass the name:
 such a container with busybox `sh` and `awk`:
 
 ```sh
-docker cp doctor.sh  signoz-clickhouse:/tmp/doctor.sh
+docker cp diskvet.sh  signoz-clickhouse:/tmp/diskvet.sh
 docker cp checks.sql signoz-clickhouse:/tmp/checks.sql
-docker exec signoz-clickhouse sh /tmp/doctor.sh report --host 127.0.0.1 > report.md
+docker exec signoz-clickhouse sh /tmp/diskvet.sh report --host 127.0.0.1 > report.md
 ```
 
 ## Where the space goes
@@ -66,3 +66,7 @@ tables growing fast, change it there; don't `ALTER` SigNoz tables by hand.
 SigNoz can run ClickHouse with ZooKeeper and replicated tables. The report's
 `TRUNCATE` and `DROP` commands for `system.*` tables are local to one server:
 run them on each replica. Replicated clusters are not covered by the tests yet.
+
+---
+
+Sources for every command: [README → Sources](../../README.md#sources). ClickHouse is a registered trademark of ClickHouse, Inc.; diskvet is not affiliated with ClickHouse, Inc.

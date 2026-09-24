@@ -11,7 +11,7 @@ This page adds what the FAQ does not say.
 
 ```sh
 cd langfuse                         # the folder with docker-compose.yml
-sh doctor.sh report --docker auto > report.md
+sh diskvet.sh report --docker auto > report.md
 ```
 
 `--docker auto` asks `docker compose ps -q clickhouse` in the current folder
@@ -106,10 +106,14 @@ Not tested yet. The script needs `clickhouse-client`, which the ClickHouse pod
 has. One way:
 
 ```sh
-kubectl cp doctor.sh  <namespace>/<clickhouse-pod>:/tmp/doctor.sh
+kubectl cp diskvet.sh  <namespace>/<clickhouse-pod>:/tmp/diskvet.sh
 kubectl cp checks.sql <namespace>/<clickhouse-pod>:/tmp/checks.sql
-kubectl exec -n <namespace> <clickhouse-pod> -- sh /tmp/doctor.sh report --host 127.0.0.1 --user <user> --password '<password>' > report.md
+kubectl exec -n <namespace> <clickhouse-pod> -- sh /tmp/diskvet.sh report --host 127.0.0.1 --user <user> --password '<password>' > report.md
 ```
 
 The fix commands in such a report are written for a plain server (`sudo sh -c
 ...`); run the shell parts with `kubectl exec` instead.
+
+---
+
+Sources for every command: [README → Sources](../../README.md#sources). ClickHouse is a registered trademark of ClickHouse, Inc.; diskvet is not affiliated with ClickHouse, Inc.
