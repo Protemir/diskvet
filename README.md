@@ -198,6 +198,11 @@ need `kubectl` with a context for the cluster and the
 [permissions](#permissions) below. Nothing is copied into the pod, no port is
 opened, and you need no ClickHouse client on your machine.
 
+Chart by chart (Langfuse, SigNoz, ClickStack, Bitnami, trigger.dev and
+more): which pod diskvet finds, how it logs in, which Helm values take the
+fixes, how the pod restarts, and a full volume versus a full node disk:
+[Kubernetes: ClickHouse chart by chart](docs/recipes/kubernetes.md).
+
 **Not tested on a real cluster yet.** So far the test suite runs `--k8s` only
 against a fake `kubectl` (see [Tested on](#tested-on)); a test job on a real
 cluster comes next. If you try it, an
@@ -245,7 +250,8 @@ sh diskvet.sh report --replay raw.tsv          # a --save-raw file from a --k8s 
   for example
   `kubectl exec -n langfuse langfuse-clickhouse-0-0-0 -c clickhouse-server -- sh -c 'touch /var/lib/clickhouse/flags/force_drop_table && chmod 666 /var/lib/clickhouse/flags/force_drop_table'`.
   Config changes go into your Helm values (or the operator's resource), never
-  into files in the pod: Helm and the operators rewrite those.
+  into files in the pod: Helm and the operators rewrite those. The keys per
+  chart: [docs/recipes/kubernetes.md](docs/recipes/kubernetes.md).
 
 ### What diskvet sends to the cluster
 
@@ -454,6 +460,10 @@ when it can't run the queries; with `--print-payload`, stdout then holds one
 - **`cannot read kubectl's output (unexpected columns)`**: please
   [open an issue](https://github.com/Protemir/diskvet/issues/new/choose) with
   the output of `kubectl version`.
+
+After the fixes (a pod that crash-loops or does not restart, a volume to
+grow, evicted pods on a full node):
+[Kubernetes: ClickHouse chart by chart → Troubleshooting](docs/recipes/kubernetes.md#troubleshooting).
 
 ## Example report (shortened)
 

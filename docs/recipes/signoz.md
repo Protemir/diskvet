@@ -92,9 +92,16 @@ complete `kubectl` lines for that pod.
   done
   ```
 
-Not tested on a real cluster yet. What diskvet sends to the cluster, the
-permissions it needs, what the API server's audit log shows, and
-troubleshooting: [README → Kubernetes](../../README.md#kubernetes).
+- The TTL file goes into `clickhouse.files` of your values, as
+  `config.d/zz-diskvet-ttl.xml`; logs that already have a TTL from the chart
+  are changed with `clickhouse.clickhouseOperator.<log>.ttl` instead (not
+  verified yet): [SigNoz on Kubernetes](kubernetes.md#signoz).
+
+Not tested on a real cluster yet. The values keys, how the pod restarts, a
+full volume or node disk, and troubleshooting:
+[Kubernetes: ClickHouse chart by chart](kubernetes.md). What diskvet sends to
+the cluster, the permissions it needs and what the API server's audit log
+shows: [README → Kubernetes](../../README.md#kubernetes).
 
 ---
 
