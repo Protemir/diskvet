@@ -65,11 +65,16 @@
 <p><em>수정하지 않은 공식 <code>clickhouse/clickhouse-server</code> 이미지 24.8, 25.12, 26.9에서 테스트했습니다(SigNoz 명령은 25.5와 25.12에서 테스트). ClickHouse 서비스와 설정은 Langfuse와 SigNoz의 compose 파일에서 가져왔습니다.</em></p>
 <h2 id="요약tldr">요약(TL;DR)</h2>
 <ol>
-<li><strong>확인.</strong> <code>system.parts</code>에 읽기 전용 쿼리를 하나 실행합니다. <code>system.*_log</code> 테이블이 사용자 데이터보다 크다면 원인은 ClickHouse 자체 로그입니다.</li>
-<li><strong>지금 바로 공간 확보.</strong> 큰 로그를 <code>TRUNCATE</code>로 비웁니다. 50 GB가 넘는 테이블에는 <code>SETTINGS max_table_size_to_drop = 0</code>을 붙입니다.</li>
-<li><strong>재발 방지.</strong> 로그마다 TTL(보존 기간)을 지정하는 <code>config.d</code> 파일을 추가하고(<code>opentelemetry_span_log</code>의 TTL은 <code>&lt;engine&gt;</code> 안에 씁니다) ClickHouse를 재시작합니다.</li>
-<li><strong>정리.</strong> 재시작 후 남는 <code>*_log_0</code>, <code>*_log_1</code> 사본을 삭제합니다.</li>
-<li><strong>그래도 가득 차 있다면?</strong> Docker 컨테이너 로그, 삭제된 행, 디스크에 남아 있는 파트(part)를 확인합니다. Langfuse를 쓴다면 ClickHouse를 26.8+로 올리기 전에 Langfuse부터 업데이트하십시오.</li>
+<li>
+<strong>확인.</strong> <code>system.parts</code>에 읽기 전용 쿼리를 하나 실행합니다. <code>system.*_log</code> 테이블이 사용자 데이터보다 크다면 원인은 ClickHouse 자체 로그입니다.</li>
+<li>
+<strong>지금 바로 공간 확보.</strong> 큰 로그를 <code>TRUNCATE</code>로 비웁니다. 50 GB가 넘는 테이블에는 <code>SETTINGS max_table_size_to_drop = 0</code>을 붙입니다.</li>
+<li>
+<strong>재발 방지.</strong> 로그마다 TTL(보존 기간)을 지정하는 <code>config.d</code> 파일을 추가하고(<code>opentelemetry_span_log</code>의 TTL은 <code>&lt;engine&gt;</code> 안에 씁니다) ClickHouse를 재시작합니다.</li>
+<li>
+<strong>정리.</strong> 재시작 후 남는 <code>*_log_0</code>, <code>*_log_1</code> 사본을 삭제합니다.</li>
+<li>
+<strong>그래도 가득 차 있다면?</strong> Docker 컨테이너 로그, 삭제된 행, 디스크에 남아 있는 파트(part)를 확인합니다. Langfuse를 쓴다면 ClickHouse를 26.8+로 올리기 전에 Langfuse부터 업데이트하십시오.</li>
 </ol>
 <h2 id="1-무엇이-디스크를-차지하는가-테이블별-clickhouse-디스크-사용량-확인">1. 무엇이 디스크를 차지하는가? 테이블별 ClickHouse 디스크 사용량 확인</h2>
 <p>다음 쿼리를 <code>size.sql</code>로 저장합니다. 디스크에서 차지하는 크기가 큰 테이블부터 순서대로 보여 줍니다.</p>
@@ -101,7 +106,7 @@ TRUNCATE TABLE system.text_log;
 TRUNCATE TABLE system.metric_log;
 TRUNCATE TABLE system.query_log;</code></pre>
 <p>이 명령은 ClickHouse 자체의 진단 데이터만 삭제하고 트레이스는 건드리지 않으며, 재시작도 필요 없습니다.</p>
-<p>Langfuse는 직접 실행한 쿼리 일부를 추적하기 위해 <code>system.query_log</code>를 읽습니다(<a href="https://github.com/langfuse/langfuse/issues/13123" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/13123/hovercard">#13123</a>). 따라서 비우는 것은 괜찮지만 끄지는 마십시오.</p>
+<p>Langfuse는 직접 실행한 쿼리 일부를 추적하기 위해 <code>system.query_log</code>를 읽습니다(<a href="https://github.com/langfuse/langfuse/issues/13123">#13123</a>). 따라서 비우는 것은 괜찮지만 끄지는 마십시오.</p>
 <h3 id="truncate가-code-359로-실패한다면-50-gb가-넘는-테이블">TRUNCATE가 Code 359로 실패한다면? 50 GB가 넘는 테이블</h3>
 <p>ClickHouse는 <code>max_table_size_to_drop</code>(기본값 50,000,000,000바이트, 약 46.6 GiB)보다 큰 테이블을 삭제하거나 비우지 않습니다. 이 제한은 <code>TRUNCATE</code>에도 적용되며, 이보다 큰 테이블에서는 <code>Code: 359 ... (TABLE_SIZE_EXCEEDS_MAX_DROP_SIZE_LIMIT)</code> 오류로 실패합니다.</p>
 <p>큰 로그는 실제로 이 제한에 걸립니다. <a href="https://github.com/orgs/langfuse/discussions/15024">Langfuse discussion #15024</a>에서는 <code>text_log</code>가 59.20 GiB였습니다. 우회하는 방법은 두 가지입니다.</p>
@@ -117,13 +122,17 @@ TRUNCATE TABLE system.text_log SETTINGS max_table_size_to_drop = 0;</code></pre>
 <p>최근 버전의 <a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">기본 설정</a>도 일부 작은 로그에만 TTL을 지정하고(25.9부터 <code>processors_profile_log</code>는 30일간 보관), 큰 로그에는 지정하지 않습니다. 큰 로그가 빠르게 커지는 원인은 다음 두 가지 기본 설정입니다.</p>
 <ul>
 <li>쿼리 프로파일러(query profiler)가 켜져 있어, 실행 중인 쿼리의 스택 샘플을 <code>trace_log</code>에 기록합니다.</li>
-<li><code>text_log</code>는 서버 로그를 <code>trace</code> 레벨로 저장합니다.</li>
+<li>
+<code>text_log</code>는 서버 로그를 <code>trace</code> 레벨로 저장합니다.</li>
 </ul>
 <p>공개된 사례는 다음과 같습니다.</p>
 <ul>
-<li><strong>Langfuse <a href="https://github.com/langfuse/langfuse/issues/13123" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/13123/hovercard">#13123</a></strong>: <code>system.trace_log</code>는 66.86 GiB였던 반면, 이 이슈에 나열된 Langfuse 테이블(<code>traces</code>, <code>observations</code>, <code>scores</code>)은 모두 합쳐 약 51 MiB였습니다. 메인테이너는 ClickHouse의 기본값을 덮어쓰지 않기로 하고, 대신 <a href="https://langfuse.com/faq/all/reduce-clickhouse-disk-size">FAQ 페이지</a>를 추가했습니다.</li>
-<li><strong>SigNoz <a href="https://github.com/SigNoz/signoz/issues/12050" data-hovercard-type="issue" data-hovercard-url="/SigNoz/signoz/issues/12050/hovercard">#12050</a></strong>: 텔레메트리는 500 MB도 되지 않는데 시스템 로그는 80 GB가 넘었습니다(<code>trace_log_0</code> 사본 포함). <code>system.*</code> 테이블을 비우자 약 80 GB가 확보되었습니다. SigNoz의 새 Foundry 설치 프로그램은 TTL을 설정하지만, docker compose로 설치한 기존 환경에는 TTL이 없습니다.</li>
-<li><strong>ClickStack Helm chart <a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275" data-hovercard-type="pull_request" data-hovercard-url="/ClickHouse/ClickStack-helm-charts/pull/275/hovercard">PR #275</a></strong>: 10 Gi 볼륨이 10일 만에 100%에 도달했습니다. 텔레메트리는 약 70 MB였지만 trace 레벨 서버 로그가 5.2 GB, <code>system.text_log</code>가 3.7 GB였습니다. 2026년 9월에 머지된 이 PR은 7일 TTL을 추가합니다.</li>
+<li>
+<strong>Langfuse <a href="https://github.com/langfuse/langfuse/issues/13123">#13123</a></strong>: <code>system.trace_log</code>는 66.86 GiB였던 반면, 이 이슈에 나열된 Langfuse 테이블(<code>traces</code>, <code>observations</code>, <code>scores</code>)은 모두 합쳐 약 51 MiB였습니다. 메인테이너는 ClickHouse의 기본값을 덮어쓰지 않기로 하고, 대신 <a href="https://langfuse.com/faq/all/reduce-clickhouse-disk-size">FAQ 페이지</a>를 추가했습니다.</li>
+<li>
+<strong>SigNoz <a href="https://github.com/SigNoz/signoz/issues/12050">#12050</a></strong>: 텔레메트리는 500 MB도 되지 않는데 시스템 로그는 80 GB가 넘었습니다(<code>trace_log_0</code> 사본 포함). <code>system.*</code> 테이블을 비우자 약 80 GB가 확보되었습니다. SigNoz의 새 Foundry 설치 프로그램은 TTL을 설정하지만, docker compose로 설치한 기존 환경에는 TTL이 없습니다.</li>
+<li>
+<strong>ClickStack Helm chart <a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">PR #275</a></strong>: 10 Gi 볼륨이 10일 만에 100%에 도달했습니다. 텔레메트리는 약 70 MB였지만 trace 레벨 서버 로그가 5.2 GB, <code>system.text_log</code>가 3.7 GB였습니다. 2026년 9월에 머지된 이 PR은 7일 TTL을 추가합니다.</li>
 </ul>
 <h2 id="4-clickhouse-시스템-로그에-ttl을-설정하려면">4. ClickHouse 시스템 로그에 TTL을 설정하려면?</h2>
 <p>TTL을 설정하면 ClickHouse가 오래된 로그 행을 스스로 삭제합니다. ClickHouse가 TTL을 적용하는 방식 때문에, TTL은 섹션 2의 <code>TRUNCATE</code>를 실행한 <strong>후에</strong> 설정하십시오.</p>
@@ -160,9 +169,12 @@ ORDER BY total_bytes DESC;</code></pre>
       - ./clickhouse-ttl.xml:/etc/clickhouse-server/config.d/clickhouse-ttl.xml:ro</code></pre>
 <p>이 단계에는 함정이 세 가지 있습니다.</p>
 <ul>
-<li><strong><code>opentelemetry_span_log</code>의 TTL은 <code>&lt;engine&gt;</code> 안에 씁니다.</strong> 기본 설정은 이 로그를 <code>&lt;engine&gt;</code>으로 정의하는데, <a href="https://clickhouse.com/docs/reference/system-tables/overview">공식 문서</a>에 따르면 이는 <code>&lt;ttl&gt;</code>과 충돌합니다. 이 경우 서버는 <code>If 'engine' is specified for system table, TTL parameters should be specified directly inside 'engine'</code> 오류를 내고 종료됩니다(<a href="https://github.com/ClickHouse/ClickHouse/issues/88366" data-hovercard-type="issue" data-hovercard-url="/ClickHouse/ClickHouse/issues/88366/hovercard">ClickHouse #88366</a>). <code>PARTITION BY</code>와 <code>ORDER BY</code>는 <code>SELECT engine_full FROM system.tables WHERE database = 'system' AND name = 'opentelemetry_span_log'</code>의 결과에서 복사하십시오(SigNoz 설정은 <code>trace_id</code>로도 정렬합니다). 또는 <code>&lt;opentelemetry_span_log remove="1"/&gt;</code> 설정으로 이 로그를 끌 수도 있습니다(Langfuse의 <a href="https://langfuse.com/self-hosting/configuration/scaling">스케일링 문서</a>). <code>remove</code>는 기존 테이블을 삭제하지 않으므로, 테이블은 직접 삭제하십시오.</li>
-<li><strong>서버에 있는 로그만 나열합니다.</strong> 설정에 로그 섹션을 두면 그 로그가 켜집니다(기본 <code>config.xml</code>은 <code>session_log</code>를 주석 처리해서 꺼 둡니다). SigNoz 자체의 <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml"><code>config.xml</code></a>은 <code>text_log</code>를 켜지 않으므로, SigNoz에서는 그 줄을 삭제하십시오. 또한 SigNoz의 <code>config.xml</code>에는 <code>processors_profile_log</code>의 TTL이 없으므로, TTL 파일에 <code>processors_profile_log</code>도 추가하십시오.</li>
-<li><strong>프로필 설정은 config.d가 아니라 users.d에 넣습니다.</strong> 쿼리 프로파일러도 끄려면(Langfuse 스케일링 문서처럼 <code>query_profiler_real_time_period_ns</code>와 <code>query_profiler_cpu_time_period_ns</code>를 0으로 설정), 그 <code>&lt;profiles&gt;</code> 블록은 <code>users.d/</code>에 넣으십시오. <code>config.d/</code>에 넣으면 아무 오류 없이 무시됩니다(<a href="https://github.com/triggerdotdev/trigger.dev/issues/4343" data-hovercard-type="issue" data-hovercard-url="/triggerdotdev/trigger.dev/issues/4343/hovercard">trigger.dev #4343</a>).</li>
+<li>
+<strong><code>opentelemetry_span_log</code>의 TTL은 <code>&lt;engine&gt;</code> 안에 씁니다.</strong> 기본 설정은 이 로그를 <code>&lt;engine&gt;</code>으로 정의하는데, <a href="https://clickhouse.com/docs/reference/system-tables/overview">공식 문서</a>에 따르면 이는 <code>&lt;ttl&gt;</code>과 충돌합니다. 이 경우 서버는 <code>If 'engine' is specified for system table, TTL parameters should be specified directly inside 'engine'</code> 오류를 내고 종료됩니다(<a href="https://github.com/ClickHouse/ClickHouse/issues/88366">ClickHouse #88366</a>). <code>PARTITION BY</code>와 <code>ORDER BY</code>는 <code>SELECT engine_full FROM system.tables WHERE database = 'system' AND name = 'opentelemetry_span_log'</code>의 결과에서 복사하십시오(SigNoz 설정은 <code>trace_id</code>로도 정렬합니다). 또는 <code>&lt;opentelemetry_span_log remove="1"/&gt;</code> 설정으로 이 로그를 끌 수도 있습니다(Langfuse의 <a href="https://langfuse.com/self-hosting/configuration/scaling">스케일링 문서</a>). <code>remove</code>는 기존 테이블을 삭제하지 않으므로, 테이블은 직접 삭제하십시오.</li>
+<li>
+<strong>서버에 있는 로그만 나열합니다.</strong> 설정에 로그 섹션을 두면 그 로그가 켜집니다(기본 <code>config.xml</code>은 <code>session_log</code>를 주석 처리해서 꺼 둡니다). SigNoz 자체의 <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml"><code>config.xml</code></a>은 <code>text_log</code>를 켜지 않으므로, SigNoz에서는 그 줄을 삭제하십시오. 또한 SigNoz의 <code>config.xml</code>에는 <code>processors_profile_log</code>의 TTL이 없으므로, TTL 파일에 <code>processors_profile_log</code>도 추가하십시오.</li>
+<li>
+<strong>프로필 설정은 config.d가 아니라 users.d에 넣습니다.</strong> 쿼리 프로파일러도 끄려면(Langfuse 스케일링 문서처럼 <code>query_profiler_real_time_period_ns</code>와 <code>query_profiler_cpu_time_period_ns</code>를 0으로 설정), 그 <code>&lt;profiles&gt;</code> 블록은 <code>users.d/</code>에 넣으십시오. <code>config.d/</code>에 넣으면 아무 오류 없이 무시됩니다(<a href="https://github.com/triggerdotdev/trigger.dev/issues/4343">trigger.dev #4343</a>).</li>
 </ul>
 <h3 id="3단계-clickhouse-재시작">3단계: ClickHouse 재시작</h3>
 <p><code>config.d</code>의 TTL은 서버를 재시작해야만 적용됩니다(<a href="https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/">Altinity KB</a>). 설정을 다시 읽어 들이는 것만으로는 부족합니다. compose에서는 다음과 같이 합니다.</p>
@@ -172,7 +184,7 @@ docker compose ps clickhouse</code></pre>
 <pre><code>docker cp "$(docker compose ps -aq clickhouse)":/var/log/clickhouse-server/clickhouse-server.err.log .
 tail -n 20 clickhouse-server.err.log</code></pre>
 <h3 id="4단계-오래된-trace_log_0-사본-삭제">4단계: 오래된 trace_log_0 사본 삭제</h3>
-<p>재시작하고 나면 변경한 로그마다 <code>trace_log_0</code> 같은 사본이 생깁니다(이후 다시 변경하면 <code>_1</code>, <code>_2</code>). 사본에는 예전 행이 모두 남아 있고 TTL도 없습니다(ClickStack PR #275의 업그레이드 안내, <a href="https://github.com/getsentry/snuba/issues/7311" data-hovercard-type="issue" data-hovercard-url="/getsentry/snuba/issues/7311/hovercard">Sentry snuba #7311</a>).</p>
+<p>재시작하고 나면 변경한 로그마다 <code>trace_log_0</code> 같은 사본이 생깁니다(이후 다시 변경하면 <code>_1</code>, <code>_2</code>). 사본에는 예전 행이 모두 남아 있고 TTL도 없습니다(ClickStack PR #275의 업그레이드 안내, <a href="https://github.com/getsentry/snuba/issues/7311">Sentry snuba #7311</a>).</p>
 <p>다음 쿼리는 <code>DROP</code> 문을 만들어 줍니다. 내용을 읽어 본 뒤 클라이언트에 붙여 넣으십시오.</p>
 <pre><code>SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
 FROM system.tables
@@ -185,7 +197,7 @@ WHERE database = 'system' AND match(name, '_log_[0-9]+$');</code></pre>
 <h2 id="5-그래도-디스크가-가득-차-있다면-공간을-차지하는-다른-곳">5. 그래도 디스크가 가득 차 있다면? 공간을 차지하는 다른 곳</h2>
 <p><code>df -h</code>의 결과를 모든 파트의 전체 크기(<code>SELECT formatReadableSize(sum(bytes_on_disk)) FROM system.parts</code>)와 비교합니다. 디스크 사용량이 이보다 훨씬 많다면, 그 차이만큼의 공간은 ClickHouse 테이블 밖에서 쓰이고 있습니다.</p>
 <h3 id="docker-컨테이너-로그가-디스크를-채우고-있는가">Docker 컨테이너 로그가 디스크를 채우고 있는가?</h3>
-<p>Docker의 기본 로깅 드라이버인 <code>json-file</code>에는 크기 제한이 없습니다(<code>max-size</code>의 기본값은 <code>-1</code>입니다. <a href="https://docs.docker.com/engine/logging/drivers/json-file/">Docker 문서</a>를 참고하십시오). <a href="https://github.com/langfuse/langfuse/issues/16339" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/16339/hovercard">Langfuse #16339</a>에서는 ClickHouse 컨테이너의 로그가 89.1 GiB까지 커져 244 GiB 루트 디스크를 가득 채웠습니다.</p>
+<p>Docker의 기본 로깅 드라이버인 <code>json-file</code>에는 크기 제한이 없습니다(<code>max-size</code>의 기본값은 <code>-1</code>입니다. <a href="https://docs.docker.com/engine/logging/drivers/json-file/">Docker 문서</a>를 참고하십시오). <a href="https://github.com/langfuse/langfuse/issues/16339">Langfuse #16339</a>에서는 ClickHouse 컨테이너의 로그가 89.1 GiB까지 커져 244 GiB 루트 디스크를 가득 채웠습니다.</p>
 <p>가장 큰 로그 파일을 찾습니다.</p>
 <pre><code>sudo sh -c 'du -h /var/lib/docker/containers/*/*-json.log | sort -h | tail -5'
 docker ps -a --no-trunc --format '{{.ID}} {{.Names}}'   # 폴더 이름이 컨테이너 ID입니다</code></pre>
@@ -199,7 +211,7 @@ docker ps -a --no-trunc --format '{{.ID}} {{.Names}}'   # 폴더 이름이 컨�
 <p>참고할 점이 두 가지 있습니다.</p>
 <ul>
 <li>Docker 데몬이 다른 로깅 드라이버를 사용한다면, 위 블록 대신 그 드라이버에서 보존 설정을 하십시오. <code>driver: json-file</code>을 지정하면 데몬의 드라이버 설정을 덮어쓰기 때문입니다.</li>
-<li>Langfuse의 README(<a href="https://github.com/langfuse/langfuse/pull/16363" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16363/hovercard">PR #16363</a>)는 데몬 전체에 적용하는 방법을 설명합니다. <code>max-size</code>와 <code>max-file</code>을 데몬 기본값으로 설정한 다음, Docker를 재시작하고 컨테이너를 다시 생성하는 방법입니다. 또한 이 파일들을 외부 도구로 잘라 내거나 로테이션하지 말라고 권고합니다.</li>
+<li>Langfuse의 README(<a href="https://github.com/langfuse/langfuse/pull/16363">PR #16363</a>)는 데몬 전체에 적용하는 방법을 설명합니다. <code>max-size</code>와 <code>max-file</code>을 데몬 기본값으로 설정한 다음, Docker를 재시작하고 컨테이너를 다시 생성하는 방법입니다. 또한 이 파일들을 외부 도구로 잘라 내거나 로테이션하지 말라고 권고합니다.</li>
 </ul>
 <h3 id="clickhouse-자체-로그-파일이-커졌는가">ClickHouse 자체 로그 파일이 커졌는가?</h3>
 <p>ClickHouse는 일반 로그 파일도 <code>/var/log/clickhouse-server</code>에 기록합니다(Langfuse의 compose에서는 이 경로가 볼륨으로 마운트됩니다). 기본값은 <code>trace</code> 레벨이며, 1000M마다 로테이션되고 이전 파일은 최대 10개까지 보관됩니다(<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger"><code>logger</code> 문서</a>).</p>
@@ -220,7 +232,7 @@ ORDER BY sum(bytes_on_disk) DESC;</code></pre>
 <p>그런 다음 파티션 하나씩 삭제 마스크를 적용합니다(<a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">APPLY DELETED MASK</a>).</p>
 <pre><code>ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';</code></pre>
 <p><strong>주의:</strong> 이 작업은 비용이 큰 뮤테이션(heavyweight mutation)입니다. 영향을 받는 파트를 다시 쓰기 때문에 새 사본이 들어갈 여유 공간이 필요하고, 디스크에 부하를 줍니다. 사용량이 적은 시간대에 실행하고, <code>SELECT * FROM system.mutations WHERE NOT is_done</code> 쿼리로 진행 상황을 지켜보십시오. #13969에서는 약 17분 만에 레플리카당 약 360 GiB가 확보되었습니다.</p>
-<p>v3.179.0부터는 Langfuse worker가 이 작업을 주기적으로 실행할 수 있습니다. <code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code>로 켭니다(기본값은 꺼져 있습니다. <code>.env.prod.example</code>과 <a href="https://github.com/langfuse/langfuse/pull/14035" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/14035/hovercard">PR #14035</a>를 참고하십시오).</p>
+<p>v3.179.0부터는 Langfuse worker가 이 작업을 주기적으로 실행할 수 있습니다. <code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code>로 켭니다(기본값은 꺼져 있습니다. <code>.env.prod.example</code>과 <a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>를 참고하십시오).</p>
 <h3 id="오래된-파트가-디스크에-남아-있는가-비활성-파트와-분리된-파트">오래된 파트가 디스크에 남아 있는가? (비활성 파트와 분리된 파트)</h3>
 <pre><code>SELECT database, table, count() AS parts,
        formatReadableSize(sum(bytes_on_disk)) AS size,
@@ -240,7 +252,7 @@ GROUP BY database, table, reason;</code></pre>
 <h2 id="6-clickhouse를-업그레이드한다면-먼저-확인할-것">6. ClickHouse를 업그레이드한다면? 먼저 확인할 것</h2>
 <ul>
 <li>
-<p><strong>Langfuse에서 ClickHouse 26.8 이상을 쓴다면 Langfuse부터 업데이트하십시오.</strong> ClickHouse 26.8에서 <code>input_format_read_datetime_number_as_raw_value</code>의 기본값이 1에서 0으로 바뀌었습니다. 이전 버전의 Langfuse는 <code>DateTime64</code> 값을 밀리초 단위 숫자로 보내는데, 26.8+에서는 이 값이 <code>9999-12-31 23:59:59</code>로 저장되어 버립니다(<a href="https://github.com/langfuse/langfuse/issues/16858" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/16858/hovercard">Langfuse #16858</a>: 프로젝트별로 쓰기 작업의 0.59%에서 21.43%). 수정 사항은 <a href="https://github.com/langfuse/langfuse/pull/16892" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16892/hovercard">PR #16892</a>(v3에는 <a href="https://github.com/langfuse/langfuse/pull/16957" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16957/hovercard">PR #16957</a>로 백포트)이며, Langfuse v4.28.0과 v3.225.7에 포함되어 릴리스되었습니다. Langfuse는 월 단위로 파티션을 나누므로, 이런 행은 <code>999912</code> 파티션에 들어갑니다. 버전을 확인하고 이런 행이 있는지 찾아보십시오.</p>
+<p><strong>Langfuse에서 ClickHouse 26.8 이상을 쓴다면 Langfuse부터 업데이트하십시오.</strong> ClickHouse 26.8에서 <code>input_format_read_datetime_number_as_raw_value</code>의 기본값이 1에서 0으로 바뀌었습니다. 이전 버전의 Langfuse는 <code>DateTime64</code> 값을 밀리초 단위 숫자로 보내는데, 26.8+에서는 이 값이 <code>9999-12-31 23:59:59</code>로 저장되어 버립니다(<a href="https://github.com/langfuse/langfuse/issues/16858">Langfuse #16858</a>: 프로젝트별로 쓰기 작업의 0.59%에서 21.43%). 수정 사항은 <a href="https://github.com/langfuse/langfuse/pull/16892">PR #16892</a>(v3에는 <a href="https://github.com/langfuse/langfuse/pull/16957">PR #16957</a>로 백포트)이며, Langfuse v4.28.0과 v3.225.7에 포함되어 릴리스되었습니다. Langfuse는 월 단위로 파티션을 나누므로, 이런 행은 <code>999912</code> 파티션에 들어갑니다. 버전을 확인하고 이런 행이 있는지 찾아보십시오.</p>
 <pre><code>SELECT version();
 SELECT database, table, partition_id, count() AS parts
 FROM system.parts
@@ -263,52 +275,93 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 <h2 id="참고-자료">참고 자료</h2>
 <p>ClickHouse 문서와 소스 코드:</p>
 <ul>
-<li>시스템 테이블 개요(무제한 증가, <code>&lt;engine&gt;</code>과 <code>&lt;ttl&gt;</code>의 충돌, 스키마 변경 시 이름 변경): <a href="https://clickhouse.com/docs/reference/system-tables/overview">https://clickhouse.com/docs/reference/system-tables/overview</a></li>
-<li>기본 <code>config.xml</code>(TTL이 없는 로그, <code>opentelemetry_span_log</code>의 engine, <code>trace</code> 레벨의 <code>text_log</code>와 logger, 주석 처리된 <code>session_log</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml</a></li>
-<li><code>max_table_size_to_drop</code> 서버 설정과 <code>force_drop_table</code>: <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop</a></li>
-<li><code>max_table_size_to_drop</code> 쿼리 설정: <a href="https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop</a></li>
-<li>23.12부터 가능한 쿼리 단위 재정의: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="2022426086" data-permission-text="Title is private" data-url="https://github.com/ClickHouse/ClickHouse/issues/57452" data-hovercard-type="pull_request" data-hovercard-url="/ClickHouse/ClickHouse/pull/57452/hovercard" href="https://github.com/ClickHouse/ClickHouse/pull/57452">ClickHouse/ClickHouse#57452</a></li>
-<li>사용 후 플래그 삭제(<code>checkCanBeDropped</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp</a></li>
-<li>TRUNCATE: <a href="https://clickhouse.com/docs/reference/statements/truncate">https://clickhouse.com/docs/reference/statements/truncate</a></li>
-<li><code>opentelemetry_span_log</code>의 TTL 오류: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="3504586668" data-permission-text="Title is private" data-url="https://github.com/ClickHouse/ClickHouse/issues/88366" data-hovercard-type="issue" data-hovercard-url="/ClickHouse/ClickHouse/issues/88366/hovercard" href="https://github.com/ClickHouse/ClickHouse/issues/88366">ClickHouse/ClickHouse#88366</a></li>
-<li>MergeTree 설정: <code>merge_with_ttl_timeout</code>(14400초) <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout">https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout</a>, <code>old_parts_lifetime</code>(480초) <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime">https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime</a>, <code>max_bytes_to_merge_at_max_space_in_pool</code>(150 GiB) <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool">https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool</a></li>
-<li>서버 로그 로테이션(<code>logger</code>: <code>level</code>, <code>size</code>, <code>count</code>): <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger</a></li>
-<li>경량 DELETE(lightweight DELETE): <a href="https://clickhouse.com/docs/reference/statements/delete">https://clickhouse.com/docs/reference/statements/delete</a></li>
-<li>APPLY DELETED MASK: <a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask</a></li>
-<li>system.parts: <a href="https://clickhouse.com/docs/reference/system-tables/parts">https://clickhouse.com/docs/reference/system-tables/parts</a></li>
-<li>system.detached_parts: <a href="https://clickhouse.com/docs/reference/system-tables/detached_parts">https://clickhouse.com/docs/reference/system-tables/detached_parts</a></li>
-<li>DROP DETACHED PART: <a href="https://clickhouse.com/docs/reference/statements/alter/partition">https://clickhouse.com/docs/reference/statements/alter/partition</a></li>
-<li><code>allow_drop_detached</code>: <a href="https://clickhouse.com/docs/reference/settings/session-settings/allow#allow_drop_detached">https://clickhouse.com/docs/reference/settings/session-settings/allow#allow_drop_detached</a></li>
-<li>system.mutations: <a href="https://clickhouse.com/docs/reference/system-tables/mutations">https://clickhouse.com/docs/reference/system-tables/mutations</a></li>
-<li>KILL QUERY: <a href="https://clickhouse.com/docs/reference/statements/kill">https://clickhouse.com/docs/reference/statements/kill</a></li>
-<li>Altinity KB, "System tables ate my disk"(재시작 필요): <a href="https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/">https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/</a></li>
+<li>시스템 테이블 개요(무제한 증가, <code>&lt;engine&gt;</code>과 <code>&lt;ttl&gt;</code>의 충돌, 스키마 변경 시 이름 변경): <a href="https://clickhouse.com/docs/reference/system-tables/overview">https://clickhouse.com/docs/reference/system-tables/overview</a>
+</li>
+<li>기본 <code>config.xml</code>(TTL이 없는 로그, <code>opentelemetry_span_log</code>의 engine, <code>trace</code> 레벨의 <code>text_log</code>와 logger, 주석 처리된 <code>session_log</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml</a>
+</li>
+<li>
+<code>max_table_size_to_drop</code> 서버 설정과 <code>force_drop_table</code>: <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop</a>
+</li>
+<li>
+<code>max_table_size_to_drop</code> 쿼리 설정: <a href="https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop</a>
+</li>
+<li>23.12부터 가능한 쿼리 단위 재정의: <a href="https://github.com/ClickHouse/ClickHouse/pull/57452">https://github.com/ClickHouse/ClickHouse/pull/57452</a>
+</li>
+<li>사용 후 플래그 삭제(<code>checkCanBeDropped</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp</a>
+</li>
+<li>TRUNCATE: <a href="https://clickhouse.com/docs/reference/statements/truncate">https://clickhouse.com/docs/reference/statements/truncate</a>
+</li>
+<li>
+<code>opentelemetry_span_log</code>의 TTL 오류: <a href="https://github.com/ClickHouse/ClickHouse/issues/88366">https://github.com/ClickHouse/ClickHouse/issues/88366</a>
+</li>
+<li>MergeTree 설정: <code>merge_with_ttl_timeout</code>(14400초) <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout">https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout</a>, <code>old_parts_lifetime</code>(480초) <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime">https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime</a>, <code>max_bytes_to_merge_at_max_space_in_pool</code>(150 GiB) <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool">https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool</a>
+</li>
+<li>서버 로그 로테이션(<code>logger</code>: <code>level</code>, <code>size</code>, <code>count</code>): <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger</a>
+</li>
+<li>경량 DELETE(lightweight DELETE): <a href="https://clickhouse.com/docs/reference/statements/delete">https://clickhouse.com/docs/reference/statements/delete</a>
+</li>
+<li>APPLY DELETED MASK: <a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask</a>
+</li>
+<li>system.parts: <a href="https://clickhouse.com/docs/reference/system-tables/parts">https://clickhouse.com/docs/reference/system-tables/parts</a>
+</li>
+<li>system.detached_parts: <a href="https://clickhouse.com/docs/reference/system-tables/detached_parts">https://clickhouse.com/docs/reference/system-tables/detached_parts</a>
+</li>
+<li>DROP DETACHED PART: <a href="https://clickhouse.com/docs/reference/statements/alter/partition">https://clickhouse.com/docs/reference/statements/alter/partition</a>
+</li>
+<li>
+<code>allow_drop_detached</code>: <a href="https://clickhouse.com/docs/reference/settings/session-settings/allow#allow_drop_detached">https://clickhouse.com/docs/reference/settings/session-settings/allow#allow_drop_detached</a>
+</li>
+<li>system.mutations: <a href="https://clickhouse.com/docs/reference/system-tables/mutations">https://clickhouse.com/docs/reference/system-tables/mutations</a>
+</li>
+<li>KILL QUERY: <a href="https://clickhouse.com/docs/reference/statements/kill">https://clickhouse.com/docs/reference/statements/kill</a>
+</li>
+<li>Altinity KB, "System tables ate my disk"(재시작 필요): <a href="https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/">https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/</a>
+</li>
 </ul>
 <p>Docker:</p>
 <ul>
-<li>json-file 로깅 드라이버(<code>max-size</code> 기본값 -1, 기존 컨테이너는 이전 설정 유지): <a href="https://docs.docker.com/engine/logging/drivers/json-file/">https://docs.docker.com/engine/logging/drivers/json-file/</a></li>
+<li>json-file 로깅 드라이버(<code>max-size</code> 기본값 -1, 기존 컨테이너는 이전 설정 유지): <a href="https://docs.docker.com/engine/logging/drivers/json-file/">https://docs.docker.com/engine/logging/drivers/json-file/</a>
+</li>
 </ul>
 <p>Langfuse:</p>
 <ul>
-<li>FAQ, ClickHouse 디스크 사용량 줄이기: <a href="https://langfuse.com/faq/all/reduce-clickhouse-disk-size">https://langfuse.com/faq/all/reduce-clickhouse-disk-size</a></li>
-<li>스케일링 문서, ClickHouse 시스템 로그 테이블: <a href="https://langfuse.com/self-hosting/configuration/scaling">https://langfuse.com/self-hosting/configuration/scaling</a></li>
-<li>#13123, 시스템 테이블이 제한 없이 커짐: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="4244201137" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/13123" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/13123/hovercard" href="https://github.com/langfuse/langfuse/issues/13123">langfuse/langfuse#13123</a></li>
-<li>#16339, 크기 제한이 없는 Docker 로그: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5200737006" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16339" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/16339/hovercard" href="https://github.com/langfuse/langfuse/issues/16339">langfuse/langfuse#16339</a></li>
-<li>PR #16363, README의 Docker 로그 로테이션(데몬 기본값, 외부 도구로 잘라 내지 않기): <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5204821690" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16363" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16363/hovercard" href="https://github.com/langfuse/langfuse/pull/16363">langfuse/langfuse#16363</a></li>
-<li>Discussion #13969, 경량 DELETE로 삭제된 행: <a href="https://github.com/orgs/langfuse/discussions/13969">https://github.com/orgs/langfuse/discussions/13969</a></li>
-<li>Discussion #15024, 비활성 파트와 59 GiB text_log: <a href="https://github.com/orgs/langfuse/discussions/15024">https://github.com/orgs/langfuse/discussions/15024</a></li>
-<li>PR #14035, 삭제 마스크 클리너(v3.179.0에서 릴리스): <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="4589266312" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/14035" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/14035/hovercard" href="https://github.com/langfuse/langfuse/pull/14035">langfuse/langfuse#14035</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.179.0">https://github.com/langfuse/langfuse/releases/tag/v3.179.0</a></li>
-<li>#16858, ClickHouse 26.8+에서의 DateTime64: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5303039699" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16858" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/16858/hovercard" href="https://github.com/langfuse/langfuse/issues/16858">langfuse/langfuse#16858</a></li>
-<li>PR #16892와 v3 백포트 PR #16957: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5312926190" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16892" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16892/hovercard" href="https://github.com/langfuse/langfuse/pull/16892">langfuse/langfuse#16892</a>, <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5323718606" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16957" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16957/hovercard" href="https://github.com/langfuse/langfuse/pull/16957">langfuse/langfuse#16957</a></li>
-<li>수정이 포함된 릴리스: <a href="https://github.com/langfuse/langfuse/releases/tag/v4.28.0">https://github.com/langfuse/langfuse/releases/tag/v4.28.0</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.225.7">https://github.com/langfuse/langfuse/releases/tag/v3.225.7</a></li>
+<li>FAQ, ClickHouse 디스크 사용량 줄이기: <a href="https://langfuse.com/faq/all/reduce-clickhouse-disk-size">https://langfuse.com/faq/all/reduce-clickhouse-disk-size</a>
+</li>
+<li>스케일링 문서, ClickHouse 시스템 로그 테이블: <a href="https://langfuse.com/self-hosting/configuration/scaling">https://langfuse.com/self-hosting/configuration/scaling</a>
+</li>
+<li>#13123, 시스템 테이블이 제한 없이 커짐: <a href="https://github.com/langfuse/langfuse/issues/13123">https://github.com/langfuse/langfuse/issues/13123</a>
+</li>
+<li>#16339, 크기 제한이 없는 Docker 로그: <a href="https://github.com/langfuse/langfuse/issues/16339">https://github.com/langfuse/langfuse/issues/16339</a>
+</li>
+<li>PR #16363, README의 Docker 로그 로테이션(데몬 기본값, 외부 도구로 잘라 내지 않기): <a href="https://github.com/langfuse/langfuse/pull/16363">https://github.com/langfuse/langfuse/pull/16363</a>
+</li>
+<li>Discussion #13969, 경량 DELETE로 삭제된 행: <a href="https://github.com/orgs/langfuse/discussions/13969">https://github.com/orgs/langfuse/discussions/13969</a>
+</li>
+<li>Discussion #15024, 비활성 파트와 59 GiB text_log: <a href="https://github.com/orgs/langfuse/discussions/15024">https://github.com/orgs/langfuse/discussions/15024</a>
+</li>
+<li>PR #14035, 삭제 마스크 클리너(v3.179.0에서 릴리스): <a href="https://github.com/langfuse/langfuse/pull/14035">https://github.com/langfuse/langfuse/pull/14035</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.179.0">https://github.com/langfuse/langfuse/releases/tag/v3.179.0</a>
+</li>
+<li>#16858, ClickHouse 26.8+에서의 DateTime64: <a href="https://github.com/langfuse/langfuse/issues/16858">https://github.com/langfuse/langfuse/issues/16858</a>
+</li>
+<li>PR #16892와 v3 백포트 PR #16957: <a href="https://github.com/langfuse/langfuse/pull/16892">https://github.com/langfuse/langfuse/pull/16892</a>, <a href="https://github.com/langfuse/langfuse/pull/16957">https://github.com/langfuse/langfuse/pull/16957</a>
+</li>
+<li>수정이 포함된 릴리스: <a href="https://github.com/langfuse/langfuse/releases/tag/v4.28.0">https://github.com/langfuse/langfuse/releases/tag/v4.28.0</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.225.7">https://github.com/langfuse/langfuse/releases/tag/v3.225.7</a>
+</li>
 </ul>
 <p>SigNoz, ClickStack 및 기타:</p>
 <ul>
-<li>SigNoz #12050, 80 GB가 넘는 시스템 로그: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="4846678206" data-permission-text="Title is private" data-url="https://github.com/SigNoz/signoz/issues/12050" data-hovercard-type="issue" data-hovercard-url="/SigNoz/signoz/issues/12050/hovercard" href="https://github.com/SigNoz/signoz/issues/12050">SigNoz/signoz#12050</a></li>
-<li>SigNoz v0.129.0의 ClickHouse <code>config.xml</code>과 <code>users.xml</code>: <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml</a>, <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml</a></li>
-<li>SigNoz v0.129.0의 <code>docker-compose.yaml</code>(컨테이너 <code>signoz-clickhouse</code>, <code>max-size: 50m</code>, <code>max-file: "3"</code>): <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml</a></li>
-<li>ClickStack Helm chart PR #275: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5406160014" data-permission-text="Title is private" data-url="https://github.com/ClickHouse/ClickStack-helm-charts/issues/275" data-hovercard-type="pull_request" data-hovercard-url="/ClickHouse/ClickStack-helm-charts/pull/275/hovercard" href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">ClickHouse/ClickStack-helm-charts#275</a></li>
-<li>Sentry snuba #7311, TTL이 없는 <code>*_log_N</code> 사본: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="3263960447" data-permission-text="Title is private" data-url="https://github.com/getsentry/snuba/issues/7311" data-hovercard-type="issue" data-hovercard-url="/getsentry/snuba/issues/7311/hovercard" href="https://github.com/getsentry/snuba/issues/7311">getsentry/snuba#7311</a></li>
-<li>trigger.dev #4343, config.d의 프로필 설정이 무시됨: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="4955153791" data-permission-text="Title is private" data-url="https://github.com/triggerdotdev/trigger.dev/issues/4343" data-hovercard-type="issue" data-hovercard-url="/triggerdotdev/trigger.dev/issues/4343/hovercard" href="https://github.com/triggerdotdev/trigger.dev/issues/4343">triggerdotdev/trigger.dev#4343</a></li>
+<li>SigNoz #12050, 80 GB가 넘는 시스템 로그: <a href="https://github.com/SigNoz/signoz/issues/12050">https://github.com/SigNoz/signoz/issues/12050</a>
+</li>
+<li>SigNoz v0.129.0의 ClickHouse <code>config.xml</code>과 <code>users.xml</code>: <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml</a>, <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml</a>
+</li>
+<li>SigNoz v0.129.0의 <code>docker-compose.yaml</code>(컨테이너 <code>signoz-clickhouse</code>, <code>max-size: 50m</code>, <code>max-file: "3"</code>): <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml</a>
+</li>
+<li>ClickStack Helm chart PR #275: <a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">https://github.com/ClickHouse/ClickStack-helm-charts/pull/275</a>
+</li>
+<li>Sentry snuba #7311, TTL이 없는 <code>*_log_N</code> 사본: <a href="https://github.com/getsentry/snuba/issues/7311">https://github.com/getsentry/snuba/issues/7311</a>
+</li>
+<li>trigger.dev #4343, config.d의 프로필 설정이 무시됨: <a href="https://github.com/triggerdotdev/trigger.dev/issues/4343">https://github.com/triggerdotdev/trigger.dev/issues/4343</a>
+</li>
 </ul>
 <hr>
 <p>ClickHouse는 ClickHouse, Inc.의 등록 상표입니다. diskvet은 ClickHouse, Inc.와 관련이 없습니다. Langfuse, SigNoz, ClickStack은 각 소유자의 상표입니다.</p>

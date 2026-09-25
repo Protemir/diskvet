@@ -65,11 +65,16 @@
 <p><em>公式の <code>clickhouse/clickhouse-server</code> イメージ 24.8、25.12、26.9 をそのまま使って検証しています（SigNoz 向けのコマンドは 25.5 と 25.12 で検証）。ClickHouse のサービスと設定は、Langfuse と SigNoz の compose ファイルのものを使用しました。</em></p>
 <h2 id="要点tldr">要点（TL;DR）</h2>
 <ol>
-<li><strong>確認</strong>：<code>system.parts</code> に対して読み取り専用のクエリを 1 つ実行します。<code>system.*_log</code> テーブルが自分のデータより大きければ、原因は ClickHouse 自身のログです。</li>
-<li><strong>すぐに容量を空ける</strong>：大きなログテーブルを <code>TRUNCATE</code> します。50 GB を超えるテーブルには <code>SETTINGS max_table_size_to_drop = 0</code> を付けます。</li>
-<li><strong>再発を防ぐ</strong>：<code>config.d</code> にファイルを追加して各ログテーブルに TTL（有効期限）を設定し（<code>opentelemetry_span_log</code> の TTL は <code>&lt;engine&gt;</code> の中に書きます）、ClickHouse を再起動します。</li>
-<li><strong>後片付け</strong>：再起動後に残る <code>*_log_0</code>、<code>*_log_1</code> のコピーを削除します。</li>
-<li><strong>それでもディスクがいっぱいの場合</strong>：Docker のコンテナログ、削除済みの行、ディスクに残ったままのパーツ（part）を確認します。Langfuse の場合は、ClickHouse を 26.8+ に上げる前に Langfuse を更新してください。</li>
+<li>
+<strong>確認</strong>：<code>system.parts</code> に対して読み取り専用のクエリを 1 つ実行します。<code>system.*_log</code> テーブルが自分のデータより大きければ、原因は ClickHouse 自身のログです。</li>
+<li>
+<strong>すぐに容量を空ける</strong>：大きなログテーブルを <code>TRUNCATE</code> します。50 GB を超えるテーブルには <code>SETTINGS max_table_size_to_drop = 0</code> を付けます。</li>
+<li>
+<strong>再発を防ぐ</strong>：<code>config.d</code> にファイルを追加して各ログテーブルに TTL（有効期限）を設定し（<code>opentelemetry_span_log</code> の TTL は <code>&lt;engine&gt;</code> の中に書きます）、ClickHouse を再起動します。</li>
+<li>
+<strong>後片付け</strong>：再起動後に残る <code>*_log_0</code>、<code>*_log_1</code> のコピーを削除します。</li>
+<li>
+<strong>それでもディスクがいっぱいの場合</strong>：Docker のコンテナログ、削除済みの行、ディスクに残ったままのパーツ（part）を確認します。Langfuse の場合は、ClickHouse を 26.8+ に上げる前に Langfuse を更新してください。</li>
 </ol>
 <h2 id="1-何がディスクを使っているのかclickhouse-のディスク使用量をテーブルごとに確認する">1. 何がディスクを使っているのか：ClickHouse のディスク使用量をテーブルごとに確認する</h2>
 <p>次のクエリを <code>size.sql</code> として保存します。ディスク上のサイズが大きい順にテーブルを表示します。</p>
@@ -101,7 +106,7 @@ TRUNCATE TABLE system.text_log;
 TRUNCATE TABLE system.metric_log;
 TRUNCATE TABLE system.query_log;</code></pre>
 <p>これで削除されるのは ClickHouse 自身の診断データだけで、トレースは削除されません。再起動も不要です。</p>
-<p>Langfuse は、自身が発行したクエリの一部を追跡するために <code>system.query_log</code> を読み取っています（<a href="https://github.com/langfuse/langfuse/issues/13123" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/13123/hovercard">#13123</a>）。そのため、空にするのは構いませんが、無効にはしないでください。</p>
+<p>Langfuse は、自身が発行したクエリの一部を追跡するために <code>system.query_log</code> を読み取っています（<a href="https://github.com/langfuse/langfuse/issues/13123">#13123</a>）。そのため、空にするのは構いませんが、無効にはしないでください。</p>
 <h3 id="truncate-が-code-359-で失敗する場合50-gb-を超えるテーブル">TRUNCATE が Code 359 で失敗する場合（50 GB を超えるテーブル）</h3>
 <p>ClickHouse は、<code>max_table_size_to_drop</code>（デフォルトは 50,000,000,000 バイト、約 46.6 GiB）を超えるテーブルを DROP しません。この制限は <code>TRUNCATE</code> にも適用され、これより大きいテーブルでは <code>Code: 359 ... (TABLE_SIZE_EXCEEDS_MAX_DROP_SIZE_LIMIT)</code> というエラーで失敗します。</p>
 <p>大きなログテーブルが実際にこの制限を超えることもあります。<a href="https://github.com/orgs/langfuse/discussions/15024">Langfuse のディスカッション #15024</a> では、<code>text_log</code> が 59.20 GiB ありました。回避する方法は 2 つあります。</p>
@@ -117,13 +122,17 @@ TRUNCATE TABLE system.text_log SETTINGS max_table_size_to_drop = 0;</code></pre>
 <p>最近の<a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">デフォルト設定</a>でも、TTL が設定されているのは一部の小さなログテーブルだけで（25.9 以降、<code>processors_profile_log</code> は 30 日間保持）、大きなログテーブルには設定されていません。大きなログテーブルが急速に増えるのは、次の 2 つのデフォルト設定が原因です。</p>
 <ul>
 <li>クエリプロファイラー（query profiler）が有効になっており、実行中のクエリのスタックサンプルを <code>trace_log</code> に書き込みます。</li>
-<li><code>text_log</code> は、サーバーログを <code>trace</code> レベルで保存します。</li>
+<li>
+<code>text_log</code> は、サーバーログを <code>trace</code> レベルで保存します。</li>
 </ul>
 <p>公開されている事例を挙げます。</p>
 <ul>
-<li><strong>Langfuse <a href="https://github.com/langfuse/langfuse/issues/13123" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/13123/hovercard">#13123</a></strong>：<code>system.trace_log</code> が 66.86 GiB あったのに対し、その issue に挙げられている Langfuse のテーブル（<code>traces</code>、<code>observations</code>、<code>scores</code>）は合計で約 51 MiB でした。メンテナーは ClickHouse のデフォルトを上書きしないことにし、代わりに <a href="https://langfuse.com/faq/all/reduce-clickhouse-disk-size">FAQ ページ</a>を追加しました。</li>
-<li><strong>SigNoz <a href="https://github.com/SigNoz/signoz/issues/12050" data-hovercard-type="issue" data-hovercard-url="/SigNoz/signoz/issues/12050/hovercard">#12050</a></strong>：システムログテーブル（<code>trace_log_0</code> のコピーを含む）が 80 GB を超えていたのに対し、テレメトリーは 500 MB 未満でした。<code>system.*</code> テーブルを空にしたところ、約 80 GB が解放されました。SigNoz の新しい Foundry インストーラーは TTL を設定しますが、それ以前の docker compose によるインストールには TTL がありません。</li>
-<li><strong>ClickStack Helm chart <a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275" data-hovercard-type="pull_request" data-hovercard-url="/ClickHouse/ClickStack-helm-charts/pull/275/hovercard">PR #275</a></strong>：10 Gi のボリュームが 10 日で使用率 100% に達しました。trace レベルのサーバーログが 5.2 GB、<code>system.text_log</code> が 3.7 GB あったのに対し、テレメトリーは約 70 MB でした。2026 年 9 月にマージされたこの PR で、7 日間の TTL が追加されています。</li>
+<li>
+<strong>Langfuse <a href="https://github.com/langfuse/langfuse/issues/13123">#13123</a></strong>：<code>system.trace_log</code> が 66.86 GiB あったのに対し、その issue に挙げられている Langfuse のテーブル（<code>traces</code>、<code>observations</code>、<code>scores</code>）は合計で約 51 MiB でした。メンテナーは ClickHouse のデフォルトを上書きしないことにし、代わりに <a href="https://langfuse.com/faq/all/reduce-clickhouse-disk-size">FAQ ページ</a>を追加しました。</li>
+<li>
+<strong>SigNoz <a href="https://github.com/SigNoz/signoz/issues/12050">#12050</a></strong>：システムログテーブル（<code>trace_log_0</code> のコピーを含む）が 80 GB を超えていたのに対し、テレメトリーは 500 MB 未満でした。<code>system.*</code> テーブルを空にしたところ、約 80 GB が解放されました。SigNoz の新しい Foundry インストーラーは TTL を設定しますが、それ以前の docker compose によるインストールには TTL がありません。</li>
+<li>
+<strong>ClickStack Helm chart <a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">PR #275</a></strong>：10 Gi のボリュームが 10 日で使用率 100% に達しました。trace レベルのサーバーログが 5.2 GB、<code>system.text_log</code> が 3.7 GB あったのに対し、テレメトリーは約 70 MB でした。2026 年 9 月にマージされたこの PR で、7 日間の TTL が追加されています。</li>
 </ul>
 <h2 id="4-clickhouse-のシステムログテーブルに-ttl-を設定するには">4. ClickHouse のシステムログテーブルに TTL を設定するには</h2>
 <p>TTL を設定すると、ClickHouse が古いログの行を自動で削除するようになります。ClickHouse が TTL を適用する仕組みの都合上、TTL はセクション 2 の <code>TRUNCATE</code> を実行した<strong>後に</strong>設定してください。</p>
@@ -160,9 +169,12 @@ ORDER BY total_bytes DESC;</code></pre>
       - ./clickhouse-ttl.xml:/etc/clickhouse-server/config.d/clickhouse-ttl.xml:ro</code></pre>
 <p>このステップには落とし穴が 3 つあります。</p>
 <ul>
-<li><strong><code>opentelemetry_span_log</code> の TTL は <code>&lt;engine&gt;</code> の中に書きます</strong>。標準の設定ではこのログテーブルが <code>&lt;engine&gt;</code> で定義されており、<a href="https://clickhouse.com/docs/reference/system-tables/overview">ドキュメント</a>によると、これは <code>&lt;ttl&gt;</code> と競合します。その場合、サーバーは <code>If 'engine' is specified for system table, TTL parameters should be specified directly inside 'engine'</code> というエラーで終了します（<a href="https://github.com/ClickHouse/ClickHouse/issues/88366" data-hovercard-type="issue" data-hovercard-url="/ClickHouse/ClickHouse/issues/88366/hovercard">ClickHouse #88366</a>）。<code>PARTITION BY</code> と <code>ORDER BY</code> は、<code>SELECT engine_full FROM system.tables WHERE database = 'system' AND name = 'opentelemetry_span_log'</code> の結果からコピーしてください（SigNoz の設定では <code>trace_id</code> でもソートしています）。または、<code>&lt;opentelemetry_span_log remove="1"/&gt;</code> でこのログテーブルを無効にする方法もあります（Langfuse の<a href="https://langfuse.com/self-hosting/configuration/scaling">スケーリングに関するドキュメント</a>）。<code>remove</code> は既存のテーブルを削除しないので、テーブルは自分で DROP してください。</li>
-<li><strong>サーバーに存在するログテーブルだけを記載します</strong>。設定ファイルにログテーブルのセクションがあると、そのログテーブルが有効になります（標準の <code>config.xml</code> では、<code>session_log</code> をコメントアウトすることで無効にしています）。SigNoz 独自の <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml"><code>config.xml</code></a> では <code>text_log</code> が有効になっていないため、SigNoz ではその行を削除してください。また、SigNoz の <code>config.xml</code> では <code>processors_profile_log</code> に TTL が設定されていないため、TTL ファイルにこのログテーブルの行も追加してください。</li>
-<li><strong>プロファイル設定は config.d ではなく users.d に書きます</strong>。あわせてクエリプロファイラーも無効にする場合（Langfuse のスケーリングに関するドキュメントにあるように、<code>query_profiler_real_time_period_ns</code> と <code>query_profiler_cpu_time_period_ns</code> を 0 にする場合）、その <code>&lt;profiles&gt;</code> ブロックは <code>users.d/</code> に置いてください。<code>config.d/</code> に置くと、エラーも出ずに無視されます（<a href="https://github.com/triggerdotdev/trigger.dev/issues/4343" data-hovercard-type="issue" data-hovercard-url="/triggerdotdev/trigger.dev/issues/4343/hovercard">trigger.dev #4343</a>）。</li>
+<li>
+<strong><code>opentelemetry_span_log</code> の TTL は <code>&lt;engine&gt;</code> の中に書きます</strong>。標準の設定ではこのログテーブルが <code>&lt;engine&gt;</code> で定義されており、<a href="https://clickhouse.com/docs/reference/system-tables/overview">ドキュメント</a>によると、これは <code>&lt;ttl&gt;</code> と競合します。その場合、サーバーは <code>If 'engine' is specified for system table, TTL parameters should be specified directly inside 'engine'</code> というエラーで終了します（<a href="https://github.com/ClickHouse/ClickHouse/issues/88366">ClickHouse #88366</a>）。<code>PARTITION BY</code> と <code>ORDER BY</code> は、<code>SELECT engine_full FROM system.tables WHERE database = 'system' AND name = 'opentelemetry_span_log'</code> の結果からコピーしてください（SigNoz の設定では <code>trace_id</code> でもソートしています）。または、<code>&lt;opentelemetry_span_log remove="1"/&gt;</code> でこのログテーブルを無効にする方法もあります（Langfuse の<a href="https://langfuse.com/self-hosting/configuration/scaling">スケーリングに関するドキュメント</a>）。<code>remove</code> は既存のテーブルを削除しないので、テーブルは自分で DROP してください。</li>
+<li>
+<strong>サーバーに存在するログテーブルだけを記載します</strong>。設定ファイルにログテーブルのセクションがあると、そのログテーブルが有効になります（標準の <code>config.xml</code> では、<code>session_log</code> をコメントアウトすることで無効にしています）。SigNoz 独自の <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml"><code>config.xml</code></a> では <code>text_log</code> が有効になっていないため、SigNoz ではその行を削除してください。また、SigNoz の <code>config.xml</code> では <code>processors_profile_log</code> に TTL が設定されていないため、TTL ファイルにこのログテーブルの行も追加してください。</li>
+<li>
+<strong>プロファイル設定は config.d ではなく users.d に書きます</strong>。あわせてクエリプロファイラーも無効にする場合（Langfuse のスケーリングに関するドキュメントにあるように、<code>query_profiler_real_time_period_ns</code> と <code>query_profiler_cpu_time_period_ns</code> を 0 にする場合）、その <code>&lt;profiles&gt;</code> ブロックは <code>users.d/</code> に置いてください。<code>config.d/</code> に置くと、エラーも出ずに無視されます（<a href="https://github.com/triggerdotdev/trigger.dev/issues/4343">trigger.dev #4343</a>）。</li>
 </ul>
 <h3 id="ステップ-3clickhouse-を再起動する">ステップ 3：ClickHouse を再起動する</h3>
 <p><code>config.d</code> の TTL は、サーバーを再起動したときにだけ反映されます（<a href="https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/">Altinity KB</a>）。設定の再読み込みだけでは反映されません。compose の場合は次のとおりです。</p>
@@ -172,7 +184,7 @@ docker compose ps clickhouse</code></pre>
 <pre><code>docker cp "$(docker compose ps -aq clickhouse)":/var/log/clickhouse-server/clickhouse-server.err.log .
 tail -n 20 clickhouse-server.err.log</code></pre>
 <h3 id="ステップ-4古い-trace_log_0-のコピーを削除する">ステップ 4：古い trace_log_0 のコピーを削除する</h3>
-<p>再起動後、変更したログテーブルごとに <code>trace_log_0</code> のようなコピーができます（その後さらに変更すると <code>_1</code>、<code>_2</code> と続きます）。コピーには古い行がすべて残っており、TTL もありません（ClickStack PR #275 のアップグレードに関する注記、<a href="https://github.com/getsentry/snuba/issues/7311" data-hovercard-type="issue" data-hovercard-url="/getsentry/snuba/issues/7311/hovercard">Sentry snuba #7311</a>）。</p>
+<p>再起動後、変更したログテーブルごとに <code>trace_log_0</code> のようなコピーができます（その後さらに変更すると <code>_1</code>、<code>_2</code> と続きます）。コピーには古い行がすべて残っており、TTL もありません（ClickStack PR #275 のアップグレードに関する注記、<a href="https://github.com/getsentry/snuba/issues/7311">Sentry snuba #7311</a>）。</p>
 <p>次のクエリで <code>DROP</code> ステートメントを生成できます。内容を確認してから、クライアントに貼り付けて実行してください。</p>
 <pre><code>SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
 FROM system.tables
@@ -185,7 +197,7 @@ WHERE database = 'system' AND match(name, '_log_[0-9]+$');</code></pre>
 <h2 id="5-それでもディスクがいっぱいの場合容量を使っているほかの場所">5. それでもディスクがいっぱいの場合：容量を使っているほかの場所</h2>
 <p><code>df -h</code> の結果を、すべてのパーツの合計サイズ（<code>SELECT formatReadableSize(sum(bytes_on_disk)) FROM system.parts</code>）と比べます。ディスクの使用量がこれを大きく上回る場合、容量は ClickHouse のテーブル以外で使われています。</p>
 <h3 id="docker-のコンテナログがディスクを埋めていないか">Docker のコンテナログがディスクを埋めていないか</h3>
-<p>Docker のデフォルトのログドライバー <code>json-file</code> には、サイズの上限がありません（<code>max-size</code> のデフォルトは <code>-1</code>。<a href="https://docs.docker.com/engine/logging/drivers/json-file/">Docker のドキュメント</a>を参照）。<a href="https://github.com/langfuse/langfuse/issues/16339" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/16339/hovercard">Langfuse #16339</a> では、ClickHouse コンテナのログが 89.1 GiB に達し、244 GiB のルートディスクを使い切りました。</p>
+<p>Docker のデフォルトのログドライバー <code>json-file</code> には、サイズの上限がありません（<code>max-size</code> のデフォルトは <code>-1</code>。<a href="https://docs.docker.com/engine/logging/drivers/json-file/">Docker のドキュメント</a>を参照）。<a href="https://github.com/langfuse/langfuse/issues/16339">Langfuse #16339</a> では、ClickHouse コンテナのログが 89.1 GiB に達し、244 GiB のルートディスクを使い切りました。</p>
 <p>サイズの大きいログファイルを探します。</p>
 <pre><code>sudo sh -c 'du -h /var/lib/docker/containers/*/*-json.log | sort -h | tail -5'
 docker ps -a --no-trunc --format '{{.ID}} {{.Names}}'   # ディレクトリ名がコンテナ ID</code></pre>
@@ -199,7 +211,7 @@ docker ps -a --no-trunc --format '{{.ID}} {{.Names}}'   # ディレクトリ名�
 <p>注意点が 2 つあります。</p>
 <ul>
 <li>Docker デーモンで別のログドライバーを使っている場合は、代わりにそのドライバー側でログの保持期間を設定してください。<code>driver: json-file</code> を書くと、デーモンのログドライバーが上書きされてしまいます。</li>
-<li>Langfuse の README（<a href="https://github.com/langfuse/langfuse/pull/16363" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16363/hovercard">PR #16363</a>）では、デーモン全体で設定する方法が説明されています。<code>max-size</code> と <code>max-file</code> をデーモンのデフォルトとして設定し、Docker を再起動してからコンテナを作り直す方法です。README では、これらのファイルを外部ツールで切り詰めたりローテーションしたりしないようにとも勧めています。</li>
+<li>Langfuse の README（<a href="https://github.com/langfuse/langfuse/pull/16363">PR #16363</a>）では、デーモン全体で設定する方法が説明されています。<code>max-size</code> と <code>max-file</code> をデーモンのデフォルトとして設定し、Docker を再起動してからコンテナを作り直す方法です。README では、これらのファイルを外部ツールで切り詰めたりローテーションしたりしないようにとも勧めています。</li>
 </ul>
 <h3 id="clickhouse-自身のログファイルが大きくなっていないか">ClickHouse 自身のログファイルが大きくなっていないか</h3>
 <p>ClickHouse は、通常のログファイルも <code>/var/log/clickhouse-server</code> に書き込みます（Langfuse の compose ではボリュームになっています）。デフォルトでは <code>trace</code> レベルで、1000M ごとにローテーションされ、古いファイルは最大 10 個まで保持されます（<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger"><code>logger</code> のドキュメント</a>）。</p>
@@ -220,7 +232,7 @@ ORDER BY sum(bytes_on_disk) DESC;</code></pre>
 <p>次に、パーティションを 1 つずつ指定して削除マスクを適用します（<a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">APPLY DELETED MASK</a>）。</p>
 <pre><code>ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';</code></pre>
 <p><strong>注意</strong>：これはヘビーウェイトなミューテーション（mutation）です。対象のパーツを書き直すため、新しいコピーを書き込むための空き容量が必要になり、ディスクにも負荷がかかります。ピーク時間帯を避けて実行し、<code>SELECT * FROM system.mutations WHERE NOT is_done</code> で進行状況を確認してください。#13969 では、約 17 分でレプリカ 1 台あたり約 360 GiB が空きました。</p>
-<p>v3.179.0 以降の Langfuse worker では、これを定期的に自動実行できます。<code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code> を設定してください（デフォルトは無効。<code>.env.prod.example</code> と <a href="https://github.com/langfuse/langfuse/pull/14035" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/14035/hovercard">PR #14035</a> を参照）。</p>
+<p>v3.179.0 以降の Langfuse worker では、これを定期的に自動実行できます。<code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code> を設定してください（デフォルトは無効。<code>.env.prod.example</code> と <a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a> を参照）。</p>
 <h3 id="古いパーツがディスクに残っていないか非アクティブなパーツとデタッチされたパーツ">古いパーツがディスクに残っていないか（非アクティブなパーツとデタッチされたパーツ）</h3>
 <pre><code>SELECT database, table, count() AS parts,
        formatReadableSize(sum(bytes_on_disk)) AS size,
@@ -240,7 +252,7 @@ GROUP BY database, table, reason;</code></pre>
 <h2 id="6-clickhouse-をアップグレードする前に確認すること">6. ClickHouse をアップグレードする前に確認すること</h2>
 <ul>
 <li>
-<p><strong>Langfuse で ClickHouse 26.8 以降を使う場合は、先に Langfuse を更新してください</strong>。ClickHouse 26.8 で、<code>input_format_read_datetime_number_as_raw_value</code> のデフォルトが 1 から 0 に変わりました。古い Langfuse は <code>DateTime64</code> の値をミリ秒単位の数値として送るため、26.8+ ではその値が <code>9999-12-31 23:59:59</code> として保存されてしまいます（<a href="https://github.com/langfuse/langfuse/issues/16858" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/16858/hovercard">Langfuse #16858</a>：プロジェクトごとに書き込みの 0.59% から 21.43%）。修正は <a href="https://github.com/langfuse/langfuse/pull/16892" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16892/hovercard">PR #16892</a>（v3 には <a href="https://github.com/langfuse/langfuse/pull/16957" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16957/hovercard">PR #16957</a> でバックポート）で、Langfuse v4.28.0 と v3.225.7 でリリースされています。Langfuse は月単位でパーティションを分けているため、こうした行はパーティション <code>999912</code> に入ります。バージョンを確認し、該当する行を探してください。</p>
+<p><strong>Langfuse で ClickHouse 26.8 以降を使う場合は、先に Langfuse を更新してください</strong>。ClickHouse 26.8 で、<code>input_format_read_datetime_number_as_raw_value</code> のデフォルトが 1 から 0 に変わりました。古い Langfuse は <code>DateTime64</code> の値をミリ秒単位の数値として送るため、26.8+ ではその値が <code>9999-12-31 23:59:59</code> として保存されてしまいます（<a href="https://github.com/langfuse/langfuse/issues/16858">Langfuse #16858</a>：プロジェクトごとに書き込みの 0.59% から 21.43%）。修正は <a href="https://github.com/langfuse/langfuse/pull/16892">PR #16892</a>（v3 には <a href="https://github.com/langfuse/langfuse/pull/16957">PR #16957</a> でバックポート）で、Langfuse v4.28.0 と v3.225.7 でリリースされています。Langfuse は月単位でパーティションを分けているため、こうした行はパーティション <code>999912</code> に入ります。バージョンを確認し、該当する行を探してください。</p>
 <pre><code>SELECT version();
 SELECT database, table, partition_id, count() AS parts
 FROM system.parts
@@ -263,52 +275,93 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 <h2 id="参考資料">参考資料</h2>
 <p>ClickHouse のドキュメントとソースコード：</p>
 <ul>
-<li>システムテーブルの概要（無制限の増大、<code>&lt;engine&gt;</code> と <code>&lt;ttl&gt;</code>、スキーマ変更時のリネーム）：<a href="https://clickhouse.com/docs/reference/system-tables/overview">https://clickhouse.com/docs/reference/system-tables/overview</a></li>
-<li>デフォルトの <code>config.xml</code>（TTL のないログテーブル、<code>opentelemetry_span_log</code> の engine、<code>trace</code> レベルの <code>text_log</code> と logger、コメントアウトされた <code>session_log</code>）：<a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml</a></li>
-<li><code>max_table_size_to_drop</code>、サーバー設定と <code>force_drop_table</code>：<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop</a></li>
-<li><code>max_table_size_to_drop</code>、クエリ設定：<a href="https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop</a></li>
-<li>23.12 以降のクエリ単位での上書き：<a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="2022426086" data-permission-text="Title is private" data-url="https://github.com/ClickHouse/ClickHouse/issues/57452" data-hovercard-type="pull_request" data-hovercard-url="/ClickHouse/ClickHouse/pull/57452/hovercard" href="https://github.com/ClickHouse/ClickHouse/pull/57452">ClickHouse/ClickHouse#57452</a></li>
-<li>フラグファイルは使用後に削除される（<code>checkCanBeDropped</code>）：<a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp</a></li>
-<li>TRUNCATE：<a href="https://clickhouse.com/docs/reference/statements/truncate">https://clickhouse.com/docs/reference/statements/truncate</a></li>
-<li><code>opentelemetry_span_log</code> の TTL のエラー：<a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="3504586668" data-permission-text="Title is private" data-url="https://github.com/ClickHouse/ClickHouse/issues/88366" data-hovercard-type="issue" data-hovercard-url="/ClickHouse/ClickHouse/issues/88366/hovercard" href="https://github.com/ClickHouse/ClickHouse/issues/88366">ClickHouse/ClickHouse#88366</a></li>
-<li>MergeTree の設定：<code>merge_with_ttl_timeout</code>（14400 秒）<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout">https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout</a>, <code>old_parts_lifetime</code>（480 秒）<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime">https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime</a>, <code>max_bytes_to_merge_at_max_space_in_pool</code>（150 GiB）<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool">https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool</a></li>
-<li>サーバーログのローテーション（<code>logger</code>：<code>level</code>、<code>size</code>、<code>count</code>）：<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger</a></li>
-<li>論理削除（lightweight DELETE）：<a href="https://clickhouse.com/docs/reference/statements/delete">https://clickhouse.com/docs/reference/statements/delete</a></li>
-<li>APPLY DELETED MASK：<a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask</a></li>
-<li>system.parts：<a href="https://clickhouse.com/docs/reference/system-tables/parts">https://clickhouse.com/docs/reference/system-tables/parts</a></li>
-<li>system.detached_parts：<a href="https://clickhouse.com/docs/reference/system-tables/detached_parts">https://clickhouse.com/docs/reference/system-tables/detached_parts</a></li>
-<li>DROP DETACHED PART：<a href="https://clickhouse.com/docs/reference/statements/alter/partition">https://clickhouse.com/docs/reference/statements/alter/partition</a></li>
-<li><code>allow_drop_detached</code>：<a href="https://clickhouse.com/docs/reference/settings/session-settings/allow#allow_drop_detached">https://clickhouse.com/docs/reference/settings/session-settings/allow#allow_drop_detached</a></li>
-<li>system.mutations：<a href="https://clickhouse.com/docs/reference/system-tables/mutations">https://clickhouse.com/docs/reference/system-tables/mutations</a></li>
-<li>KILL QUERY：<a href="https://clickhouse.com/docs/reference/statements/kill">https://clickhouse.com/docs/reference/statements/kill</a></li>
-<li>Altinity KB「System tables ate my disk」（再起動が必要）：<a href="https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/">https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/</a></li>
+<li>システムテーブルの概要（無制限の増大、<code>&lt;engine&gt;</code> と <code>&lt;ttl&gt;</code>、スキーマ変更時のリネーム）：<a href="https://clickhouse.com/docs/reference/system-tables/overview">https://clickhouse.com/docs/reference/system-tables/overview</a>
+</li>
+<li>デフォルトの <code>config.xml</code>（TTL のないログテーブル、<code>opentelemetry_span_log</code> の engine、<code>trace</code> レベルの <code>text_log</code> と logger、コメントアウトされた <code>session_log</code>）：<a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml</a>
+</li>
+<li>
+<code>max_table_size_to_drop</code>、サーバー設定と <code>force_drop_table</code>：<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop</a>
+</li>
+<li>
+<code>max_table_size_to_drop</code>、クエリ設定：<a href="https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop</a>
+</li>
+<li>23.12 以降のクエリ単位での上書き：<a href="https://github.com/ClickHouse/ClickHouse/pull/57452">https://github.com/ClickHouse/ClickHouse/pull/57452</a>
+</li>
+<li>フラグファイルは使用後に削除される（<code>checkCanBeDropped</code>）：<a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp</a>
+</li>
+<li>TRUNCATE：<a href="https://clickhouse.com/docs/reference/statements/truncate">https://clickhouse.com/docs/reference/statements/truncate</a>
+</li>
+<li>
+<code>opentelemetry_span_log</code> の TTL のエラー：<a href="https://github.com/ClickHouse/ClickHouse/issues/88366">https://github.com/ClickHouse/ClickHouse/issues/88366</a>
+</li>
+<li>MergeTree の設定：<code>merge_with_ttl_timeout</code>（14400 秒）<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout">https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout</a>, <code>old_parts_lifetime</code>（480 秒）<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime">https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime</a>, <code>max_bytes_to_merge_at_max_space_in_pool</code>（150 GiB）<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool">https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool</a>
+</li>
+<li>サーバーログのローテーション（<code>logger</code>：<code>level</code>、<code>size</code>、<code>count</code>）：<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger</a>
+</li>
+<li>論理削除（lightweight DELETE）：<a href="https://clickhouse.com/docs/reference/statements/delete">https://clickhouse.com/docs/reference/statements/delete</a>
+</li>
+<li>APPLY DELETED MASK：<a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask</a>
+</li>
+<li>system.parts：<a href="https://clickhouse.com/docs/reference/system-tables/parts">https://clickhouse.com/docs/reference/system-tables/parts</a>
+</li>
+<li>system.detached_parts：<a href="https://clickhouse.com/docs/reference/system-tables/detached_parts">https://clickhouse.com/docs/reference/system-tables/detached_parts</a>
+</li>
+<li>DROP DETACHED PART：<a href="https://clickhouse.com/docs/reference/statements/alter/partition">https://clickhouse.com/docs/reference/statements/alter/partition</a>
+</li>
+<li>
+<code>allow_drop_detached</code>：<a href="https://clickhouse.com/docs/reference/settings/session-settings/allow#allow_drop_detached">https://clickhouse.com/docs/reference/settings/session-settings/allow#allow_drop_detached</a>
+</li>
+<li>system.mutations：<a href="https://clickhouse.com/docs/reference/system-tables/mutations">https://clickhouse.com/docs/reference/system-tables/mutations</a>
+</li>
+<li>KILL QUERY：<a href="https://clickhouse.com/docs/reference/statements/kill">https://clickhouse.com/docs/reference/statements/kill</a>
+</li>
+<li>Altinity KB「System tables ate my disk」（再起動が必要）：<a href="https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/">https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/</a>
+</li>
 </ul>
 <p>Docker：</p>
 <ul>
-<li>json-file ログドライバー（<code>max-size</code> のデフォルトは -1。既存のコンテナは古い設定のまま）：<a href="https://docs.docker.com/engine/logging/drivers/json-file/">https://docs.docker.com/engine/logging/drivers/json-file/</a></li>
+<li>json-file ログドライバー（<code>max-size</code> のデフォルトは -1。既存のコンテナは古い設定のまま）：<a href="https://docs.docker.com/engine/logging/drivers/json-file/">https://docs.docker.com/engine/logging/drivers/json-file/</a>
+</li>
 </ul>
 <p>Langfuse：</p>
 <ul>
-<li>FAQ、ClickHouse のディスクサイズを減らす方法：<a href="https://langfuse.com/faq/all/reduce-clickhouse-disk-size">https://langfuse.com/faq/all/reduce-clickhouse-disk-size</a></li>
-<li>スケーリングに関するドキュメント、ClickHouse のシステムログテーブル：<a href="https://langfuse.com/self-hosting/configuration/scaling">https://langfuse.com/self-hosting/configuration/scaling</a></li>
-<li>#13123、システムテーブルが際限なく増える：<a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="4244201137" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/13123" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/13123/hovercard" href="https://github.com/langfuse/langfuse/issues/13123">langfuse/langfuse#13123</a></li>
-<li>#16339、上限のない Docker ログ：<a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5200737006" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16339" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/16339/hovercard" href="https://github.com/langfuse/langfuse/issues/16339">langfuse/langfuse#16339</a></li>
-<li>PR #16363、README の Docker ログローテーション（デーモンのデフォルト、外部ツールで切り詰めない）：<a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5204821690" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16363" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16363/hovercard" href="https://github.com/langfuse/langfuse/pull/16363">langfuse/langfuse#16363</a></li>
-<li>ディスカッション #13969、論理削除された行：<a href="https://github.com/orgs/langfuse/discussions/13969">https://github.com/orgs/langfuse/discussions/13969</a></li>
-<li>ディスカッション #15024、非アクティブなパーツと 59 GiB の text_log：<a href="https://github.com/orgs/langfuse/discussions/15024">https://github.com/orgs/langfuse/discussions/15024</a></li>
-<li>PR #14035、削除マスクのクリーナー（v3.179.0 でリリース）：<a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="4589266312" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/14035" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/14035/hovercard" href="https://github.com/langfuse/langfuse/pull/14035">langfuse/langfuse#14035</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.179.0">https://github.com/langfuse/langfuse/releases/tag/v3.179.0</a></li>
-<li>#16858、ClickHouse 26.8+ での DateTime64：<a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5303039699" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16858" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/16858/hovercard" href="https://github.com/langfuse/langfuse/issues/16858">langfuse/langfuse#16858</a></li>
-<li>PR #16892 と v3 へのバックポート PR #16957：<a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5312926190" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16892" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16892/hovercard" href="https://github.com/langfuse/langfuse/pull/16892">langfuse/langfuse#16892</a>, <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5323718606" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16957" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16957/hovercard" href="https://github.com/langfuse/langfuse/pull/16957">langfuse/langfuse#16957</a></li>
-<li>修正を含むリリース：<a href="https://github.com/langfuse/langfuse/releases/tag/v4.28.0">https://github.com/langfuse/langfuse/releases/tag/v4.28.0</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.225.7">https://github.com/langfuse/langfuse/releases/tag/v3.225.7</a></li>
+<li>FAQ、ClickHouse のディスクサイズを減らす方法：<a href="https://langfuse.com/faq/all/reduce-clickhouse-disk-size">https://langfuse.com/faq/all/reduce-clickhouse-disk-size</a>
+</li>
+<li>スケーリングに関するドキュメント、ClickHouse のシステムログテーブル：<a href="https://langfuse.com/self-hosting/configuration/scaling">https://langfuse.com/self-hosting/configuration/scaling</a>
+</li>
+<li>#13123、システムテーブルが際限なく増える：<a href="https://github.com/langfuse/langfuse/issues/13123">https://github.com/langfuse/langfuse/issues/13123</a>
+</li>
+<li>#16339、上限のない Docker ログ：<a href="https://github.com/langfuse/langfuse/issues/16339">https://github.com/langfuse/langfuse/issues/16339</a>
+</li>
+<li>PR #16363、README の Docker ログローテーション（デーモンのデフォルト、外部ツールで切り詰めない）：<a href="https://github.com/langfuse/langfuse/pull/16363">https://github.com/langfuse/langfuse/pull/16363</a>
+</li>
+<li>ディスカッション #13969、論理削除された行：<a href="https://github.com/orgs/langfuse/discussions/13969">https://github.com/orgs/langfuse/discussions/13969</a>
+</li>
+<li>ディスカッション #15024、非アクティブなパーツと 59 GiB の text_log：<a href="https://github.com/orgs/langfuse/discussions/15024">https://github.com/orgs/langfuse/discussions/15024</a>
+</li>
+<li>PR #14035、削除マスクのクリーナー（v3.179.0 でリリース）：<a href="https://github.com/langfuse/langfuse/pull/14035">https://github.com/langfuse/langfuse/pull/14035</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.179.0">https://github.com/langfuse/langfuse/releases/tag/v3.179.0</a>
+</li>
+<li>#16858、ClickHouse 26.8+ での DateTime64：<a href="https://github.com/langfuse/langfuse/issues/16858">https://github.com/langfuse/langfuse/issues/16858</a>
+</li>
+<li>PR #16892 と v3 へのバックポート PR #16957：<a href="https://github.com/langfuse/langfuse/pull/16892">https://github.com/langfuse/langfuse/pull/16892</a>, <a href="https://github.com/langfuse/langfuse/pull/16957">https://github.com/langfuse/langfuse/pull/16957</a>
+</li>
+<li>修正を含むリリース：<a href="https://github.com/langfuse/langfuse/releases/tag/v4.28.0">https://github.com/langfuse/langfuse/releases/tag/v4.28.0</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.225.7">https://github.com/langfuse/langfuse/releases/tag/v3.225.7</a>
+</li>
 </ul>
 <p>SigNoz、ClickStack、その他：</p>
 <ul>
-<li>SigNoz #12050、80 GB を超えるシステムログテーブル：<a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="4846678206" data-permission-text="Title is private" data-url="https://github.com/SigNoz/signoz/issues/12050" data-hovercard-type="issue" data-hovercard-url="/SigNoz/signoz/issues/12050/hovercard" href="https://github.com/SigNoz/signoz/issues/12050">SigNoz/signoz#12050</a></li>
-<li>SigNoz v0.129.0 の ClickHouse <code>config.xml</code> と <code>users.xml</code>：<a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml</a>, <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml</a></li>
-<li>SigNoz v0.129.0 の <code>docker-compose.yaml</code>（コンテナ <code>signoz-clickhouse</code>、<code>max-size: 50m</code>、<code>max-file: "3"</code>）：<a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml</a></li>
-<li>ClickStack Helm chart PR #275：<a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5406160014" data-permission-text="Title is private" data-url="https://github.com/ClickHouse/ClickStack-helm-charts/issues/275" data-hovercard-type="pull_request" data-hovercard-url="/ClickHouse/ClickStack-helm-charts/pull/275/hovercard" href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">ClickHouse/ClickStack-helm-charts#275</a></li>
-<li>Sentry snuba #7311、TTL のない <code>*_log_N</code> のコピー：<a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="3263960447" data-permission-text="Title is private" data-url="https://github.com/getsentry/snuba/issues/7311" data-hovercard-type="issue" data-hovercard-url="/getsentry/snuba/issues/7311/hovercard" href="https://github.com/getsentry/snuba/issues/7311">getsentry/snuba#7311</a></li>
-<li>trigger.dev #4343、config.d に書いたプロファイル設定が無視される：<a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="4955153791" data-permission-text="Title is private" data-url="https://github.com/triggerdotdev/trigger.dev/issues/4343" data-hovercard-type="issue" data-hovercard-url="/triggerdotdev/trigger.dev/issues/4343/hovercard" href="https://github.com/triggerdotdev/trigger.dev/issues/4343">triggerdotdev/trigger.dev#4343</a></li>
+<li>SigNoz #12050、80 GB を超えるシステムログテーブル：<a href="https://github.com/SigNoz/signoz/issues/12050">https://github.com/SigNoz/signoz/issues/12050</a>
+</li>
+<li>SigNoz v0.129.0 の ClickHouse <code>config.xml</code> と <code>users.xml</code>：<a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml</a>, <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml</a>
+</li>
+<li>SigNoz v0.129.0 の <code>docker-compose.yaml</code>（コンテナ <code>signoz-clickhouse</code>、<code>max-size: 50m</code>、<code>max-file: "3"</code>）：<a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml</a>
+</li>
+<li>ClickStack Helm chart PR #275：<a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">https://github.com/ClickHouse/ClickStack-helm-charts/pull/275</a>
+</li>
+<li>Sentry snuba #7311、TTL のない <code>*_log_N</code> のコピー：<a href="https://github.com/getsentry/snuba/issues/7311">https://github.com/getsentry/snuba/issues/7311</a>
+</li>
+<li>trigger.dev #4343、config.d に書いたプロファイル設定が無視される：<a href="https://github.com/triggerdotdev/trigger.dev/issues/4343">https://github.com/triggerdotdev/trigger.dev/issues/4343</a>
+</li>
 </ul>
 <hr>
 <p>ClickHouse は ClickHouse, Inc. の登録商標です。diskvet は ClickHouse, Inc. とは関係ありません。Langfuse、SigNoz、ClickStack はそれぞれの所有者の商標です。</p>
