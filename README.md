@@ -205,7 +205,8 @@ fixes, how the pod restarts, and a full volume versus a full node disk:
 
 **Tested on a kind cluster, not yet on a managed one.** The test suite runs
 `--k8s` on kind with the ClickHouse operator and the Langfuse chart 2.x, the
-Bitnami chart that Langfuse 1.x uses, and a plain StatefulSet, and runs the
+Bitnami charts 8.x (what Langfuse 1.x uses) and 9.x, the Altinity operator
+with a ClickHouseInstallation, and a plain StatefulSet, and runs the
 fixes the reports print (see [Tested on](#tested-on)). SigNoz, ClickStack and
 EKS, GKE or AKS are not tested yet. If you try it there, an
 [issue](https://github.com/Protemir/diskvet/issues/new/choose) with what you
@@ -636,13 +637,13 @@ all seven checks on 24.1, 24.8, 25.12 and 26.9.
 
 | Test | Cluster | Shells | Coverage |
 |---|---|---|---|
-| `tests/k8s.sh` (the `kubernetes` CI job) | kind, Kubernetes 1.37 and kubectl 1.37, with the API server's audit log on: the ClickHouse operator 0.0.7 with the ClickHouseCluster of the Langfuse chart 2.1.2 (ClickHouse 26.4), the Bitnami ClickHouse chart 8.0.5 on its own with 2 replicas (25.2), and a plain StatefulSet of `clickhouse/clickhouse-server:25.12` with a sidecar | dash + mawk | `--k8s auto` across namespaces (4 server pods, no Keeper, operator, cert-manager or version-probe pod), a clean report per install with the pod's own login and the Fix B of its chart, only read-only SELECTs in `query_log`, payloads without cluster names, ServiceAccounts with the Role of [Permissions](#permissions), with `get` only and without `pods/exec`, no password or salt in the audit log, `query_log` or `text_log`, unchanged pod specs; then the printed fixes: the flag line and Fix A through the printed clickhouse-client command, the rotated-log `rm` line on the operator's volume, Fix B through the chart (helm template for the operator, `helm upgrade --reuse-values` for Bitnami) with the TTLs checked after the restart, and Fix C |
+| `tests/k8s.sh` (the `kubernetes` CI job) | kind, Kubernetes 1.37 and kubectl 1.37, with the API server's audit log on: the ClickHouse operator 0.0.7 with the ClickHouseCluster of the Langfuse chart 2.1.2 (ClickHouse 26.4), the Bitnami ClickHouse chart 8.0.5 on its own with 2 replicas (25.2), and a plain StatefulSet of `clickhouse/clickhouse-server:25.12` with a sidecar; then the Bitnami chart 9.4.4 (25.7) and the Altinity operator 0.27.4 with a ClickHouseInstallation (25.12, a sidecar listed first) | dash + mawk | `--k8s auto` across namespaces (4 server pods, no Keeper, operator, cert-manager or version-probe pod), a clean report per install with the pod's own login and the Fix B of its chart, only read-only SELECTs in `query_log`, payloads without cluster names, ServiceAccounts with the Role of [Permissions](#permissions), with `get` only and without `pods/exec`, no password or salt in the audit log, `query_log` or `text_log`, unchanged pod specs; then the printed fixes: the flag line and Fix A through the printed clickhouse-client command, the rotated-log `rm` line on the operator's volume, Fix B through the chart (helm template for the operator, `helm upgrade --reuse-values` for Bitnami) with the TTLs checked after the restart, and Fix C; for Bitnami 9.x the login from the password file and a `00-` file loading before the chart's `08-sampling.xml`; for Altinity the passwordless login and Fix B through `spec.configuration.files` (the operator does not restart the pod: the report's `kubectl delete pod` line does) |
 | `tests/k8s_offline.sh` (run by `tests/replay.sh`) | a fake `kubectl` (`tests/fixtures/fake-kubectl/`) that lists pods recorded on that kind cluster (operator, Bitnami, plain, kube-system) and hand-written ones (Altinity, Sentry, Bitnami 9, sidecars, jobs), and runs every exec, login script included, in the test's own shell; a fake clickhouse-client answers from the fixtures | dash + mawk, busybox ash + busybox awk | finding the pod and every refusal, argument checks, each login branch, the exact kubectl argv with the pinned context, timeouts, error hints, the Kubernetes report text of every chart, payload privacy, `--save-raw` and `--replay` |
 | `tests/k8s_shim.sh` (run by `tests/run.sh`) | the same fake `kubectl`, whose exec becomes `docker exec -u 101:101` into the test's ClickHouse container | Git Bash | a real ClickHouse 25.12: the same statuses as `--docker`, logins with `CLICKHOUSE_USER` and with Bitnami's admin variables (password in env and in a file), only read-only SELECTs in `query_log`, names hashed in the container, no salt or password in any kubectl command line, and the printed `kubectl exec` flag line works as uid 101 |
 
 Not tested yet: a real Langfuse, SigNoz or ClickStack install (the kind job
-runs the ClickHouse part of the Langfuse chart only), the Altinity operator,
-the Bitnami chart 9.x, managed clusters (EKS, GKE, AKS) and other kubectl
+runs the ClickHouse part of the Langfuse chart only, and its own Altinity
+installation), managed clusters (EKS, GKE, AKS) and other kubectl
 versions, `kubectl.exe` on Windows, replicated clusters, disks on object
 storage (the script skips remote disks), macOS.
 

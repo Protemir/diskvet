@@ -13,11 +13,13 @@ it sends to the cluster, what the API server's audit log shows and the full
 Role: [README → Kubernetes](../../README.md#kubernetes).
 
 **What runs on a real cluster.** The kubernetes job of diskvet's test suite
-(`tests/k8s.sh`, on kind with Kubernetes 1.37) installs three of these and
+(`tests/k8s.sh`, on kind with Kubernetes 1.37) installs five of these and
 runs diskvet and the fixes it prints on each: the ClickHouse resources of the
 Langfuse chart 2.1.2 with the ClickHouse operator 0.0.7, the Bitnami
 ClickHouse chart 8.0.5 on its own (the chart Langfuse 1.x uses), and a plain
-StatefulSet of the official image. What it confirms is marked:
+StatefulSet of the official image; then the Bitnami chart 9.4.4 on its own
+and the Altinity operator 0.27.4 with a ClickHouseInstallation of its own
+(not SigNoz's). What it confirms is marked:
 
 - **tested**: seen on that cluster, with the versions named;
 - **source**: we read it in the chart's or operator's own files (templates and
@@ -52,13 +54,13 @@ pod ([README → One pod per run](../../README.md#one-pod-per-run)).
 | [SigNoz](#signoz) (Altinity operator) | `chi-signoz-clickhouse-cluster-0-0-0` | `clickhouse` (optional sidecar `logs-system-exporter`) | none passed: `default` from localhost *(not verified yet)* | `clickhouse.files`, key `config.d/zz-diskvet-ttl.xml` *(partly verified)*; logs the chart already limits: `clickhouse.clickhouseOperator.<log>.ttl` *(not verified yet)* | the same `files` key, `<logger>` | the operator *(not verified yet)* | PVC from `data-volumeclaim-template`; the log volume template is commented out | partly: SigNoz clickhouse chart templates |
 | [Opik](#opik) (Altinity operator) | `chi-<chi>-<cluster>-0-0-0` | `clickhouse` | none passed | `clickhouse.configuration.files`, names under `config.d/` | the same key, `<logger>` | the operator | *not verified yet* | no |
 | [PostHog](#posthog) (Altinity operator) | `chi-<chi>-<cluster>-0-0-0` | `clickhouse` | none passed | no files key: `clickhouse.settings`, `metric_log/ttl`; never `query_log` or `part_log` | *not verified yet* | the operator | *not verified yet* | no |
-| [Your own ClickHouseInstallation](#your-own-clickhouseinstallation) (Altinity operator) | `chi-<chi>-<cluster>-0-0-0` | `clickhouse` | none passed | `spec.configuration.files`, key `config.d/zz-diskvet-ttl.xml` | the same key, `<logger>` | the operator | your `volumeClaimTemplates` | no |
+| [Your own ClickHouseInstallation](#your-own-clickhouseinstallation) (Altinity operator) | `chi-<chi>-<cluster>-0-0-0` (**tested**) | `clickhouse`, also with a sidecar listed first (**tested**) | none passed: `default` from localhost (**tested**) | `spec.configuration.files`, key `config.d/zz-diskvet-ttl.xml` (**tested**) | the same key, `<logger>` | the operator 0.27.4 does **not** restart the pod for a changed file (**tested**): `kubectl delete pod` | your `volumeClaimTemplates` | **tested**: operator 0.27.4 |
 | [trigger.dev 4.5.10+](#triggerdev) | `trigger-clickhouse-0` | `clickhouse` | `CLICKHOUSE_USER` + `CLICKHOUSE_PASSWORD` | `clickhouse.configdFiles`, key `clickhouse-ttl.xml` | the same key, `<logger>` | StatefulSet | *not verified yet* | no |
-| [trigger.dev up to 4.5.9](#triggerdev) (Bitnami ClickHouse 9.x) | `<release>-clickhouse-shard0-0` | `clickhouse` | `CLICKHOUSE_ADMIN_USER` + `CLICKHOUSE_ADMIN_PASSWORD_FILE` | `clickhouse.configdFiles`, key `00-diskvet-ttl.xml` | the same key, `<logger>` | StatefulSet | *not verified yet* | no |
+| [trigger.dev up to 4.5.9](#triggerdev) (Bitnami ClickHouse 9.x) | `<release>-clickhouse-shard0-0` | `clickhouse` | `CLICKHOUSE_ADMIN_USER` + `CLICKHOUSE_ADMIN_PASSWORD_FILE` | `clickhouse.configdFiles`, key `00-diskvet-ttl.xml` (the order **tested** with the chart on its own) | the same key, `<logger>` | StatefulSet | *not verified yet* | no |
 | [Laminar](#laminar) | `laminar-clickhouse-0` | `clickhouse` | `CLICKHOUSE_USER` + `CLICKHOUSE_PASSWORD` | not known: see [Other charts](#other-charts) | the same way | StatefulSet | in s3 mode the data is in S3 | no |
 | [Sentry up to 28](#sentry), sentry-kubernetes clickhouse chart | `sentry-clickhouse-0` | `sentry-clickhouse` (diskvet picks it by its image) | none passed | `clickhouse.clickhouse.configmap.configOverride`; the clickhouse chart on its own: `clickhouse.configmap.configOverride` | the same key | StatefulSet | clickhouse chart: `clickhouse.persistentVolumeClaim.enabled` | no |
 | [Plausible](#plausible) (IMIO chart, Bitnami 7.x) | `<release>-clickhouse-shard0-0` | `clickhouse` | `CLICKHOUSE_ADMIN_USER` + `CLICKHOUSE_ADMIN_PASSWORD` | as Bitnami 8.x: `clickhouse.extraOverrides` | the same string, `<logger>` | StatefulSet | `persistence.enabled` of the ClickHouse chart | no |
-| [Bitnami chart 9.x](#bitnami-chart-9x) on its own | `<release>-clickhouse-shard0-0` to `shard1-2`: 6 pods | `clickhouse` | `CLICKHOUSE_ADMIN_USER` + `CLICKHOUSE_ADMIN_PASSWORD_FILE` | `configdFiles`, key `00-diskvet-ttl.xml` | the same key, `<logger>` | StatefulSet | one PVC per pod | no |
+| [Bitnami chart 9.x](#bitnami-chart-9x) on its own | `<release>-clickhouse-shard0-0` to `shard1-2`: 6 pods | `clickhouse` | `CLICKHOUSE_ADMIN_USER` + `CLICKHOUSE_ADMIN_PASSWORD_FILE` (**tested**) | `configdFiles`, key `00-diskvet-ttl.xml` (**tested**: loads before the chart's `08-sampling.xml`) | the same key, `<logger>` | StatefulSet (**tested**) | one PVC per pod | **tested**: 9.4.4 |
 | [Sentry 29+, ClickHouse Cloud, managed](#clickhouse-outside-the-cluster) | none | none | use `--host` | | | | | no |
 
 "none passed" means diskvet passes no `--user` and no `--password`, so
@@ -323,8 +325,14 @@ volume from `data-volumeclaim-template`, and the log volume template
 commented out. That `configuration.files` of that resource comes from the
 values key `clickhouse.files` is only partly confirmed.
 
-*Not verified yet*: that diskvet's login (the `default` user from localhost
-without a password) works, the TTL files the chart already ships, the
+With the Altinity operator 0.27.4 and a ClickHouseInstallation of its own,
+the test suite's kind cluster shows that diskvet's login (the `default`
+user from localhost without a password) works, that `config.d/` files give
+the logs their TTL, and that the operator does not restart the pod for a
+changed file: after the `helm upgrade`, restart it with `kubectl delete pod`
+([Your own ClickHouseInstallation](#your-own-clickhouseinstallation)). SigNoz's
+own chart is not tested. *Not verified yet*: that the login
+works with SigNoz's installation, the TTL files the chart already ships, the
 `clickhouse.clickhouseOperator.<log>.ttl` keys, the operator's
 `01-clickhouse-*` file names and the image version.
 
@@ -387,7 +395,11 @@ Never add `query_log` or `part_log` there.
 
 ### Your own ClickHouseInstallation
 
-*Not verified yet.* With the Altinity operator and a ClickHouseInstallation
+**Tested** with the Altinity operator 0.27.4 and a ClickHouseInstallation of
+one shard and one replica (pod `chi-<chi>-<cluster>-0-0-0`, a sidecar listed
+before the `clickhouse` container): diskvet logs in as `default` without a
+password from inside the pod, and the file below gives the logs their TTL.
+With the Altinity operator and a ClickHouseInstallation
 of your own (or one your chart renders), the file goes into
 `spec.configuration.files`, named under `config.d/` (see [Opik](#opik) for
 why not `conf.d/`):
@@ -406,7 +418,11 @@ spec:
 
 Change it in the Helm values or manifest that creates the resource.
 `kubectl edit chi -n NAMESPACE NAME` works too, but the next `helm upgrade`
-overwrites it. List its pods with
+overwrites it. The operator 0.27.4 does **not** restart the pod after the
+change (**tested**), and system logs change only on
+restart: after the change, restart the pod with
+`kubectl delete pod -n NAMESPACE POD` (its StatefulSet recreates it with
+the same volume). List its pods with
 `kubectl get pods -n NAMESPACE -l clickhouse.altinity.com/chi=NAME`.
 
 ### trigger.dev
@@ -477,16 +493,21 @@ for extra ClickHouse config; if not, see [Other charts](#other-charts).
 
 ### Bitnami chart 9.x
 
-*Not verified yet*: everything in this section. The default is said to be
-2 shards of 3 replicas (6 pods; `--k8s auto` refuses and prints 6 commands),
-`usePasswordFiles=true` (diskvet reads the file
-`CLICKHOUSE_ADMIN_PASSWORD_FILE` names, inside the pod), a `08-sampling.xml`
-among the chart's config files, and `bitnamilegacy/clickhouse` images for
-9.x.
+Source: chart 9.4.4 (the newest 9.x published as an OCI chart; 9.4.7 is only
+in the chart repository); **tested** with 9.4.4 on its own, one replica. The
+default is 2 shards of 3 replicas (6 pods; `--k8s auto` refuses and prints
+6 commands). With `usePasswordFiles=true`, the default, the pod has only
+`CLICKHOUSE_ADMIN_PASSWORD_FILE` (**tested**), and diskvet reads that file
+inside the pod. The chart's `08-sampling.xml` turns off 15 system logs
+(`query_log`, `trace_log`, `text_log`, `metric_log`, `part_log` and more)
+unless `sampling.enabled` is set. The image `bitnamilegacy/clickhouse` has
+the chart's tag `25.7.5-debian-12-r0` (**tested**).
 
 The TTL file goes into `configdFiles`. Its name starts with `00-` so that it
 loads before the chart's `08-sampling.xml` and logs the chart turned off stay
-off (the loading order is *not verified yet*):
+off. **Tested**: with `query_log` added to this file, it stays off after
+`helm upgrade`; in a file named `zz-...` it comes back on (the files load by
+name):
 
 ```yaml
 configdFiles:
@@ -610,8 +631,9 @@ chart, and that also upgrades Langfuse, SigNoz or ClickStack. Add
   later; Altinity operator: SigNoz, Opik, PostHog, your own
   ClickHouseInstallation): Helm changes the operator's resource, and the
   operator restarts the pod with the new config (**tested** with the
-  ClickHouse operator 0.0.7, within a minute; the Altinity operator *not
-  verified yet*).
+  ClickHouse operator 0.0.7, within a minute). The Altinity operator 0.27.4
+  did **not** restart the pod after a change to `spec.configuration.files`
+  (**tested**, 5 minutes): restart it yourself (step 3).
 - **Charts without an operator** (Bitnami, trigger.dev, Laminar, Sentry,
   Plausible, ClickStack 1.x): Kubernetes restarts the pods only when their
   template changes. Many charts put a checksum of their config on the
