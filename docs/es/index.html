@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>diskvet: revisión del disco de ClickHouse® en Langfuse, SigNoz y ClickStack</title>
+  <meta name="description" content="Un script gratuito de solo lectura que encuentra qué llena el disco de ClickHouse® en Langfuse, SigNoz y ClickStack autoalojados, e imprime los comandos exactos para solucionarlo.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <meta property="og:title" content="diskvet: revisión de solo lectura del disco de ClickHouse® en Langfuse, SigNoz y ClickStack">
+  <meta property="og:description" content="Encuentra qué llena el disco de ClickHouse® en tu Langfuse, SigNoz o ClickStack autoalojado, e imprime los comandos exactos para solucionarlo. Gratuito y de código abierto.">
+  <meta property="og:url" content="https://diskvet.dev/es/">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="es_ES">
+  <link rel="canonical" href="https://diskvet.dev/es/">
+  <link rel="alternate" hreflang="en" href="https://diskvet.dev/">
+  <link rel="alternate" hreflang="es" href="https://diskvet.dev/es/">
+  <link rel="alternate" hreflang="ru" href="https://diskvet.dev/ru/">
+  <link rel="alternate" hreflang="zh-Hans" href="https://diskvet.dev/zh/">
+  <link rel="alternate" hreflang="x-default" href="https://diskvet.dev/">
+</head>
+<body>
+<a class="skip" href="#main">Saltar al contenido</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="index.html">diskvet</a>
+    <nav aria-label="Menú principal">
+      <ul>
+        <li><a href="index.html" aria-current="page">Inicio</a></li>
+        <li><a href="https://github.com/Protemir/diskvet/blob/main/docs/es/guide.md">Guía</a></li>
+        <li><a href="https://github.com/Protemir/diskvet/discussions/1">Acceso anticipado</a></li>
+        <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      </ul>
+    </nav>
+    <nav class="langs" aria-label="Language">
+      <a href="../" hreflang="en" lang="en">English</a>
+      <a href="./" hreflang="es" lang="es" aria-current="page">Español</a>
+      <a href="../ru/" hreflang="ru" lang="ru">Русский</a>
+      <a href="../zh/" hreflang="zh-Hans" lang="zh-Hans">中文</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap">
+
+    <section aria-labelledby="hero-title">
+      <h1 id="hero-title">Revisión de solo lectura del disco de ClickHouse® en Langfuse, SigNoz y ClickStack autoalojados</h1>
+      <p class="lead">El disco se llena, pero tus propios datos ocupan poco. Normalmente el espacio se lo
+        llevan las tablas de registro del sistema (system log tables) de ClickHouse, que por defecto no
+        tienen límite de tamaño. diskvet muestra qué ocupa el disco e imprime los comandos exactos para
+        solucionarlo. No ejecuta nada por su cuenta: cada comando lo ejecutas tú.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="#quick-start">Inicio rápido</a>
+        <a class="btn btn-secondary" href="https://github.com/Protemir/diskvet/blob/main/docs/es/guide.md">Solucionarlo a mano: la guía</a>
+        <a class="btn btn-secondary" href="https://github.com/Protemir/diskvet">GitHub</a>
+      </div>
+      <p class="muted small">Gratuito, Apache-2.0, sin registro. Son dos archivos cortos que puedes leer
+        antes de ejecutarlos. El script solo se comunica con tu ClickHouse; no envía nada a ningún otro lugar.</p>
+    </section>
+
+    <section aria-labelledby="story-title">
+      <h2 id="story-title">Lo que suele pasar</h2>
+      <ul>
+        <li>66.86 GiB en <code>system.trace_log</code> frente a unos 51 MiB en las tablas de Langfuse
+          (<a href="https://github.com/langfuse/langfuse/issues/13123">langfuse#13123</a>);</li>
+        <li>80+ GB en tablas de registro del sistema frente a menos de 500 MB de telemetría
+          (<a href="https://github.com/SigNoz/signoz/issues/12050">SigNoz#12050</a>);</li>
+        <li>un volumen de 10 Gi que se llenó en 10 días
+          (<a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">ClickStack-helm-charts#275</a>).</li>
+      </ul>
+      <p>La solución principal es conocida: hacer <code>TRUNCATE</code> de las tablas de registro y añadir
+        un TTL. El informe también cubre las trampas que aparecen al aplicarla en la práctica:
+        el límite de 50 GB de <code>TRUNCATE</code>, las copias antiguas <code>*_log_N</code> que quedan
+        tras un reinicio, la configuración especial de <code>opentelemetry_span_log</code>, los logs de
+        Docker sin rotación y las filas eliminadas que siguen ocupando espacio.</p>
+    </section>
+
+    <section aria-labelledby="quick-start">
+      <h2 id="quick-start">Inicio rápido: Langfuse con docker compose (30 segundos)</h2>
+      <p>En la máquina donde se ejecuta el <code>docker-compose.yml</code> de Langfuse:</p>
+<pre><code>cd langfuse                     # la carpeta con el docker-compose.yml de Langfuse
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/SHA256SUMS
+sha256sum -c SHA256SUMS         # opcional: comprueba que ambos archivos coinciden con la versión publicada
+less checks.sql                 # léelo primero: solo SELECT sobre system.*
+
+sh diskvet.sh report --docker auto &gt; report.md</code></pre>
+      <p><code>--docker auto</code> encuentra por sí solo el contenedor de ClickHouse y ejecuta
+        <code>clickhouse-client</code> dentro de él, así que no necesitas ni un cliente en el host ni un
+        puerto abierto. Sin <code>--user</code>, usa los valores de <code>CLICKHOUSE_USER</code> /
+        <code>CLICKHOUSE_PASSWORD</code> del propio contenedor, y la contraseña nunca sale del
+        contenedor.</p>
+      <p>Otras formas de conectarse:</p>
+<pre><code>sh diskvet.sh report --docker signoz-clickhouse                          # un contenedor por nombre
+sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # clickhouse-client local</code></pre>
+      <p class="small muted">Requiere <code>sh</code> POSIX, <code>awk</code>, <code>sed</code>,
+        <code>od</code> y <code>date</code>, además de <code>docker</code> o <code>clickhouse-client</code>.
+        No hace falta <code>jq</code> ni Python. El script genera el informe en inglés. La última versión
+        está en <a href="https://github.com/Protemir/diskvet/releases/latest">GitHub Releases</a>.</p>
+    </section>
+
+    <section aria-labelledby="checks-title">
+      <h2 id="checks-title">Qué comprueba</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">#</th><th scope="col">Comprobación</th><th scope="col">Fuentes</th><th scope="col">Solución típica en el informe</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>Tablas de registro del sistema sin TTL</td><td><code>system.tables</code>, <code>system.parts</code></td><td><code>TRUNCATE</code> (con el flag de un solo uso para tablas de más de 50 GB), un archivo de TTL listo para <code>config.d</code>, copias antiguas <code>*_log_N</code> para eliminar</td></tr>
+            <tr><td>2</td><td>Espacio en disco fuera de las partes (parts) de las tablas de ClickHouse</td><td><code>system.disks</code> frente a todas las partes</td><td>rotación de los logs de Docker y en qué otros lugares buscar</td></tr>
+            <tr><td>3</td><td>Uso del disco y previsión aproximada</td><td><code>system.disks</code>, <code>system.asynchronous_metric_log</code></td><td>qué liberar primero</td></tr>
+            <tr><td>4</td><td>Crecimiento diario</td><td><code>system.part_log</code></td><td>en qué tabla se escribió más en 24 h</td></tr>
+            <tr><td>5</td><td>Demasiadas partes</td><td><code>system.parts</code>, <code>system.merge_tree_settings</code>, <code>system.events</code></td><td>cuánto falta para los límites de inserción de la tabla</td></tr>
+            <tr><td>6</td><td>Partes inactivas y partes separadas (detached)</td><td><code>system.parts</code>, <code>system.detached_parts</code></td><td>partes atascadas, <code>DROP DETACHED PART</code></td></tr>
+            <tr><td>7</td><td>Filas eliminadas y mutaciones atascadas</td><td><code>system.parts</code>, <code>system.mutations</code></td><td><code>APPLY DELETED MASK</code> para las particiones concretas, <code>KILL MUTATION</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Cada comprobación da un resultado OK, INFO, WARN o CRITICAL; los umbrales están en el
+        <a href="https://github.com/Protemir/diskvet#what-it-checks">README</a>. Cada solución indica su
+        grado de seguridad y si requiere un reinicio. Si la consulta de una comprobación falla, esta
+        muestra <code>NOT_RUN</code> con el motivo; las demás se ejecutan de todos modos.</p>
+    </section>
+
+    <section aria-labelledby="reads-title">
+      <h2 id="reads-title">Qué lee y qué no lee nunca</h2>
+      <div class="two-col">
+        <div class="card">
+          <h3>Lee</h3>
+          <ul>
+            <li>metadatos de <code>system.tables</code>, <code>system.parts</code>, <code>system.disks</code>,
+              <code>system.detached_parts</code>, <code>system.merge_tree_settings</code>,
+              <code>system.mutations</code>, <code>system.part_log</code>,
+              <code>system.asynchronous_metric_log</code>, <code>system.asynchronous_metrics</code>,
+              <code>system.events</code>;</li>
+            <li>si tiene permiso, <code>system.server_settings</code> (solo <code>max_table_size_to_drop</code>);</li>
+            <li>una consulta de verificación, <code>SELECT getSetting('readonly')</code>, para confirmar que la sesión es de solo lectura.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Nunca lee</h3>
+          <ul>
+            <li>filas de tus propias tablas: ningún <code>FROM</code> ni <code>JOIN</code> sobre ellas, ninguna
+              función de tabla, ningún <code>dictGet</code>; el conjunto de pruebas lo verifica;</li>
+            <li><code>system.query_log</code>, el texto de las consultas, los comandos de las mutaciones ni los textos de error.</li>
+          </ul>
+          <p class="small muted">El informe local muestra los nombres reales de las bases de datos y las
+            tablas, porque los necesitas para aplicar las soluciones. No sale de tu máquina.</p>
+        </div>
+      </div>
+      <h3>Dos formas seguras de ejecutarlo</h3>
+      <ul>
+        <li><strong>Con un usuario existente.</strong> Las consultas se ejecutan con <code>readonly=2</code> y
+          límites (30 s, 10 000 filas, 2 hilos, 500 MB). Si el servidor no permite el modo de solo lectura
+          para este usuario, el script se detiene sin ejecutar nada.</li>
+        <li><strong>Con un usuario dedicado</strong>, para auditorías de seguridad: permisos limitados a las
+          tablas del sistema citadas arriba y ningún acceso a los datos del producto.
+          <a href="https://github.com/Protemir/diskvet#two-ways-to-run-it-safely">El SQL exacto está en el README.</a></li>
+      </ul>
+      <p class="small muted">Probado con las imágenes estándar de <code>clickhouse/clickhouse-server</code> 24.1, 24.8,
+        25.12 y 26.9, en instalaciones similares a las de Langfuse y SigNoz. Aún sin probar: clústeres
+        replicados, Kubernetes, discos en almacenamiento de objetos, macOS.</p>
+    </section>
+
+    <section aria-labelledby="guide-title">
+      <h2 id="guide-title">¿Prefieres solucionarlo a mano?</h2>
+      <div class="callout">
+        <p><strong><a href="https://github.com/Protemir/diskvet/blob/main/docs/es/guide.md">Por qué ClickHouse llena el disco en Langfuse y SigNoz autoalojados y cómo solucionarlo</a></strong></p>
+        <p>Una consulta de solo lectura para confirmarlo, cómo liberar el espacio ahora mismo y cómo evitar
+          que vuelva a pasar sin caer en las trampas conocidas. Cada comando de la guía se ejecutó en
+          ClickHouse 24.8, 25.12 y 26.9. No necesitas diskvet para seguirla.</p>
+      </div>
+    </section>
+
+    <section aria-labelledby="beta-title">
+      <h2 id="beta-title">Revisiones cada hora: beta gratuita en octubre</h2>
+      <p>El script es gratuito y lo seguirá siendo. Pero una sola ejecución no puede saber cuándo se
+        quedará realmente sin espacio el disco. Esa es la parte que estoy desarrollando ahora:</p>
+      <ul>
+        <li>una instantánea cada hora: exactamente el JSON que imprime <code>sh diskvet.sh --print-payload</code>, nada más;</li>
+        <li>un correo <strong>antes</strong> de que se llene el disco, solo cuando cambia un estado;</li>
+        <li>un aviso cuando las instantáneas dejan de llegar;</li>
+        <li>un informe breve cada lunes.</li>
+      </ul>
+      <p>No tienes que alojar nada ni abrir ningún puerto: tu servidor envía una pequeña instantánea
+        firmada y no recibe ninguna conexión entrante. Nunca se envían nombres de host, direcciones IP, usuarios,
+        textos de consultas ni errores; los nombres de tus propias tablas solo salen de tu servidor
+        como hashes con sal.</p>
+      <div class="callout">
+        <p><strong>¿Quieres participar?</strong> Comenta en el hilo
+          <a href="https://github.com/Protemir/diskvet/discussions/1">«Early access»</a> (discusión #1)
+          en qué entorno se ejecuta tu ClickHouse y qué tamaño aproximado tiene el disco. Puedes escribir
+          en español, aunque la respuesta puede llegar en inglés. Cuando se abra la beta, recibirás una
+          respuesta allí mismo. Por favor, no publiques allí nombres de empresas ni de hosts: es un hilo
+          público.</p>
+        <p class="small muted">La beta dura 30 días; después, las revisiones cada hora pasan a ser un plan
+          de pago, y el script sigue siendo gratuito y de código abierto. Servidores en Kazajistán: por
+          ahora, solo el informe local.</p>
+      </div>
+      <p>¿El script pasa por alto algún problema o propone una solución incorrecta?
+        <a href="https://github.com/Protemir/diskvet/issues/new/choose">Abre un issue</a>: es lo más
+        útil que puedes hacer. Puedes escribir en español, aunque la respuesta puede llegar en inglés.</p>
+    </section>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/blob/main/docs/es/guide.md">Guía</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">Informar de un problema</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">Informar de un problema de seguridad</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet es gratuito y de código abierto (Apache-2.0).</p>
+    <p>ClickHouse es una marca registrada de ClickHouse, Inc. diskvet no está afiliado a ClickHouse, Inc.
+      Langfuse, SigNoz y ClickStack son marcas de sus respectivos propietarios y se mencionan solo para describir la compatibilidad.</p>
+  </div>
+</footer>
+</body>
+</html>
