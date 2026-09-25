@@ -34,24 +34,17 @@ const attr = s => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g,
 const rel = (from, to) => posix.relative(from, to).replace(/^$/, '.') + '/';
 
 function render(markdown) {
-  const input = JSON.stringify({ text: markdown, mode: 'gfm', context: 'Protemir/diskvet' });
+  // mode 'markdown' renders like a file on GitHub; 'gfm' would turn every line break into <br>.
+  const input = JSON.stringify({ text: markdown, mode: 'markdown' });
   return execFileSync('gh', ['api', 'markdown', '--input', '-'], { input, encoding: 'utf8', maxBuffer: 16 << 20 });
 }
 
-// GitHub-style heading ids: lower case, punctuation removed, spaces to hyphens.
-function slugger() {
-  const seen = new Map();
-  return s => {
-    let slug = text(s).trim().toLowerCase().replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, '').replace(/ /g, '-');
-    const n = seen.get(slug) || 0;
-    seen.set(slug, n + 1);
-    return n ? `${slug}-${n}` : slug;
-  };
-}
-
 function cleanUp(html, fromMd, pagePath) {
-  const slug = slugger();
   return html
+    // Headings: keep GitHub's own ids (the same anchors as the .md files on GitHub),
+    // without its wrapper, permalink icon and "user-content-" prefix.
+    .replace(/<div class="markdown-heading"><h([1-6]) class="heading-element">([\s\S]*?)<\/h\1><a id="user-content-([^"]+)" class="anchor"[^>]*>[\s\S]*?<\/a><\/div>/g,
+      (_, n, inner, id) => `<h${n} id="${id}">${inner}</h${n}>`)
     .replace(/ dir="auto"/g, '')
     .replace(/ class="notranslate"/g, '')
     .replace(/ rel="nofollow"/g, '')
@@ -59,7 +52,6 @@ function cleanUp(html, fromMd, pagePath) {
     .replace(/<div class="highlight[^"]*"><pre>([\s\S]*?)<\/pre><\/div>/g,
       (_, code) => `<pre><code>${code.replace(/<\/?span[^>]*>/g, '')}</code></pre>`)
     .replace(/<pre>(?!<code>)([\s\S]*?)<\/pre>/g, (_, code) => `<pre><code>${code}</code></pre>`)
-    .replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, n, inner) => `<h${n} id="${attr(slug(inner))}">${inner}</h${n}>`)
     // Links between the Markdown guides become links between the guide pages.
     .replace(/href="((?:\.\.\/)?(?:[a-z]{2}\/)?guide\.md)"/g, (_, href) => {
       const dir = posix.dirname(posix.join(posix.dirname(fromMd), href));   // '.' or 'ru'

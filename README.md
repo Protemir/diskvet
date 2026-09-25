@@ -386,8 +386,8 @@ and a logged-in `gh`, which renders the Markdown).
 The script is free and stays free. Separately, I'm building the part a
 one-off run can't do: an hourly snapshot (exactly the `--print-payload` JSON,
 nothing more), an email **before** the disk fills, a signal when snapshots stop
-arriving, and a short weekly report. The free beta opens in October 2026 and
-runs for 30 days; after that the hourly part becomes a paid plan.
+arriving, and a short weekly report. It opens in October 2026 and is free: no
+card, no plan to pick.
 
 **Want in? Comment in [Early access (discussion #1)](https://github.com/Protemir/diskvet/discussions/1)**
 with what runs your ClickHouse and roughly how big the disk is; you'll get a
