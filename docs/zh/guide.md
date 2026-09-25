@@ -1,6 +1,6 @@
 # 自托管 Langfuse 和 SigNoz：ClickHouse® 磁盘被占满的原因与解决方法
 
-*[English](../guide.md) · [Español](../es/guide.md) · [Русский](../ru/guide.md)。如有出入，以英文版为准。*
+*[English](../guide.md) · [Español](../es/guide.md) · [Português](../pt/guide.md) · [Русский](../ru/guide.md)。如有出入，以英文版为准。*
 
 你的 Langfuse 或 SigNoz 服务器磁盘快满了，可 trace 数据其实并不多。在大多数公开案例中，空间其实是被 ClickHouse® 自己占用的，具体来说是它的系统日志表（system log tables），例如 `system.trace_log` 和 `system.text_log`，这些表默认没有大小限制。ClickStack 也有同样的问题。
 

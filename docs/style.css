@@ -116,13 +116,62 @@ a:hover { text-decoration-thickness: 2px; }
   margin: 0;
   padding: 0;
 }
-/* Main menu and the language switcher sit together on the right. */
-.site-header .wrap > nav:not(.langs) { margin-left: auto; }
-.site-header .langs {
+/* Main menu and the language menu sit together on the right. */
+.header-right {
   display: flex;
-  gap: 12px;
-  font-size: 0.875rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 20px;
+  margin-left: auto;
 }
+
+/* Language menu: a <details> dropdown, works without JavaScript. */
+.langs { position: relative; font-size: 0.875rem; }
+.langs summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.langs summary::-webkit-details-marker { display: none; }
+.langs summary::after {
+  content: "";
+  width: 0.4em;
+  height: 0.4em;
+  margin-left: 2px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+.langs details[open] summary::after { transform: translateY(1px) rotate(-135deg); }
+.langs summary:hover,
+.langs details[open] summary { color: var(--text); }
+.langs .globe { flex: none; }
+.site-header .langs ul {
+  display: block;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  min-width: 10rem;
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
+}
+.site-header .langs li a { display: block; padding: 8px 14px; color: var(--text); }
+.site-header .langs li a:hover { background: var(--code-bg); text-decoration: none; }
+.site-header .langs li a[aria-current="page"] { font-weight: 600; text-decoration: none; }
 .site-header nav a { color: var(--muted); text-decoration: none; }
 .site-header nav a:hover,
 .site-header nav a[aria-current="page"] { color: var(--text); text-decoration: underline; }

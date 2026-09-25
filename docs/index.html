@@ -14,6 +14,7 @@
   <link rel="canonical" href="https://diskvet.dev/">
   <link rel="alternate" hreflang="en" href="https://diskvet.dev/">
   <link rel="alternate" hreflang="es" href="https://diskvet.dev/es/">
+  <link rel="alternate" hreflang="pt" href="https://diskvet.dev/pt/">
   <link rel="alternate" hreflang="ru" href="https://diskvet.dev/ru/">
   <link rel="alternate" hreflang="zh-Hans" href="https://diskvet.dev/zh/">
   <link rel="alternate" hreflang="x-default" href="https://diskvet.dev/">
@@ -24,20 +25,28 @@
 <header class="site-header">
   <div class="wrap">
     <a class="logo" href="index.html">diskvet</a>
-    <nav aria-label="Main">
-      <ul>
-        <li><a href="index.html" aria-current="page">Home</a></li>
-        <li><a href="https://github.com/Protemir/diskvet/blob/main/docs/guide.md">Guide</a></li>
-        <li><a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a></li>
-        <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
-      </ul>
-    </nav>
-    <nav class="langs" aria-label="Language">
-      <a href="./" hreflang="en" lang="en" aria-current="page">English</a>
-      <a href="es/" hreflang="es" lang="es">Español</a>
-      <a href="ru/" hreflang="ru" lang="ru">Русский</a>
-      <a href="zh/" hreflang="zh-Hans" lang="zh-Hans">中文</a>
-    </nav>
+    <div class="header-right">
+      <nav aria-label="Main">
+        <ul>
+          <li><a href="index.html" aria-current="page">Home</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/blob/main/docs/guide.md">Guide</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a></li>
+          <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+        </ul>
+      </nav>
+      <nav class="langs" aria-label="Language">
+        <details>
+          <summary><svg class="globe" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8h13M8 1.5c1.9 2 2.8 4.1 2.8 6.5S9.9 12.5 8 14.5M8 1.5C6.1 3.5 5.2 5.6 5.2 8s.9 4.5 2.8 6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg> English</summary>
+          <ul>
+            <li><a href="./" hreflang="en" lang="en" aria-current="page">English</a></li>
+            <li><a href="es/" hreflang="es" lang="es">Español</a></li>
+            <li><a href="pt/" hreflang="pt" lang="pt-BR">Português</a></li>
+            <li><a href="ru/" hreflang="ru" lang="ru">Русский</a></li>
+            <li><a href="zh/" hreflang="zh-Hans" lang="zh-Hans">中文</a></li>
+          </ul>
+        </details>
+      </nav>
+    </div>
   </div>
 </header>
 
@@ -217,5 +226,6 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # local 
       Langfuse, SigNoz and ClickStack are trademarks of their respective owners and are mentioned only to describe compatibility.</p>
   </div>
 </footer>
+<script src="langs.js" defer></script>
 </body>
 </html>
