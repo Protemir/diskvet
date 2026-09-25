@@ -750,13 +750,15 @@ fixb_end="Then run your usual \`helm upgrade\`: \`helm list -n"
 flavor official-langfuse official langfuse
 f=$W/f.official-langfuse.md
 yamlok "$f" "official+langfuse"
-lines "$f" "official+langfuse: clickhouse.cluster.logger and clickhouse.cluster.settings in one YAML block" '```yaml' 'clickhouse:' '  cluster:' '    logger:' \
-    '      level: information' '      size: "100M"' '      count: 10' '    settings:' '      trace_log:' '        ttl: "event_date + INTERVAL 7 DAY DELETE"'
+lines "$f" "official+langfuse: the logger and the logs in clickhouse.cluster.settings (the operator's extraConfig)" '```yaml' 'clickhouse:' '  cluster:' '    settings:' '      logger:' \
+    '        level: information' '        size: "100M"' '        count: 10' '      trace_log:' '        ttl: "event_date + INTERVAL 7 DAY DELETE"'
+# Langfuse chart 2.1.2 has no clickhouse.cluster.logger value (it would be ignored)
+if grep -qx '    logger:' "$f"; then fail "official+langfuse: a clickhouse.cluster.logger key"; else ok "official+langfuse: no clickhouse.cluster.logger key"; fi
 has "$f" '        engine: "ENGINE = MergeTree PARTITION BY toYYYYMM(finish_date) ORDER BY (finish_date, finish_time_us) TTL finish_date + INTERVAL 7 DAY DELETE"' "official+langfuse: opentelemetry_span_log gets its TTL inside engine"
 has "$f" "This pod is run by the ClickHouse operator (Langfuse chart 2.x). Add this to the values you deploy Langfuse with. These keys take YAML, not XML" "official+langfuse: the text"
 hasnt "$f" '```xml' "official+langfuse: no XML block"
 # the YAML lists the logs of the XML (the same stream, rendered as a plain pod)
-sed -n 's/^      \([a-z_]*\):$/\1/p' "$f" >"$W/yaml.logs"
+sed -n '/^      logger:$/d; s/^      \([a-z_]*\):$/\1/p' "$f" >"$W/yaml.logs"
 flavor xml-ref plain other
 sed -n 's/^    <\([a-z_]*\)>$/\1/p' "$W/f.xml-ref.md" >"$W/xml.logs"
 if [ -s "$W/xml.logs" ] && cmp -s "$W/yaml.logs" "$W/xml.logs"; then ok "official+langfuse: the YAML has the logs of the XML, in order ($(tr '\n' ' ' <"$W/yaml.logs"))"; else fail "official+langfuse: YAML logs '$(tr '\n' ' ' <"$W/yaml.logs")', XML logs '$(tr '\n' ' ' <"$W/xml.logs")'"; fi
@@ -796,8 +798,8 @@ flavor official-ttl official langfuse 0 1
 f=$W/f.official-ttl.md
 hasnt "$f" "**Fix B" "official, every log has a TTL: no Fix B"
 yamlok "$f" "official, every log has a TTL"
-lines "$f" "official+langfuse, no Fix B: check 2 prints clickhouse.cluster.logger" "**Fix: keep them small.** Set the logger in your values and run your usual helm upgrade (the pod restarts):" \
-    '```yaml' 'clickhouse:' '  cluster:' '    logger:' '      level: information' '      size: "100M"' '      count: 10' '```'
+lines "$f" "official+langfuse, no Fix B: check 2 prints clickhouse.cluster.settings.logger" "**Fix: keep them small.** Set the logger in your values and run your usual helm upgrade (the pod restarts):" \
+    '```yaml' 'clickhouse:' '  cluster:' '    settings:' '      logger:' '        level: information' '        size: "100M"' '        count: 10' '```'
 flavor official-ttl-cs official clickstack 0 1
 lines "$W/f.official-ttl-cs.md" "official+clickstack, no Fix B: check 2 prints clickhouse.cluster.spec.settings.logger" \
     '```yaml' 'clickhouse:' '  cluster:' '    spec:' '      settings:' '        logger:' '          level: information'

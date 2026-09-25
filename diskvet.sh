@@ -959,10 +959,14 @@ function fixb_text(lx,   v, s) {
     if (v == "bitnami9" && !bitnami9_proven) v = "plain"
     if (v == "official") {
         if (product == "langfuse") {
+            # clickhouse.cluster.settings is the operator's extraConfig in every
+            # released 2.x chart; a clickhouse.cluster.logger value is not (2.1.2
+            # ignores it), so the logger goes into settings too: the operator's
+            # own logger is in config.yaml, and config.d/99-extra-config.yaml wins.
             s = "This pod is run by the ClickHouse operator (Langfuse chart 2.x). Add this to the values you deploy Langfuse with."
             s = s " These keys take YAML, not XML: the operator writes them to config.d/99-extra-config.yaml."
             s = s " The logger lines also keep ClickHouse's own server log files small; they share this volume (see check 2).\n"
-            return s "```yaml\nclickhouse:\n  cluster:\n" logger_yaml(4) "    settings:\n" logs_yaml(6) "```\n"
+            return s "```yaml\nclickhouse:\n  cluster:\n    settings:\n" logger_yaml(6) logs_yaml(6) "```\n"
         }
         if (product == "clickstack") {
             s = "This pod is run by the ClickHouse operator (ClickStack chart 2.x or later). ClickStack chart 3.4.0 and later already sets a 7-day TTL on these logs and this logger,"
@@ -1196,7 +1200,7 @@ function check2(   i, f, s, total, free, parts, inact, det, used, inparts, notin
         if (fixb_printed)
             s = s "The logger lines in check 1's Fix B do this (level information, 10 files of 100 MB); they apply with the same helm upgrade.\n"
         else if (product == "langfuse")
-            s = s "Set the logger in your values and run your usual helm upgrade (the pod restarts):\n```yaml\nclickhouse:\n  cluster:\n" logger_yaml(4) "```\n"
+            s = s "Set the logger in your values and run your usual helm upgrade (the pod restarts):\n```yaml\nclickhouse:\n  cluster:\n    settings:\n" logger_yaml(6) "```\n"
         else if (product == "clickstack")
             s = s "Set the logger in your values and run your usual helm upgrade (the pod restarts):\n```yaml\nclickhouse:\n  cluster:\n    spec:\n      settings:\n" logger_yaml(8) "```\n"
         else

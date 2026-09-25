@@ -112,9 +112,9 @@ sh diskvet.sh report --k8s auto -n langfuse > report.md     # -n: the namespace 
 complete `kubectl` lines for that pod.
 
 - Langfuse chart 2.x runs ClickHouse through the ClickHouse operator: one
-  pod, and `--k8s auto` finds it. The TTL fix and the logger go into
-  `clickhouse.cluster.settings` and `clickhouse.cluster.logger` of your
-  values, as YAML: [Langfuse chart 2.x](kubernetes.md#langfuse-chart-2x).
+  pod, and `--k8s auto` finds it. The TTL fix and the logger both go into
+  `clickhouse.cluster.settings` of your values, as YAML:
+  [Langfuse chart 2.x](kubernetes.md#langfuse-chart-2x).
 - Langfuse chart 1.x uses the Bitnami ClickHouse chart with 3 replicas by
   default (`langfuse-clickhouse-shard0-0`, `-1` and `-2` for a release named
   `langfuse`), and each has its own disk and system logs. `--k8s auto` then

@@ -40,7 +40,7 @@ pod ([README → One pod per run](../../README.md#one-pod-per-run)).
 
 | Chart | Pod (example) | Container | Login diskvet uses | TTL file (check 1, Fix B) | Logger (server log files) | Restart after `helm upgrade` | Data volume (default) | Source checked |
 |---|---|---|---|---|---|---|---|---|
-| [Langfuse 2.x](#langfuse-chart-2x) (ClickHouse operator) | `langfuse-clickhouse-0-0-0` *(name not verified yet)* | `clickhouse-server` | none passed: the operator's client config (`default`, port 9001, password from the pod's env) | `clickhouse.cluster.settings`, YAML | `clickhouse.cluster.logger`; operator 0.0.7 default: trace, 50 files of 1000M | the operator *(not verified yet)* | PVC, 100Gi; server log files on the same PVC *(not verified yet)* | yes: chart 2.1.2, operator 0.0.7 |
+| [Langfuse 2.x](#langfuse-chart-2x) (ClickHouse operator) | `langfuse-clickhouse-0-0-0` *(name not verified yet)* | `clickhouse-server` | none passed: the operator's client config (`default`, port 9001, password from the pod's env) | `clickhouse.cluster.settings`, YAML | `clickhouse.cluster.settings.logger` (charts up to 2.1.2 ignore `clickhouse.cluster.logger`); operator 0.0.7 default: trace, 50 files of 1000M | the operator *(not verified yet)* | PVC, 100Gi; server log files on the same PVC *(not verified yet)* | yes: chart 2.1.2, operator 0.0.7 |
 | [Langfuse 1.x](#langfuse-chart-1x) (Bitnami ClickHouse 8.0.5) | `langfuse-clickhouse-shard0-0`, `-1`, `-2`: 3 pods | `clickhouse` | `CLICKHOUSE_ADMIN_USER` + `CLICKHOUSE_ADMIN_PASSWORD` | `clickhouse.extraOverrides`, one XML string | the same string, `<logger>` | StatefulSet, one pod at a time *(not verified yet)* | one PVC per pod, 8Gi | yes: Langfuse 1.5.41 values, Bitnami 8.0.5 |
 | [ClickStack 2.x, 3.x](#clickstack-chart-2x-and-3x) (ClickHouse operator) | `clickstack-clickhouse-clickhouse-0-0-0` *(not verified yet)* | `clickhouse-server` | none passed: the operator's client config (`default`) | `clickhouse.cluster.spec.settings.extraConfig`, YAML; 3.4.0 sets 7 days on five logs | `clickhouse.cluster.spec.settings.logger`; 3.4.0: information, 10 files of 100M | the operator *(not verified yet)* | PVC, 10Gi (Keeper: 5Gi) | yes: chart 3.4.0 defaults |
 | [ClickStack 1.x](#clickstack-chart-1x), hdx-oss-v2 | `<fullname>-clickhouse-<hash>-<id>` (a Deployment) | `clickhouse` | none passed: `default` from localhost | no value: a Kustomize post-renderer | the same post-renderer | Deployment | *not verified yet* | no |
@@ -104,18 +104,21 @@ operator gives `default` all grants. So diskvet passes no login, and
 either.
 
 **TTL and logger.** The chart maps `clickhouse.cluster.settings` to the
-operator's `extraConfig` and `clickhouse.cluster.logger` to its logger
-settings. Both take **YAML, not XML**. Add to the values you deploy Langfuse
-with:
+operator's `extraConfig`, which the operator writes to
+`config.d/99-extra-config.yaml`. It takes **YAML, not XML**, and it also
+takes the logger: the operator's own logger settings are in the pod's main
+`config.yaml`, and the `config.d` file wins. Released charts up to 2.1.2 have
+no `clickhouse.cluster.logger` value (it is ignored); the chart's main branch
+adds one. Add to the values you deploy Langfuse with:
 
 ```yaml
 clickhouse:
   cluster:
-    logger:
-      level: information
-      size: "100M"
-      count: 10
     settings:
+      logger:
+        level: information
+        size: "100M"
+        count: 10
       trace_log:
         ttl: "event_date + INTERVAL 7 DAY DELETE"
 ```
