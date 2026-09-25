@@ -932,7 +932,8 @@ function drop_block(verb, fqname, bytes,   s) {
 function logs_yaml(k,   i, s, p) {
     s = ""; p = spaces(k)
     for (i = 1; i <= tn; i++) {
-        s = s p ((tname[i] ~ /^[A-Za-z0-9_]+$/) ? tname[i] : yq(tname[i])) ":\n"
+        # the "" keeps "(" off the variable: busybox awk up to 1.33 reads "p (" as a call
+        s = s p "" ((tname[i] ~ /^[A-Za-z0-9_]+$/) ? tname[i] : yq(tname[i])) ":\n"
         if (teng[i] != "") s = s p "  engine: " yq(teng[i]) "\n"
         else s = s p "  ttl: " yq(tcol[i] " + INTERVAL " ttl_days " DAY DELETE") "\n"
     }
@@ -975,7 +976,9 @@ function fixb_text(lx,   v, s) {
     if (v == "altinity") {
         if (product == "signoz") {
             s = "This pod is run by the Altinity operator (SigNoz chart). Add this to the values you deploy SigNoz with. The file name must sort after the operator's 01-clickhouse-* files."
-            s = s " Logs that already have a TTL from the chart are changed with `clickhouse.clickhouseOperator.<log>.ttl` (days), never here: a second definition of those logs stops ClickHouse from starting.\n"
+            # the chart's keys are camelCase: clickhouseOperator.queryLog.ttl for query_log
+            s = s " Logs that already have a TTL from the chart are changed with `clickhouse.clickhouseOperator.<logName>.ttl` (days; the log name in camelCase, such as `queryLog` for query_log),"
+            s = s " never here: a second definition of those logs stops ClickHouse from starting.\n"
             return s "```yaml\nclickhouse:\n  files:\n    config.d/zz-diskvet-ttl.xml: |\n" ind(lx, spaces(8)) "```\n"
         }
         s = "This pod is run by the Altinity operator (" grp_text("ClickHouseInstallation", "chi") "). Add the file to `spec.configuration.files` of that resource, or to the Helm values that render it"
@@ -997,7 +1000,7 @@ function fixb_text(lx,   v, s) {
         s = "This pod comes from Bitnami ClickHouse chart 9.x. Add this to your values (when the chart is a subchart, as in trigger.dev up to 4.5.9, put it under `clickhouse:`)."
         s = s " The name starts with 00- so it loads before the chart's 08-sampling.xml: logs the chart turned off stay off."
         s = s " Chart 9.1 and later turns most system logs off, but their old tables stay on disk and never shrink: see which ones are no longer written with"
-        s = s " `SELECT table, max(modification_time) AS last_write FROM system.parts WHERE database = 'system' AND active GROUP BY table ORDER BY last_write;` and DROP those instead.\n"
+        s = s " `SELECT table, max(modification_time) AS last_write FROM system.parts WHERE database = 'system' AND active GROUP BY table ORDER BY last_write;` and DROP those instead (irreversible, safe for your data: ClickHouse no longer writes to them).\n"
         return s "```yaml\nconfigdFiles:\n  00-diskvet-ttl.xml: |\n" ind(lx, spaces(4)) "```\n"
     }
     if (v == "plain" && kflavor == "plain" && product == "clickstack") {
@@ -1012,6 +1015,30 @@ function fixb_text(lx,   v, s) {
     s = s "- Sentry chart up to 28 (bundled ClickHouse): `clickhouse.clickhouse.configmap.configOverride`; the sentry-kubernetes clickhouse chart on its own: `clickhouse.configmap.configOverride`;\n"
     s = s "- other charts: a ConfigMap of your own, mounted with subPath at `/etc/clickhouse-server/conf.d/clickhouse-ttl.xml` (conf.d, because many charts mount config.d as one ConfigMap).\n"
     return s
+}
+
+# Fix B on Kubernetes, after the helm upgrade: who restarts the pod, and the
+# last resort. A pod without a PVC loses its data with every new pod, so it
+# gets no delete line. The Altinity operator 0.27.4 does not restart the pod
+# for a changed file (the kind job; SigNoz ships 0.21.2, not tested). The
+# operators and the Bitnami charts run StatefulSets; a plain pod may have none
+# (then nothing recreates it).
+function fixb_restart(   s, del) {
+    if (kpvc == "")
+        return " Until then, replacing this pod (a helm upgrade that changes it, `" kget " delete pod`, a node drain) deletes its data.\n"
+    del = "`" kget " delete pod -n " kns " " kpod "`"
+    if (kflavor == "plain") {
+        del = del ", but first check that `" kget " describe pod -n " kns " " kpod "` names a StatefulSet under Controlled By:"
+        del = del " it then recreates the pod with the same name and the same PersistentVolumeClaims (about a minute of downtime). A pod that nothing controls is not recreated."
+    } else del = del " (its StatefulSet recreates it with the same volume; about a minute of downtime)."
+    if (kpvc == "?") del = del " A pod without a PersistentVolumeClaim loses its data this way."
+    if (kflavor == "altinity") {
+        s = " The Altinity operator may not restart the pod for a changed file (release 0.27.4 does not), and system logs change only on restart."
+        s = s " Once `" kp " ls /etc/clickhouse-server/config.d` lists zz-diskvet-ttl.xml and the pod has not restarted"
+        return s " (the AGE column of `" kget " get pod -n " kns " " kpod "`), restart it yourself: " del "\n"
+    }
+    s = " The chart or the operator restarts the pod."
+    return s " If the pod has not restarted within 5 minutes (the AGE column of `" kget " get pod -n " kns " " kpod "`), restart it yourself: " del "\n"
 }
 
 # Check 3 on Kubernetes: more room for the data volume. A PVC an operator owns
@@ -1125,12 +1152,15 @@ function check1(   i, f, name, is_old, has_ttl, tdays, b, rows, od, dcol, pexpr,
         # Kubernetes: the config goes in through the chart (or the operator's
         # resource), one variant per chart, and the pod restarts
         fixb_printed = 1
-        s = s "\n**Fix B: stop it coming back.** Safe; the ClickHouse pod restarts (about a minute; with several replicas, one at a time). Keeps " ttl_days " days of each log (change with --ttl-days).\n"
+        s = s "\n**Fix B: stop it coming back.** "
+        # without a PVC the data is on an emptyDir or in the container: gone with the pod
+        if (kpvc == "") s = s "Not safe on this pod yet: it mounts no PersistentVolumeClaim, so the restart this fix needs deletes all ClickHouse data (unless the data is on a hostPath volume). Turn persistence on first (Heads-up for Kubernetes, above)."
+        else if (kpvc == "?") s = s "Safe if the pod keeps its data on a PersistentVolumeClaim (on an emptyDir or in the container, the restart deletes it); the ClickHouse pod restarts (about a minute; with several replicas, one at a time)."
+        else s = s "Safe; the ClickHouse pod restarts (about a minute; with several replicas, one at a time)."
+        s = s " Keeps " ttl_days " days of each log (change with --ttl-days).\n"
         s = s fixb_text("<clickhouse>\n    <!-- " name_ver ": TTL for system logs that had none -->\n" xml "</clickhouse>\n")
-        s = s "\nThen run your usual `helm upgrade`: `helm list -n " kns hctx "` shows the release, and if you don't have your values file,"
-        s = s " `helm get values RELEASE -n " kns hctx " -o yaml > values.yaml` saves the values in use. The chart or the operator restarts the pod."
-        s = s " If the pod has not restarted within 5 minutes (the AGE column of `" kget " get pod -n " kns " " kpod "`), restart it yourself:"
-        s = s " `" kget " delete pod -n " kns " " kpod "` (its StatefulSet recreates it with the same volume; about a minute of downtime).\n\n"
+        s = s "\n" ((kpvc == "") ? "Once the pod keeps its data on a PersistentVolumeClaim, run" : "Then run") " your usual `helm upgrade`: `helm list -n " kns hctx "` shows the release, and if you don't have your values file,"
+        s = s " `helm get values RELEASE -n " kns hctx " -o yaml > values.yaml` saves the values in use." fixb_restart() "\n"
         s = s "On restart ClickHouse renames every changed log to `<name>_0` (its old rows stay there) and starts a new table with the TTL."
         s = s " Do Fix A first so these copies are small, then run this report again: it lists the copies to drop.\n"
         s = s "If the pod crash-loops and `" kget " logs -n " kns " " kpod " -c " kctr " --previous` says `TTL parameters should be specified directly inside 'engine'`,"
@@ -1207,7 +1237,7 @@ function check2(   i, f, s, total, free, parts, inact, det, used, inparts, notin
         s = s "\nSee what takes the space (read-only, inside the pod):\n"
         s = s "```sh\n" kp " sh -c 'du -xk -d 2 " dd_path " 2>/dev/null | sort -n | tail -15; du -sk /var/log/clickhouse-server 2>/dev/null; df -k " dd_path " /var/log/clickhouse-server 2>/dev/null'\n```\n"
         s = s "The usual finds: backup/ or shadow/ (local backups: delete them with the tool that made them, such as `clickhouse-backup delete local <name>`,"
-        s = s " or `ALTER TABLE <table> UNFREEZE WITH NAME '<name>'` for ALTER TABLE ... FREEZE), tmp/, or server log files when df shows both paths on the same file system."
+        s = s " or `ALTER TABLE <table> UNFREEZE WITH NAME '<name>'` for ALTER TABLE ... FREEZE; irreversible: that backup is gone), tmp/, or server log files when df shows both paths on the same file system."
         s = s " Container console logs are not the cause on Kubernetes: the kubelet rotates them (10 MiB x 5 per container by default)."
         s = s " If the volume is simply too small for your data, see check 3.\n"
     } else if (kt) {
@@ -1494,10 +1524,13 @@ function report(   i, s, notes) {
     if (notes != "") print "### Heads-up for your version\n" notes
     if (kt) {
         notes = ""
+        # an emptyDir and the container layer go with the pod: any new pod starts empty
         if (kpvc == "")
-            notes = notes "- This pod mounts no PersistentVolumeClaim: ClickHouse data is on the node's disk (emptyDir or the container layer), and the sizes above are the node's. The data is lost when the pod moves to another node, and a full node disk makes the kubelet evict pods before ClickHouse reports an error. Turn persistence on in the chart (Bitnami, IMIO Plausible: `persistence.enabled`; sentry-kubernetes clickhouse chart: `clickhouse.persistentVolumeClaim.enabled`). Existing data does not move to the new volume by itself.\n"
+            notes = notes "- This pod mounts no PersistentVolumeClaim: ClickHouse data is on the node's disk (an emptyDir, the container layer or a hostPath volume), and the disk sizes in this report are the node's. Unless it is a hostPath volume, the data is lost whenever the pod is replaced: a helm upgrade that changes it, `" kget " delete pod`, a node drain. A full node disk makes the kubelet evict pods before ClickHouse reports an error. Turn persistence on in the chart (Bitnami, IMIO Plausible: `persistence.enabled`; sentry-kubernetes clickhouse chart: `clickhouse.persistentVolumeClaim.enabled`). Existing data does not move to the new volume by itself.\n"
         if (replicated + 0 == 1) {
+            # operator 0.0.7 sets no clickhouse.com/cluster label (the kind job), only the role label
             if (kflavor == "official" && kgroup != "") s = kget " get pods -n " kns " -l clickhouse.com/cluster=" kgroup ",clickhouse.com/role=clickhouse-server"
+            else if (kflavor == "official") s = kget " get pods -n " kns " -l clickhouse.com/role=clickhouse-server"
             else if (kflavor == "altinity" && kgroup != "") s = kget " get pods -n " kns " -l clickhouse.altinity.com/chi=" kgroup
             else if (kflavor ~ /^bitnami/) s = kget " get pods -n " kns " -l app.kubernetes.io/name=clickhouse,app.kubernetes.io/component=clickhouse"
             else s = kget " get pods -n " kns

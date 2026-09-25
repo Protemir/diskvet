@@ -46,6 +46,72 @@ else
     if [ "$n" -ge 7 ]; then ok "check_payload.sh rejects bad_payload.json ($n findings)"; else fail "check_payload.sh found only $n problems in bad_payload.json"; fi
 fi
 
+echo "== the render awk: no \"(\" right after a variable (busybox awk up to 1.33)"
+# busybox awk up to 1.33 reads "name (" as a call of a function "name", so
+# `s = s p ((x) ? a : b)` stops the render with "Call to undefined function"
+# (busybox 1.35 and later, mawk and gawk take it as a concatenation). This
+# lint reads the render awk of diskvet.sh (between its __RENDER_AWK__ lines)
+# without strings, regex literals and comments, and prints every name before
+# a "(" that is not a keyword, a builtin or a function of the program.
+cat >"$out/parenlint.awk" <<'EOF'
+BEGIN {
+    split("if while for do else return in delete print printf getline next exit function func BEGIN END " \
+        "length substr index split sub gsub match sprintf sin cos atan2 exp log sqrt int rand srand tolower toupper system close fflush", w, " ")
+    for (i in w) known[w[i]] = 1
+}
+FNR == 1 { on = 0 }
+/^cat >"\$tmp\/render\.awk" <<'__RENDER_AWK__'$/ { on = 1; next }
+/^__RENDER_AWK__$/ { on = 0; next }
+!on { next }
+{ src[++nl] = $0; lno[nl] = FNR; if (match($0, /^function [A-Za-z_][A-Za-z0-9_]*/)) known[substr($0, 10, RLENGTH - 9)] = 1 }
+END {
+    for (k = 1; k <= nl; k++) {
+        t = strip(src[k])
+        while (match(t, /[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
+            nm = substr(t, RSTART, RLENGTH - 1); sub(/[ \t]+$/, "", nm)
+            pre = (RSTART > 1) ? substr(t, RSTART - 1, 1) : ""
+            if (pre !~ /[A-Za-z0-9_.]/ && !(nm in known)) { print "line " lno[k] ": " nm " (: " src[k]; bad++ }
+            t = substr(t, RSTART + RLENGTH)
+        }
+    }
+    exit bad ? 1 : 0
+}
+# the line without its strings (each becomes ""), regex literals (//) and comment
+function strip(s,   out, i, c, n, last) {
+    out = ""; n = length(s); last = ""
+    for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\"") {
+            for (i++; i <= n; i++) { c = substr(s, i, 1); if (c == "\\") i++; else if (c == "\"") break }
+            out = out "\"\""; last = "\""; continue
+        }
+        if (c == "#") break
+        if (c == "/" && (last == "" || index("(,~!&|{};=", last))) {
+            for (i++; i <= n; i++) {
+                c = substr(s, i, 1)
+                if (c == "\\") i++
+                else if (c == "[") { i++; if (substr(s, i, 1) == "^") i++; if (substr(s, i, 1) == "]") i++; while (i <= n && substr(s, i, 1) != "]") i++ }
+                else if (c == "/") break
+            }
+            out = out "//"; last = "/"; continue
+        }
+        out = out c
+        if (c != " " && c != "\t") last = c
+    }
+    return out
+}
+EOF
+if awk -f "$out/parenlint.awk" diskvet.sh >"$out/paren.txt" 2>&1; then ok "the render awk has no name followed by ( that busybox 1.33 reads as a call"; else fail "the render awk: $(cat "$out/paren.txt")"; fi
+# the lint itself: the line of diskvet 0.3.0 that broke busybox 1.33, and friends
+# shellcheck disable=SC2016
+for m in 's = s p ((x) ? a : b) ":"' 's = s (x)' 'q = a / b (c)' 'if (x ~ /y/) s = s p (1)'; do
+    printf 'cat >"$tmp/render.awk" <<'\''__RENDER_AWK__'\''\nfunction f(x) { return x }\n{ %s }\n__RENDER_AWK__\n' "$m" >"$out/paren.sh"
+    if awk -f "$out/parenlint.awk" "$out/paren.sh" >/dev/null 2>&1; then fail "the paren lint misses: $m"; else ok "the paren lint catches: $m"; fi
+done
+# shellcheck disable=SC2016
+printf 'cat >"$tmp/render.awk" <<'\''__RENDER_AWK__'\''\nfunction f(x) { return x }\n{ s = s p "" ((x) ? a : b); n = length (s) + f(1) / (2); if ($0 ~ /a (b)/) y = "c (d)" } # e (f)\n__RENDER_AWK__\n' >"$out/paren.sh"
+if awk -f "$out/parenlint.awk" "$out/paren.sh" >"$out/paren.txt" 2>&1; then ok "the paren lint passes strings, regexes, comments, builtins and functions"; else fail "the paren lint refuses good awk: $(cat "$out/paren.txt")"; fi
+
 echo "== alex.tsv: Langfuse on 25.12, the example from the plan"
 r=$out/alex.md
 sh diskvet.sh report --replay tests/fixtures/alex.tsv --docker langfuse-clickhouse-1 >"$r" 2>"$out/alex.err"

@@ -658,6 +658,8 @@ fresh
 sh diskvet.sh report --replay tests/fixtures/alex.tsv --k8s lf/ch-0 --container ch --context ctx-x </dev/null >"$W/rep.md" 2>/dev/null; rc_is $? 0 "--replay alex.tsv --k8s lf/ch-0: exit 0"
 has "$W/rep.md" "kubectl --context ctx-x exec -n lf ch-0 -c ch -- sh -c 'touch /var/lib/clickhouse/flags/force_drop_table && chmod 666 /var/lib/clickhouse/flags/force_drop_table'" "... rendered as a report about that pod"
 hasnt "$W/rep.md" "Heads-up for Kubernetes" "... its volumes are unknown: no volume heads-up"
+has "$W/rep.md" "**Fix B: stop it coming back.** Safe if the pod keeps its data on a PersistentVolumeClaim (on an emptyDir or in the container, the restart deletes it);" "... its volumes are unknown: Fix B is safe only with a PVC"
+has "$W/rep.md" "A pod without a PersistentVolumeClaim loses its data this way." "... and so is the delete pod line"
 if [ -s "$KLOG" ]; then fail "--replay --k8s called kubectl: $(sed -n '1p' "$KLOG")"; else ok "... and no kubectl call"; fi
 sh diskvet.sh --print-payload --replay "$W/raw.untyped" </dev/null >"$W/p.json" 2>/dev/null
 if sh tests/check_payload.sh "$W/p.json" dv-op lf-langfuse-clickhouse-0-0-0 clickhouse-server clickhouse-storage-volume-lf-langfuse-clickhouse-0-0-0 lf-langfuse >"$W/p.txt" 2>&1; then
@@ -786,6 +788,8 @@ hasnt "$f" "See what takes the space (read-only, inside the pod)" "official: not
 hasnt "$f" "patch pvc" "official: no patch pvc (the operator owns the volume)"
 has "$f" "Or give the volume more room: it belongs to the operator, so grow it through the operator's resource, not the PVC (keys per chart: the Kubernetes page linked above). \`kubectl get pvc -n lf clickhouse-storage-volume-langfuse-clickhouse-0-0-0\` shows its size and StorageClass." "official: check 3 grows the volume through the operator"
 has "$f" "$fixb_end lf\` shows the release" "official+langfuse: the common ending"
+has "$f" "The chart or the operator restarts the pod. If the pod has not restarted within 5 minutes (the AGE column of \`kubectl get pod -n lf langfuse-clickhouse-0-0-0\`), restart it yourself: \`kubectl delete pod -n lf langfuse-clickhouse-0-0-0\` (its StatefulSet recreates it with the same volume; about a minute of downtime)." "official: the operator restarts the pod; the delete line as the last resort"
+has "$f" "**Fix B: stop it coming back.** Safe; the ClickHouse pod restarts" "official, with a PVC: Fix B is safe"
 has "$f" "If the pod crash-loops and \`kubectl logs -n lf langfuse-clickhouse-0-0-0 -c clickhouse-server --previous\` says" "official+langfuse: the crash hint"
 
 flavor official-clickstack official clickstack
@@ -829,6 +833,11 @@ f=$W/f.altinity-signoz.md
 yamlok "$f" "altinity+signoz"
 lines "$f" "altinity+signoz: config.d/zz-diskvet-ttl.xml under clickhouse.files" '```yaml' 'clickhouse:' '  files:' '    config.d/zz-diskvet-ttl.xml: |' '        <clickhouse>'
 has "$f" "never here: a second definition of those logs stops ClickHouse from starting." "altinity+signoz: the text"
+# SigNoz's clickhouse chart: clickhouseOperator.queryLog.ttl, .partLog.ttl, ...
+has "$f" "are changed with \`clickhouse.clickhouseOperator.<logName>.ttl\` (days; the log name in camelCase, such as \`queryLog\` for query_log)," "altinity+signoz: the chart's TTL keys are camelCase"
+altinity_restart="The Altinity operator may not restart the pod for a changed file (release 0.27.4 does not), and system logs change only on restart. Once \`kubectl exec -n signoz chi-signoz-clickhouse-cluster-0-0-0 -c clickhouse -- ls /etc/clickhouse-server/config.d\` lists zz-diskvet-ttl.xml and the pod has not restarted (the AGE column of \`kubectl get pod -n signoz chi-signoz-clickhouse-cluster-0-0-0\`), restart it yourself: \`kubectl delete pod -n signoz chi-signoz-clickhouse-cluster-0-0-0\` (its StatefulSet recreates it with the same volume; about a minute of downtime)."
+has "$f" "$altinity_restart" "altinity+signoz: the operator does not restart the pod; restart it once the file is in the pod"
+hasnt "$f" "The chart or the operator restarts the pod." "altinity+signoz: no wait for a restart that does not come"
 # the block scalar holds exactly the XML a plain pod gets, indented
 awk '/^    config.d\/zz-diskvet-ttl.xml: [|]$/ { on = 1; next } on && /^```$/ { exit }
      on { if (substr($0, 1, 8) != "        ") print "NOT INDENTED BY 8: " $0; else print substr($0, 9) }' "$f" >"$W/signoz.xml"
@@ -849,6 +858,8 @@ yamlok "$f" "altinity+other"
 lines "$f" "altinity+other: config.d/zz-diskvet-ttl.xml under spec.configuration.files" '```yaml' 'spec:' '  configuration:' '    files:' '      config.d/zz-diskvet-ttl.xml: |' '          <clickhouse>'
 has "$f" "This pod is run by the Altinity operator (ClickHouseInstallation signoz-clickhouse in namespace signoz)." "altinity+other: the ClickHouseInstallation"
 has "$f" "To change the resource directly: \`kubectl edit chi -n signoz signoz-clickhouse\` (a helm upgrade overwrites manual edits)." "altinity+other: kubectl edit chi"
+has "$f" "$altinity_restart" "altinity+other: the operator does not restart the pod; restart it once the file is in the pod"
+hasnt "$f" "The chart or the operator restarts the pod." "altinity+other: no wait for a restart that does not come"
 
 # Langfuse 1.x on the Bitnami chart's default 8Gi volume
 flavor bitnami8 bitnami8 langfuse 0 0 8589934592 1073741824
@@ -881,6 +892,7 @@ f=$W/f.bitnami9.md
 yamlok "$f" "bitnami9"
 lines "$f" "bitnami9: 00-diskvet-ttl.xml under configdFiles" '```yaml' 'configdFiles:' '  00-diskvet-ttl.xml: |' '    <clickhouse>'
 has "$f" "The name starts with 00- so it loads before the chart's 08-sampling.xml: logs the chart turned off stay off." "bitnami9: the text"
+has "$f" "and DROP those instead (irreversible, safe for your data: ClickHouse no longer writes to them)." "bitnami9: the DROP of old log tables says it is irreversible"
 has "$f" "\`SELECT table, max(modification_time) AS last_write FROM system.parts WHERE database = 'system' AND active GROUP BY table ORDER BY last_write;\`" "bitnami9: the SELECT for logs no longer written"
 hasnt "$f" "- trigger.dev chart 4.5.10 and later: values" "bitnami9: not the plain Fix B"
 has "$f" "kubectl patch pvc -n trigger data-trigger-clickhouse-shard0-0 -p " "bitnami9: the patch pvc line"
@@ -897,6 +909,10 @@ has "$f" "- other charts: a ConfigMap of your own, mounted with subPath at \`/et
 hasnt "$f" '```yaml' "plain: no YAML"
 has "$f" "Or give the volume more room: this pod mounts several volumes (data-dv-plain-0, logs-dv-plain-0); \`kubectl get pvc -n dv-plain\` shows them. Grow the one mounted at /var/lib/clickhouse/ with \`kubectl patch pvc -n dv-plain <pvc> -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"300Gi\"}}}}'\` if its StorageClass allows expansion. The patch can't be undone (a volume never shrinks)." "plain, two PVCs: the several-volumes line"
 has "$f" "See what takes the space (read-only, inside the pod)" "plain: the generic check 2 text"
+has "$f" "or \`ALTER TABLE <table> UNFREEZE WITH NAME '<name>'\` for ALTER TABLE ... FREEZE; irreversible: that backup is gone)" "plain: deleting a local backup says it is irreversible"
+# a plain pod may have no StatefulSet: nothing recreates a bare pod
+has "$f" "restart it yourself: \`kubectl delete pod -n dv-plain dv-plain-0\`, but first check that \`kubectl describe pod -n dv-plain dv-plain-0\` names a StatefulSet under Controlled By: it then recreates the pod with the same name and the same PersistentVolumeClaims (about a minute of downtime). A pod that nothing controls is not recreated." "plain: the delete line only for a pod of a StatefulSet"
+hasnt "$f" "its StatefulSet recreates it" "plain: no StatefulSet taken for granted"
 flavor plain-clickstack plain clickstack
 f=$W/f.plain-clickstack.md
 has "$f" "This looks like ClickStack chart 1.x (or hdx-oss-v2), which has no value for extra config files." "plain+clickstack: ClickStack 1.x"
@@ -906,6 +922,15 @@ flavor plain-nopvc plain-nopvc other
 f=$W/f.plain-nopvc.md
 has "$f" "- This pod mounts no PersistentVolumeClaim: ClickHouse data is on the node's disk" "plain-nopvc: the no-PVC heads-up"
 hasnt "$f" "Or give the volume more room" "plain-nopvc: no volume line in check 3"
+# without a PVC every new pod starts empty: Fix B is not safe, and no delete line
+has "$f" "Unless it is a hostPath volume, the data is lost whenever the pod is replaced: a helm upgrade that changes it, \`kubectl delete pod\`, a node drain." "plain-nopvc: the heads-up says any new pod loses the data"
+has "$f" "**Fix B: stop it coming back.** Not safe on this pod yet: it mounts no PersistentVolumeClaim, so the restart this fix needs deletes all ClickHouse data (unless the data is on a hostPath volume). Turn persistence on first (Heads-up for Kubernetes, above)." "plain-nopvc: Fix B says it is not safe"
+has "$f" "Once the pod keeps its data on a PersistentVolumeClaim, run your usual \`helm upgrade\`" "plain-nopvc: the helm upgrade only after persistence is on"
+has "$f" "Until then, replacing this pod (a helm upgrade that changes it, \`kubectl delete pod\`, a node drain) deletes its data." "plain-nopvc: the restart deletes the data"
+hasnt "$f" "Safe;" "plain-nopvc: nothing called safe"
+hasnt "$f" "same volume" "plain-nopvc: no same volume"
+hasnt "$f" "kubectl delete pod -n sentry" "plain-nopvc: no delete pod command"
+hasnt "$f" "restart it yourself" "plain-nopvc: no restart it yourself"
 for x in "official|kubectl get pods -n lf -l clickhouse.com/cluster=langfuse-clickhouse,clickhouse.com/role=clickhouse-server|lf" \
         "altinity|kubectl get pods -n signoz -l clickhouse.altinity.com/chi=signoz-clickhouse|signoz" \
         "bitnami8|kubectl get pods -n langfuse -l app.kubernetes.io/name=clickhouse,app.kubernetes.io/component=clickhouse|langfuse" \
@@ -916,6 +941,9 @@ for x in "official|kubectl get pods -n lf -l clickhouse.com/cluster=langfuse-cli
     has "$W/f.$fl-replicated.md" "$sel" "$fl, replicated=1: the selector line"
     has "$W/f.$fl-replicated.md" "run diskvet with \`--k8s $xns/<pod>\` on each" "$fl, replicated=1: one run per pod"
 done
+# operator 0.0.7 pods have no clickhouse.com/cluster label (seen on kind): the role label still lists the servers
+flavor official-nogroup-replicated "$W/target.nogroup" other 1
+has "$W/f.official-nogroup-replicated.md" "List them with \`kubectl get pods -n lf -l clickhouse.com/role=clickhouse-server\` and run diskvet" "official, no group, replicated=1: the role selector"
 
 echo "== the printed client commands work: pasted into sh and busybox sh, through the fake kubectl"
 # "How to run the fixes" of the Bitnami and plain reports, run as a person would
