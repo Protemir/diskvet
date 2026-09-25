@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>diskvet：Langfuse、SigNoz、ClickStack 中 ClickHouse® 的磁盘体检</title>
+  <meta name="description" content="一个免费的只读脚本：找出自托管 Langfuse、SigNoz 和 ClickStack 里的 ClickHouse® 磁盘被什么占满，并输出具体的修复命令。">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <meta property="og:title" content="diskvet：Langfuse、SigNoz、ClickStack 中 ClickHouse® 的只读磁盘体检">
+  <meta property="og:description" content="找出你自托管的 Langfuse、SigNoz 或 ClickStack 中 ClickHouse® 的磁盘被什么占满，并输出具体的修复命令。免费、开源。">
+  <meta property="og:url" content="https://diskvet.dev/zh/">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="zh_CN">
+  <link rel="canonical" href="https://diskvet.dev/zh/">
+  <link rel="alternate" hreflang="en" href="https://diskvet.dev/">
+  <link rel="alternate" hreflang="ru" href="https://diskvet.dev/ru/">
+  <link rel="alternate" hreflang="zh-Hans" href="https://diskvet.dev/zh/">
+  <link rel="alternate" hreflang="x-default" href="https://diskvet.dev/">
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="index.html">diskvet</a>
+    <nav aria-label="主导航">
+      <ul>
+        <li><a href="index.html" aria-current="page">首页</a></li>
+        <li><a href="https://github.com/Protemir/diskvet/blob/main/docs/zh/guide.md">指南</a></li>
+        <li><a href="https://github.com/Protemir/diskvet/discussions/1">抢先体验</a></li>
+        <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      </ul>
+    </nav>
+    <nav class="langs" aria-label="Language">
+      <a href="../" hreflang="en" lang="en">English</a>
+      <a href="../ru/" hreflang="ru" lang="ru">Русский</a>
+      <a href="./" hreflang="zh-Hans" lang="zh-Hans" aria-current="page">中文</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap">
+
+    <section aria-labelledby="hero-title">
+      <h1 id="hero-title">自托管 Langfuse、SigNoz 和 ClickStack 中 ClickHouse® 的只读磁盘体检</h1>
+      <p class="lead">磁盘满了，可你自己的数据并不多。空间通常被 ClickHouse 自带的系统日志表（system log tables）占掉，这些表默认没有大小上限。diskvet
+        会告诉你磁盘空间被什么占用，并输出具体的修复命令。它不会自动执行任何操作，每条命令都由你自己运行。</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="#quick-start">快速开始</a>
+        <a class="btn btn-secondary" href="https://github.com/Protemir/diskvet/blob/main/docs/zh/guide.md">手动修复：看指南</a>
+        <a class="btn btn-secondary" href="https://github.com/Protemir/diskvet">GitHub</a>
+      </div>
+      <p class="muted small">免费，Apache-2.0 许可，无需注册。只有两个短小的文件，运行前可以先读一遍。脚本只和你的
+        ClickHouse 通信，不会把任何数据发到别处。</p>
+    </section>
+
+    <section aria-labelledby="story-title">
+      <h2 id="story-title">典型案例</h2>
+      <ul>
+        <li><code>system.trace_log</code> 占了 66.86 GiB，而 Langfuse 自己的表只有约 51 MiB（<a href="https://github.com/langfuse/langfuse/issues/13123">langfuse#13123</a>）；</li>
+        <li>系统日志 80+ GB，而遥测数据不到 500 MB（<a href="https://github.com/SigNoz/signoz/issues/12050">SigNoz#12050</a>）；</li>
+        <li>一个 10 Gi 的卷 10 天就满了（<a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">ClickStack-helm-charts#275</a>）。</li>
+      </ul>
+      <p>主要的修法大家都知道：对日志表执行 <code>TRUNCATE</code>，再加上 TTL（生存时间）。报告还会指出这个修法在实践中会踩到的坑：<code>TRUNCATE</code>
+        的 50 GB 限制、重启后留下的 <code>*_log_N</code> 旧表、<code>opentelemetry_span_log</code>
+        的特殊配置、没有轮转的 Docker 日志，以及已经删除但仍占着空间的行。</p>
+    </section>
+
+    <section aria-labelledby="quick-start">
+      <h2 id="quick-start">快速开始：用 docker compose 部署的 Langfuse（30 秒）</h2>
+      <p>在运行 Langfuse <code>docker-compose.yml</code> 的机器上：</p>
+<pre><code>cd langfuse                     # Langfuse 的 docker-compose.yml 所在目录
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/SHA256SUMS
+sha256sum -c SHA256SUMS         # 可选: 校验两个文件与发布版本一致
+less checks.sql                 # 先读一遍: 只有针对 system.* 的 SELECT
+
+sh diskvet.sh report --docker auto &gt; report.md</code></pre>
+      <p><code>--docker auto</code> 会自己找到 ClickHouse 容器，并在容器内运行
+        <code>clickhouse-client</code>，所以宿主机上既不需要装客户端，也不需要开放端口。不加
+        <code>--user</code> 时，它使用容器自身的 <code>CLICKHOUSE_USER</code> / <code>CLICKHOUSE_PASSWORD</code>，密码不会离开容器。</p>
+      <p>其他连接方式：</p>
+<pre><code>sh diskvet.sh report --docker signoz-clickhouse                          # 按名称指定容器
+sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # 本机的 clickhouse-client</code></pre>
+      <p class="small muted">需要 POSIX <code>sh</code>、<code>awk</code>、<code>sed</code>、<code>od</code>、<code>date</code>，以及
+        <code>docker</code> 或 <code>clickhouse-client</code>。不需要 <code>jq</code>，也不需要
+        Python。脚本输出的报告是英文的。最新版本见 <a href="https://github.com/Protemir/diskvet/releases/latest">GitHub Releases</a>。</p>
+    </section>
+
+    <section aria-labelledby="checks-title">
+      <h2 id="checks-title">检查项</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">#</th><th scope="col">检查项</th><th scope="col">读取来源</th><th scope="col">报告中的典型修复</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>没有 TTL 的系统日志</td><td><code>system.tables</code>、<code>system.parts</code></td><td><code>TRUNCATE</code>（超过 50 GB 时配合一次性的标志文件）、生成好的 <code>config.d</code> TTL 配置文件、需要删除的 <code>*_log_N</code> 旧表</td></tr>
+            <tr><td>2</td><td>ClickHouse 表数据片段（part）之外的磁盘占用</td><td><code>system.disks</code> 对比所有数据片段</td><td>Docker 日志轮转，以及其他值得排查的位置</td></tr>
+            <tr><td>3</td><td>磁盘使用率和粗略预测</td><td><code>system.disks</code>、<code>system.asynchronous_metric_log</code></td><td>优先释放哪些空间</td></tr>
+            <tr><td>4</td><td>每日增长</td><td><code>system.part_log</code></td><td>24 小时内哪张表写入最多</td></tr>
+            <tr><td>5</td><td>数据片段过多</td><td><code>system.parts</code>、<code>system.merge_tree_settings</code>、<code>system.events</code></td><td>距离该表的插入限制还有多远</td></tr>
+            <tr><td>6</td><td>非活动（inactive）和已分离（detached）的数据片段</td><td><code>system.parts</code>、<code>system.detached_parts</code></td><td>卡住的数据片段、<code>DROP DETACHED PART</code></td></tr>
+            <tr><td>7</td><td>已删除的行和卡住的变更（mutation）</td><td><code>system.parts</code>、<code>system.mutations</code></td><td>针对具体分区（partition）的 <code>APPLY DELETED MASK</code>、<code>KILL MUTATION</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>每项检查给出 OK、INFO、WARN 或 CRITICAL 结论，阈值见
+        <a href="https://github.com/Protemir/diskvet#what-it-checks">README</a>。每条修复建议都会注明安全性以及是否需要重启。某项检查的查询失败时，会显示
+        <code>NOT_RUN</code> 和原因，其他检查照常运行。</p>
+    </section>
+
+    <section aria-labelledby="reads-title">
+      <h2 id="reads-title">读取什么，绝不读取什么</h2>
+      <div class="two-col">
+        <div class="card">
+          <h3>会读取</h3>
+          <ul>
+            <li>以下系统表中的元数据：<code>system.tables</code>、<code>system.parts</code>、<code>system.disks</code>、<code>system.detached_parts</code>、<code>system.merge_tree_settings</code>、<code>system.mutations</code>、<code>system.part_log</code>、<code>system.asynchronous_metric_log</code>、<code>system.asynchronous_metrics</code>、<code>system.events</code>；</li>
+            <li>有权限时读取 <code>system.server_settings</code>（仅读取 <code>max_table_size_to_drop</code> 一项）；</li>
+            <li>一条探测查询 <code>SELECT getSetting('readonly')</code>，用来确认会话是只读的。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>绝不读取</h3>
+          <ul>
+            <li>你自己表里的数据行：不对它们做 <code>FROM</code> 或 <code>JOIN</code>，不用表函数，也不用
+              <code>dictGet</code>，测试套件会强制检查这一点；</li>
+            <li><code>system.query_log</code>、查询文本、变更命令和错误文本。</li>
+          </ul>
+          <p class="small muted">本地报告会显示真实的库名和表名，因为执行修复时要用到它们。报告只保存在你的机器上。</p>
+        </div>
+      </div>
+      <h3>两种安全的运行方式</h3>
+      <ul>
+        <li><strong>使用现有用户。</strong>查询以 <code>readonly=2</code> 运行，并设有资源限制（30 秒、10,000 行、2 个线程、500 MB）。如果服务器不允许该用户进入只读模式，脚本会直接停止，不运行任何检查。</li>
+        <li><strong>使用专用用户</strong>，适合需要通过安全审查的场景：只授予上述系统表的最小权限，无法访问业务数据。<a href="https://github.com/Protemir/diskvet#two-ways-to-run-it-safely">具体 SQL 见 README。</a></li>
+      </ul>
+      <p class="small muted">已在官方原版 <code>clickhouse/clickhouse-server</code> 镜像 24.1、24.8、25.12 和 26.9
+        上测试，测试环境模拟了 Langfuse 和 SigNoz 的部署。尚未测试：带副本的集群、Kubernetes、对象存储上的磁盘、macOS。</p>
+    </section>
+
+    <section aria-labelledby="guide-title">
+      <h2 id="guide-title">想手动修复？</h2>
+      <div class="callout">
+        <p><strong><a href="https://github.com/Protemir/diskvet/blob/main/docs/zh/guide.md">自托管 Langfuse 和 SigNoz：ClickHouse 磁盘被占满的原因与解决方法</a></strong></p>
+        <p>内容包括：如何用一条只读查询确认问题、如何立即释放空间，以及如何避开已知的坑、防止问题复发。其中每条命令都在
+          ClickHouse 24.8、25.12 和 26.9 上实际运行过。照着做不需要 diskvet。</p>
+      </div>
+    </section>
+
+    <section aria-labelledby="beta-title">
+      <h2 id="beta-title">每小时体检：10 月免费内测</h2>
+      <p>脚本免费，而且会一直免费。但单次运行无法告诉你磁盘究竟什么时候会满。这正是我现在在做的部分：</p>
+      <ul>
+        <li>每小时一次快照：内容就是 <code>sh diskvet.sh --print-payload</code> 打印的那段 JSON，没有别的；</li>
+        <li>在磁盘写满<strong>之前</strong>发邮件提醒，而且只在状态变化时发送；</li>
+        <li>快照不再送达时发出告警；</li>
+        <li>每周一发一份简短报告。</li>
+      </ul>
+      <p>你不需要自己部署任何服务，也不需要开放端口：由你的服务器主动向外发送一份签名的小快照，没有任何外部连接进来。主机名、IP、用户名、查询文本和错误信息永远不会发送；你自己的表名只会以加盐哈希的形式离开服务器。</p>
+      <div class="callout">
+        <p><strong>想参加？</strong>到
+          <a href="https://github.com/Protemir/diskvet/discussions/1">Early access 讨论帖（#1）</a>留言，说明你的
+          ClickHouse 运行在什么环境里、磁盘大概有多大。可以用中文留言，但回复可能是英文。内测开放时，你会在那里收到回复。请不要在那里写公司名或主机名：这是公开讨论帖。</p>
+        <p class="small muted">内测为期 30 天，之后每小时体检将转为付费套餐，脚本本身仍然免费、开源。位于哈萨克斯坦的服务器目前只能使用本地报告。</p>
+      </div>
+      <p>发现脚本漏掉的问题，或者修复建议有误？请<a href="https://github.com/Protemir/diskvet/issues/new/choose">提交 issue</a>，这是你能提供的最大帮助。可以用中文写，但回复可能是英文。</p>
+    </section>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/blob/main/docs/zh/guide.md">指南</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">反馈问题</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">报告安全漏洞</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet 是免费的开源项目（Apache-2.0）。</p>
+    <p>ClickHouse 是 ClickHouse, Inc. 的注册商标。diskvet 与 ClickHouse, Inc. 无关。Langfuse、SigNoz 和 ClickStack
+      是其各自所有者的商标，仅用于说明兼容性。</p>
+  </div>
+</footer>
+</body>
+</html>

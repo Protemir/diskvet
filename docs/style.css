@@ -116,6 +116,13 @@ a:hover { text-decoration-thickness: 2px; }
   margin: 0;
   padding: 0;
 }
+/* Main menu and the language switcher sit together on the right. */
+.site-header .wrap > nav:not(.langs) { margin-left: auto; }
+.site-header .langs {
+  display: flex;
+  gap: 12px;
+  font-size: 0.875rem;
+}
 .site-header nav a { color: var(--muted); text-decoration: none; }
 .site-header nav a:hover,
 .site-header nav a[aria-current="page"] { color: var(--text); text-decoration: underline; }
