@@ -1,0 +1,63 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  # Every Monday: "latest" moves on, and a new ClickHouse release may rename a
+  # system table column that checks.sql reads.
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    # No server: SQL safety, payload privacy, report rendering from fixtures,
+    # under dash and under busybox ash + busybox awk.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: checks.sql is SELECT from system.* only
+        run: sh tests/check_sql.sh
+      - name: shellcheck (POSIX sh)
+        # preinstalled on ubuntu-latest
+        run: shellcheck -s sh diskvet.sh tests/*.sh
+      - name: Offline tests with dash and mawk
+        run: dash tests/replay.sh
+      - name: Offline tests with busybox ash and busybox awk
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq busybox
+          mkdir -p /tmp/bb
+          busybox --install -s /tmp/bb
+          PATH=/tmp/bb:$PATH busybox sh tests/replay.sh
+
+  clickhouse:
+    # Real servers in Docker: seed problems, run the script from the host and
+    # inside the container, as the Variant B user, then run the fix commands.
+    runs-on: ubuntu-latest
+    needs: offline
+    strategy:
+      fail-fast: false
+      matrix:
+        clickhouse: ["24.8", "25.12", "latest"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pull clickhouse/clickhouse-server:${{ matrix.clickhouse }}
+        run: docker pull -q clickhouse/clickhouse-server:${{ matrix.clickhouse }}
+      - name: Integration test
+        run: sh tests/run.sh "${{ matrix.clickhouse }}"
+      - name: --docker auto with docker compose
+        run: CH_VERSION="${{ matrix.clickhouse }}" sh tests/auto.sh
+      - name: Keep the reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reports-clickhouse-${{ matrix.clickhouse }}
+          path: tests/out/
+          retention-days: 14
