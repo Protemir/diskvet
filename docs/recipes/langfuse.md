@@ -129,7 +129,10 @@ complete `kubectl` lines for that pod.
   The TTL fix goes into `clickhouse.extraOverrides`:
   [Langfuse chart 1.x](kubernetes.md#langfuse-chart-1x).
 
-Not tested on a real cluster yet. The values keys per chart version, how the
+Tested on a kind cluster with the ClickHouse part of the Langfuse chart 2.1.2
+(the ClickHouse operator 0.0.7) and with the Bitnami ClickHouse chart 8.0.5
+that chart 1.x uses, fixes included ([README → Tested on](../../README.md#tested-on));
+not yet with a whole Langfuse install. The values keys per chart version, how the
 pod restarts, a full volume or node disk, and troubleshooting:
 [Kubernetes: ClickHouse chart by chart](kubernetes.md). What diskvet sends to
 the cluster, the permissions it needs and what the API server's audit log

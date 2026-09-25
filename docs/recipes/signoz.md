@@ -97,7 +97,8 @@ complete `kubectl` lines for that pod.
   are changed with `clickhouse.clickhouseOperator.<log>.ttl` instead (not
   verified yet): [SigNoz on Kubernetes](kubernetes.md#signoz).
 
-Not tested on a real cluster yet. The values keys, how the pod restarts, a
+Not tested with the Altinity operator yet (the test suite's kind cluster runs
+the ClickHouse operator, Bitnami and a plain StatefulSet). The values keys, how the pod restarts, a
 full volume or node disk, and troubleshooting:
 [Kubernetes: ClickHouse chart by chart](kubernetes.md). What diskvet sends to
 the cluster, the permissions it needs and what the API server's audit log

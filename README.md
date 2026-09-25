@@ -203,9 +203,11 @@ more): which pod diskvet finds, how it logs in, which Helm values take the
 fixes, how the pod restarts, and a full volume versus a full node disk:
 [Kubernetes: ClickHouse chart by chart](docs/recipes/kubernetes.md).
 
-**Not tested on a real cluster yet.** So far the test suite runs `--k8s` only
-against a fake `kubectl` (see [Tested on](#tested-on)); a test job on a real
-cluster comes next. If you try it, an
+**Tested on a kind cluster, not yet on a managed one.** The test suite runs
+`--k8s` on kind with the ClickHouse operator and the Langfuse chart 2.x, the
+Bitnami chart that Langfuse 1.x uses, and a plain StatefulSet, and runs the
+fixes the reports print (see [Tested on](#tested-on)). SigNoz, ClickStack and
+EKS, GKE or AKS are not tested yet. If you try it there, an
 [issue](https://github.com/Protemir/diskvet/issues/new/choose) with what you
 saw helps a lot.
 
@@ -329,8 +331,9 @@ and `--user` you passed, and for `--print-payload` the constant hashing query.
 It never holds a password, the salt, the SQL of the checks or a result: those
 go through the exec stream (stdin and stdout), and the audit log records the
 request, not the stream. That is why `--password` is refused with `--k8s`: it
-would be part of that URL. (This is how kubectl and the API server work; it is
-not checked against a real audit log yet.)
+would be part of that URL. The test suite checks this in the audit log of a
+kind cluster (Kubernetes 1.37): diskvet's exec lines are there, never with a
+TTY, and none of the pods' passwords and not the salt.
 
 Runtime security tools and audit alerts often watch for `kubectl exec` into
 production pods and for a shell started in a container. They may flag every
@@ -385,7 +388,7 @@ rules:
   verbs: ["get", "list"]        # list: only for --k8s auto
 - apiGroups: [""]
   resources: ["pods/exec"]
-  verbs: ["create", "get"]      # get: API servers that authorize the WebSocket upgrade as GET (unverified)
+  verbs: ["create", "get"]      # get: kubectl's WebSocket exec; create: its older SPDY exec
 ```
 
 Bind it to the user or ServiceAccount that runs diskvet, for example
@@ -629,17 +632,19 @@ These are the traps the report handles for you. Each was checked on ClickHouse
 A clean server with nothing seeded (fresh container, default config) gets OK on
 all seven checks on 24.1, 24.8, 25.12 and 26.9.
 
-`--k8s` has not run on a real Kubernetes cluster yet. What tests it so far:
+`--k8s` is tested by:
 
-| Test | Instead of a cluster | Shells | Coverage |
+| Test | Cluster | Shells | Coverage |
 |---|---|---|---|
-| `tests/k8s_offline.sh` (run by `tests/replay.sh`) | a fake `kubectl` (`tests/fixtures/fake-kubectl/`) that lists hand-written pods (ClickHouse operator, Bitnami, Altinity, plain, sidecars; not recorded from a real cluster yet) and runs every exec, login script included, in the test's own shell; a fake clickhouse-client answers from the fixtures | dash + mawk, busybox ash + busybox awk | finding the pod and every refusal, argument checks, each login branch, the exact kubectl argv with the pinned context, timeouts, error hints, the Kubernetes report text, payload privacy, `--save-raw` and `--replay` |
+| `tests/k8s.sh` (the `kubernetes` CI job) | kind, Kubernetes 1.37 and kubectl 1.37, with the API server's audit log on: the ClickHouse operator 0.0.7 with the ClickHouseCluster of the Langfuse chart 2.1.2 (ClickHouse 26.4), the Bitnami ClickHouse chart 8.0.5 on its own with 2 replicas (25.2), and a plain StatefulSet of `clickhouse/clickhouse-server:25.12` with a sidecar | dash + mawk | `--k8s auto` across namespaces (4 server pods, no Keeper, operator, cert-manager or version-probe pod), a clean report per install with the pod's own login and the Fix B of its chart, only read-only SELECTs in `query_log`, payloads without cluster names, ServiceAccounts with the Role of [Permissions](#permissions), with `get` only and without `pods/exec`, no password or salt in the audit log, `query_log` or `text_log`, unchanged pod specs; then the printed fixes: the flag line and Fix A through the printed clickhouse-client command, the rotated-log `rm` line on the operator's volume, Fix B through the chart (helm template for the operator, `helm upgrade --reuse-values` for Bitnami) with the TTLs checked after the restart, and Fix C |
+| `tests/k8s_offline.sh` (run by `tests/replay.sh`) | a fake `kubectl` (`tests/fixtures/fake-kubectl/`) that lists pods recorded on that kind cluster (operator, Bitnami, plain, kube-system) and hand-written ones (Altinity, Sentry, Bitnami 9, sidecars, jobs), and runs every exec, login script included, in the test's own shell; a fake clickhouse-client answers from the fixtures | dash + mawk, busybox ash + busybox awk | finding the pod and every refusal, argument checks, each login branch, the exact kubectl argv with the pinned context, timeouts, error hints, the Kubernetes report text of every chart, payload privacy, `--save-raw` and `--replay` |
 | `tests/k8s_shim.sh` (run by `tests/run.sh`) | the same fake `kubectl`, whose exec becomes `docker exec -u 101:101` into the test's ClickHouse container | Git Bash | a real ClickHouse 25.12: the same statuses as `--docker`, logins with `CLICKHOUSE_USER` and with Bitnami's admin variables (password in env and in a file), only read-only SELECTs in `query_log`, names hashed in the container, no salt or password in any kubectl command line, and the printed `kubectl exec` flag line works as uid 101 |
 
-Not tested yet: a real Langfuse, SigNoz or ClickStack install, replicated
-clusters, a real Kubernetes cluster (so no Helm chart, operator, API server or
-`kubectl` version), disks on object storage (the script skips remote disks),
-macOS.
+Not tested yet: a real Langfuse, SigNoz or ClickStack install (the kind job
+runs the ClickHouse part of the Langfuse chart only), the Altinity operator,
+the Bitnami chart 9.x, managed clusters (EKS, GKE, AKS) and other kubectl
+versions, `kubectl.exe` on Windows, replicated clusters, disks on object
+storage (the script skips remote disks), macOS.
 
 ## Requirements
 
@@ -663,8 +668,13 @@ sh tests/run.sh                 # Docker: ClickHouse 24.8, 25.12, latest (~2 min
 sh tests/auto.sh                # Docker: --docker auto with a Langfuse-like compose file
 ```
 
-The `--k8s` tests never contact a cluster: they put the fake `kubectl` first
-on `PATH`, set `KUBECONFIG=/dev/null`, and stop if another `kubectl` would run.
+The `--k8s` tests above never contact a cluster: they put the fake `kubectl`
+first on `PATH`, set `KUBECONFIG=/dev/null`, and stop if another `kubectl`
+would run. The real cluster test, `tests/k8s.sh`, installs charts into the
+current context, so it runs only in the `kubernetes` CI job: it stops unless
+`DISKVET_KIND=1` is set, the context is that job's `kind-diskvet` and the API
+server is local. Its recorded `kubectl get pods` output (`tests/out/pods.*`)
+is where the pod fixtures of `tests/k8s_offline.sh` come from.
 
 `tests/run.sh` seeds each server with the problems above, runs the script from
 the host and inside the container (dash, busybox), with `--k8s` through the

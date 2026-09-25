@@ -12,9 +12,14 @@ diskvet itself only reads: it runs the SELECTs of `checks.sql` through
 it sends to the cluster, what the API server's audit log shows and the full
 Role: [README → Kubernetes](../../README.md#kubernetes).
 
-**Nothing on this page has been run on a real cluster yet.** A test job on a
-real cluster is being built; this page will say what it confirms. Until then:
+**What runs on a real cluster.** The kubernetes job of diskvet's test suite
+(`tests/k8s.sh`, on kind with Kubernetes 1.37) installs three of these and
+runs diskvet and the fixes it prints on each: the ClickHouse resources of the
+Langfuse chart 2.1.2 with the ClickHouse operator 0.0.7, the Bitnami
+ClickHouse chart 8.0.5 on its own (the chart Langfuse 1.x uses), and a plain
+StatefulSet of the official image. What it confirms is marked:
 
+- **tested**: seen on that cluster, with the versions named;
 - **source**: we read it in the chart's or operator's own files (templates and
   default values) of the version named, on 2026-09-25;
 - ***not verified yet***: from research notes, not checked in the source.
@@ -40,8 +45,8 @@ pod ([README → One pod per run](../../README.md#one-pod-per-run)).
 
 | Chart | Pod (example) | Container | Login diskvet uses | TTL file (check 1, Fix B) | Logger (server log files) | Restart after `helm upgrade` | Data volume (default) | Source checked |
 |---|---|---|---|---|---|---|---|---|
-| [Langfuse 2.x](#langfuse-chart-2x) (ClickHouse operator) | `langfuse-clickhouse-0-0-0` *(name not verified yet)* | `clickhouse-server` | none passed: the operator's client config (`default`, port 9001, password from the pod's env) | `clickhouse.cluster.settings`, YAML | `clickhouse.cluster.settings.logger` (charts up to 2.1.2 ignore `clickhouse.cluster.logger`); operator 0.0.7 default: trace, 50 files of 1000M | the operator *(not verified yet)* | PVC, 100Gi; server log files on the same PVC *(not verified yet)* | yes: chart 2.1.2, operator 0.0.7 |
-| [Langfuse 1.x](#langfuse-chart-1x) (Bitnami ClickHouse 8.0.5) | `langfuse-clickhouse-shard0-0`, `-1`, `-2`: 3 pods | `clickhouse` | `CLICKHOUSE_ADMIN_USER` + `CLICKHOUSE_ADMIN_PASSWORD` | `clickhouse.extraOverrides`, one XML string | the same string, `<logger>` | StatefulSet, one pod at a time *(not verified yet)* | one PVC per pod, 8Gi | yes: Langfuse 1.5.41 values, Bitnami 8.0.5 |
+| [Langfuse 2.x](#langfuse-chart-2x) (ClickHouse operator) | `langfuse-clickhouse-0-0-0` for a release named `langfuse` (`<fullname>-clickhouse-0-0-0`, **tested**) | `clickhouse-server` | none passed: the operator's client config (`default`, port 9001, password from the pod's env) | `clickhouse.cluster.settings`, YAML | `clickhouse.cluster.settings.logger` (charts up to 2.1.2 ignore `clickhouse.cluster.logger`); operator 0.0.7 default: trace, 50 files of 1000M (**tested**) | the operator (**tested**) | PVC, 100Gi; server log files on the same PVC (**tested**) | **tested**: chart 2.1.2, operator 0.0.7 |
+| [Langfuse 1.x](#langfuse-chart-1x) (Bitnami ClickHouse 8.0.5) | `langfuse-clickhouse-shard0-0`, `-1`, `-2`: 3 pods | `clickhouse` | `CLICKHOUSE_ADMIN_USER` + `CLICKHOUSE_ADMIN_PASSWORD` | `clickhouse.extraOverrides`, one XML string (**tested** with the Bitnami chart on its own) | the same string, `<logger>` | StatefulSet, one pod at a time (**tested**, Bitnami 8.0.5) | one PVC per pod, 8Gi | yes: Langfuse 1.5.41 values; **tested**: Bitnami 8.0.5 on its own |
 | [ClickStack 2.x, 3.x](#clickstack-chart-2x-and-3x) (ClickHouse operator) | `clickstack-clickhouse-clickhouse-0-0-0` *(not verified yet)* | `clickhouse-server` | none passed: the operator's client config (`default`) | `clickhouse.cluster.spec.settings.extraConfig`, YAML; 3.4.0 sets 7 days on five logs | `clickhouse.cluster.spec.settings.logger`; 3.4.0: information, 10 files of 100M | the operator *(not verified yet)* | PVC, 10Gi (Keeper: 5Gi) | yes: chart 3.4.0 defaults |
 | [ClickStack 1.x](#clickstack-chart-1x), hdx-oss-v2 | `<fullname>-clickhouse-<hash>-<id>` (a Deployment) | `clickhouse` | none passed: `default` from localhost | no value: a Kustomize post-renderer | the same post-renderer | Deployment | *not verified yet* | no |
 | [SigNoz](#signoz) (Altinity operator) | `chi-signoz-clickhouse-cluster-0-0-0` | `clickhouse` (optional sidecar `logs-system-exporter`) | none passed: `default` from localhost *(not verified yet)* | `clickhouse.files`, key `config.d/zz-diskvet-ttl.xml` *(partly verified)*; logs the chart already limits: `clickhouse.clickhouseOperator.<log>.ttl` *(not verified yet)* | the same `files` key, `<logger>` | the operator *(not verified yet)* | PVC from `data-volumeclaim-template`; the log volume template is commented out | partly: SigNoz clickhouse chart templates |
@@ -83,14 +88,19 @@ which the default server config defines with an engine) becomes
 
 ### Langfuse chart 2.x
 
-Source: chart 2.1.2 (app 4.38.0) and ClickHouse operator 0.0.7.
+Source: chart 2.1.2 (app 4.38.0) and ClickHouse operator 0.0.7; **tested**
+with both (diskvet, Fix A, Fix B through the chart's values, Fix C, and the
+check 2 commands).
 
 Chart 2.x has no ClickHouse subchart. It creates a `ClickHouseCluster` and a
 `KeeperCluster` (`clickhouse.com/v1alpha1`) for the ClickHouse operator.
 Defaults: image `clickhouse/clickhouse-server:26.4`, 100Gi, 1 replica, 3
 Keeper replicas. The operator's server container is `clickhouse-server`; the
-pod carries the label `clickhouse.com/role=clickhouse-server`, which also
-finds it when you don't know its name:
+pod is `<fullname>-clickhouse-0-0-0` (**tested**; `langfuse-clickhouse-0-0-0`
+for a release named `langfuse`) and carries the label
+`clickhouse.com/role=clickhouse-server`, which also
+finds it when you don't know its name (operator 0.0.7 sets no
+`clickhouse.com/cluster` label; later releases do):
 
 ```sh
 kubectl get pods -n langfuse -l clickhouse.com/role=clickhouse-server
@@ -125,9 +135,10 @@ clickhouse:
 
 **Server log files.** The chart's values say the operator's default logger
 level is `trace`, and operator 0.0.7 keeps up to 50 files of 1000M each. The
-operator writes them to `/var/log/clickhouse-server/`. That this folder is on
-the same PVC as the data (so up to about 50 GB of a 100Gi volume) is *not
-verified yet*. See how big it is (read-only):
+operator writes them to `/var/log/clickhouse-server/`, a subPath of the same
+PVC as the data (**tested** with operator 0.0.7: one volume, one file
+system), so they can take up to about 50 GB of a 100Gi volume. See how big
+they are (read-only):
 
 ```sh
 kubectl exec -n langfuse POD -c clickhouse-server -- du -sh /var/log/clickhouse-server
@@ -189,7 +200,9 @@ without the `clickhouse:` level.
 
 The TTL fix (Fix B) covers all 3 pods; Fix A and Fix C of check 1 are per
 pod. Whether the chart restarts the pods by itself after a config change
-(a checksum annotation on the pod template) is *not verified yet*: see
+(a checksum annotation on the pod template): **tested** with the Bitnami
+chart 8.0.5 on its own, where `helm upgrade` with a new `extraOverrides`
+restarted both replicas one at a time. See
 [Restarting the pod](#restarting-the-pod).
 
 ### ClickStack chart 2.x and 3.x
@@ -596,12 +609,15 @@ chart, and that also upgrades Langfuse, SigNoz or ClickStack. Add
 - **Operator charts** (ClickHouse operator: Langfuse 2.x, ClickStack 2.x and
   later; Altinity operator: SigNoz, Opik, PostHog, your own
   ClickHouseInstallation): Helm changes the operator's resource, and the
-  operator restarts the pod with the new config (*not verified yet*).
+  operator restarts the pod with the new config (**tested** with the
+  ClickHouse operator 0.0.7, within a minute; the Altinity operator *not
+  verified yet*).
 - **Charts without an operator** (Bitnami, trigger.dev, Laminar, Sentry,
   Plausible, ClickStack 1.x): Kubernetes restarts the pods only when their
   template changes. Many charts put a checksum of their config on the
   template for this; then a StatefulSet restarts its pods one at a time.
-  Whether your chart does is *not verified yet*.
+  The Bitnami chart 8.0.5 does (**tested**); for other charts it is *not
+  verified yet*.
 
 Look at the AGE column of `kubectl get pod -n NAMESPACE POD`: a pod that was
 replaced is only minutes old.
@@ -644,7 +660,7 @@ On Kubernetes "the disk is full" can mean two different disks.
 
 | | The volume (PVC) is full | The node's disk is full |
 |---|---|---|
-| What fills it | ClickHouse's data and system logs; `backup/`, `shadow/` and `tmp/` in its data folder; with the ClickHouse operator probably its server log files too (*not verified yet*) | container images, container console logs, `emptyDir` volumes and whatever containers write outside a volume: ClickHouse without a PVC, or server log files with no volume of their own |
+| What fills it | ClickHouse's data and system logs; `backup/`, `shadow/` and `tmp/` in its data folder; with the ClickHouse operator also its server log files (**tested**, operator 0.0.7) | container images, container console logs, `emptyDir` volumes and whatever containers write outside a volume: ClickHouse without a PVC, or server log files with no volume of their own |
 | What you see | ClickHouse errors `Code: 243` (`NOT_ENOUGH_SPACE`) on inserts and merges; the pod keeps running | the node's `DiskPressure` condition, then evicted pods (`The node was low on resource: ephemeral-storage`); a pod over its own `ephemeral-storage` limit is evicted too |
 | What diskvet sees | this volume: checks 1 to 3 are about it | only when ClickHouse's data is on the node (the report then has a heads-up for a pod with no PVC); nothing about images or other pods |
 | Where to look | the report, and `kubectl exec -n NAMESPACE POD -c CONTAINER -- df -h /var/lib/clickhouse` | `kubectl describe node NODE` (Conditions) and `kubectl get events -n NAMESPACE --field-selector reason=Evicted`; this needs read access to nodes and events |
@@ -699,12 +715,17 @@ rules:
   verbs: ["get", "list"]        # list: only for --k8s auto
 - apiGroups: [""]
   resources: ["pods/exec"]
-  verbs: ["create", "get"]      # get: API servers that authorize the WebSocket upgrade as GET (not verified yet)
+  verbs: ["create", "get"]      # get: kubectl's WebSocket exec (tested, see below)
 ```
 
 A named pod (`--k8s NAMESPACE/POD`) needs only `get` on `pods`. Listing pods
 in all namespaces is optional: without it, `--k8s auto` without `-n` looks in
-your current namespace only and says so.
+your current namespace only and says so. Both are **tested** with
+ServiceAccounts, and so is the `get` on `pods/exec`: kubectl 1.37 opens an
+exec over WebSocket, which the API server checks as `get`. With `create`
+alone every exec is refused once (a `403` in the audit log), then kubectl
+retries over its older SPDY protocol, which needs `create`, and diskvet still
+works.
 
 **`pods/exec` is effectively a shell in the ClickHouse pod.** Kubernetes can't
 limit it to diskvet's calls: whoever has it can run any command in the pod,
