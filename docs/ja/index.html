@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>diskvet：Langfuse、SigNoz、ClickStack の ClickHouse® ディスク診断</title>
+  <meta name="description" content="無料の読み取り専用スクリプトです。セルフホストの Langfuse、SigNoz、ClickStack で動く ClickHouse® のディスクを何が埋めているかを突き止め、解決するための具体的なコマンドを出力します。">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <meta property="og:title" content="diskvet：Langfuse、SigNoz、ClickStack の ClickHouse® 向け読み取り専用ディスク診断">
+  <meta property="og:description" content="セルフホストの Langfuse、SigNoz、ClickStack で動く ClickHouse® のディスクを何が埋めているかを突き止め、解決するための具体的なコマンドを出力します。無料のオープンソースです。">
+  <meta property="og:url" content="https://diskvet.dev/ja/">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="ja_JP">
+  <link rel="canonical" href="https://diskvet.dev/ja/">
+  <link rel="alternate" hreflang="en" href="https://diskvet.dev/">
+  <link rel="alternate" hreflang="es" href="https://diskvet.dev/es/">
+  <link rel="alternate" hreflang="pt" href="https://diskvet.dev/pt/">
+  <link rel="alternate" hreflang="ru" href="https://diskvet.dev/ru/">
+  <link rel="alternate" hreflang="ja" href="https://diskvet.dev/ja/">
+  <link rel="alternate" hreflang="zh-Hans" href="https://diskvet.dev/zh/">
+  <link rel="alternate" hreflang="x-default" href="https://diskvet.dev/">
+</head>
+<body>
+<a class="skip" href="#main">本文へスキップ</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="index.html">diskvet</a>
+    <div class="header-right">
+      <nav aria-label="メインメニュー">
+        <ul>
+          <li><a href="index.html" aria-current="page">ホーム</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/blob/main/docs/ja/guide.md">ガイド</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/discussions/1">アーリーアクセス</a></li>
+          <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+        </ul>
+      </nav>
+      <nav class="langs" aria-label="Language">
+        <details>
+          <summary><svg class="globe" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8h13M8 1.5c1.9 2 2.8 4.1 2.8 6.5S9.9 12.5 8 14.5M8 1.5C6.1 3.5 5.2 5.6 5.2 8s.9 4.5 2.8 6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg> 日本語</summary>
+          <ul>
+            <li><a href="../" hreflang="en" lang="en">English</a></li>
+            <li><a href="../es/" hreflang="es" lang="es">Español</a></li>
+            <li><a href="../pt/" hreflang="pt" lang="pt-BR">Português</a></li>
+            <li><a href="../ru/" hreflang="ru" lang="ru">Русский</a></li>
+            <li><a href="./" hreflang="ja" lang="ja" aria-current="page">日本語</a></li>
+            <li><a href="../zh/" hreflang="zh-Hans" lang="zh-Hans">中文</a></li>
+          </ul>
+        </details>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap">
+
+    <section aria-labelledby="hero-title">
+      <h1 id="hero-title">セルフホストの Langfuse、SigNoz、ClickStack で動く ClickHouse® のための読み取り専用ディスク診断</h1>
+      <p class="lead">ディスクはいっぱいになるのに、実際に保存しているデータはわずかしかありません。多くの場合、容量を使っているのは ClickHouse 自身のシステムログテーブル（system log tables）で、これらのテーブルにはデフォルトではサイズの上限がありません。diskvet はディスクを何が占めているかを示し、解決するための具体的なコマンドを出力します。自動で実行されるものは何もなく、コマンドはすべて自分で実行します。</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="#quick-start">クイックスタート</a>
+        <a class="btn btn-secondary" href="https://github.com/Protemir/diskvet/blob/main/docs/ja/guide.md">ガイドを見て手動で解決</a>
+        <a class="btn btn-secondary" href="https://github.com/Protemir/diskvet">GitHub</a>
+      </div>
+      <p class="muted small">無料、Apache-2.0、登録不要です。短いファイルが 2 つだけなので、実行前に中身を読めます。スクリプトが通信するのはお使いの ClickHouse だけで、ほかの場所には何も送信しません。</p>
+    </section>
+
+    <section aria-labelledby="story-title">
+      <h2 id="story-title">よくあるケース</h2>
+      <ul>
+        <li><code>system.trace_log</code> が 66.86 GiB あるのに対し、Langfuse のテーブルは約 51 MiB（<a href="https://github.com/langfuse/langfuse/issues/13123">langfuse#13123</a>）</li>
+        <li>システムログテーブルが 80 GB を超えているのに対し、テレメトリデータは 500 MB 未満（<a href="https://github.com/SigNoz/signoz/issues/12050">SigNoz#12050</a>）</li>
+        <li>10 Gi のボリュームが 10 日で満杯（<a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">ClickStack-helm-charts#275</a>）</li>
+      </ul>
+      <p>主な対処法はよく知られています。システムログテーブルを <code>TRUNCATE</code> し、TTL（有効期限）を設定することです。レポートでは、この対処を実際に行うときに陥りがちな落とし穴も扱います。<code>TRUNCATE</code> の 50 GB 制限、再起動後に残る古い <code>*_log_N</code> のコピー、<code>opentelemetry_span_log</code> の特殊な設定、ローテーションされない Docker のログ、そして削除済みなのに容量を占め続ける行です。</p>
+    </section>
+
+    <section aria-labelledby="quick-start">
+      <h2 id="quick-start">クイックスタート：docker compose で動かす Langfuse（30 秒）</h2>
+      <p>Langfuse を <code>docker-compose.yml</code> で動かしているマシンで、次のコマンドを実行します。</p>
+<pre><code>cd langfuse                     # Langfuse の docker-compose.yml があるフォルダ
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/SHA256SUMS
+sha256sum -c SHA256SUMS         # 任意: 2 つのファイルがリリースと一致することを確認
+less checks.sql                 # 最初に読む: system.* に対する SELECT のみ
+
+sh diskvet.sh report --docker auto &gt; report.md</code></pre>
+      <p><code>--docker auto</code> は ClickHouse のコンテナを自動で見つけ、その中で <code>clickhouse-client</code> を実行します。そのため、ホストにクライアントを入れる必要も、ポートを開ける必要もありません。<code>--user</code> を指定しない場合はコンテナ自身の <code>CLICKHOUSE_USER</code> / <code>CLICKHOUSE_PASSWORD</code> を使うので、パスワードがコンテナの外に出ることはありません。</p>
+      <p>ほかの接続方法：</p>
+<pre><code>sh diskvet.sh report --docker signoz-clickhouse                          # コンテナを名前で指定
+sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # ローカルの clickhouse-client</code></pre>
+      <p class="small muted">必要なのは POSIX <code>sh</code>、<code>awk</code>、<code>sed</code>、<code>od</code>、<code>date</code>、そして <code>docker</code> または <code>clickhouse-client</code> です。<code>jq</code> も Python も不要です。スクリプトが出力するレポートは英語です。最新リリースは <a href="https://github.com/Protemir/diskvet/releases/latest">GitHub Releases</a> にあります。</p>
+    </section>
+
+    <section aria-labelledby="checks-title">
+      <h2 id="checks-title">チェック項目</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">#</th><th scope="col">チェック</th><th scope="col">読み取り元</th><th scope="col">レポートに出る典型的な対処</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>TTL のないシステムログテーブル</td><td><code>system.tables</code>、<code>system.parts</code></td><td><code>TRUNCATE</code>（50 GB を超える場合は 1 回限りのフラグファイルを併用）、レポートが生成する <code>config.d</code> 用の TTL 設定ファイル、削除すべき古い <code>*_log_N</code> のコピー</td></tr>
+            <tr><td>2</td><td>ClickHouse テーブルのパーツ（part）以外が占めるディスク容量</td><td><code>system.disks</code> とすべてのパーツの比較</td><td>Docker のログのローテーションと、ほかに確認すべき場所</td></tr>
+            <tr><td>3</td><td>ディスク使用量とおおまかな予測</td><td><code>system.disks</code>、<code>system.asynchronous_metric_log</code></td><td>優先して解放すべきもの</td></tr>
+            <tr><td>4</td><td>1 日あたりの増加量</td><td><code>system.part_log</code></td><td>24 時間で最も多く書き込んだテーブル</td></tr>
+            <tr><td>5</td><td>パーツが多すぎる</td><td><code>system.parts</code>、<code>system.merge_tree_settings</code>、<code>system.events</code></td><td>テーブルの挿入制限までの余裕</td></tr>
+            <tr><td>6</td><td>非アクティブなパーツ（inactive）とデタッチされたパーツ（detached）</td><td><code>system.parts</code>、<code>system.detached_parts</code></td><td>削除されずに残ったパーツ、<code>DROP DETACHED PART</code></td></tr>
+            <tr><td>7</td><td>削除済みの行と、完了しないミューテーション（mutation）</td><td><code>system.parts</code>、<code>system.mutations</code></td><td>対象のパーティション（partition）を指定した <code>APPLY DELETED MASK</code>、<code>KILL MUTATION</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>各チェックの結果は OK、INFO、WARN、CRITICAL のいずれかです。しきい値は <a href="https://github.com/Protemir/diskvet#what-it-checks">README</a> に記載しています。各対処には、安全性の度合いと再起動の要否が記載されます。クエリが失敗したチェックは理由とともに <code>NOT_RUN</code> と表示され、ほかのチェックはそのまま実行されます。</p>
+    </section>
+
+    <section aria-labelledby="reads-title">
+      <h2 id="reads-title">読み取るもの、決して読み取らないもの</h2>
+      <div class="two-col">
+        <div class="card">
+          <h3>読み取るもの</h3>
+          <ul>
+            <li>次のシステムテーブルのメタデータ：<code>system.tables</code>、<code>system.parts</code>、<code>system.disks</code>、<code>system.detached_parts</code>、<code>system.merge_tree_settings</code>、<code>system.mutations</code>、<code>system.part_log</code>、<code>system.asynchronous_metric_log</code>、<code>system.asynchronous_metrics</code>、<code>system.events</code></li>
+            <li>権限がある場合は <code>system.server_settings</code>（<code>max_table_size_to_drop</code> のみ）</li>
+            <li>セッションが読み取り専用であることを確認するためのクエリ <code>SELECT getSetting('readonly')</code> を 1 回</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>決して読み取らないもの</h3>
+          <ul>
+            <li>お使いのテーブルの行：それらのテーブルに対する <code>FROM</code> や <code>JOIN</code>、テーブル関数、<code>dictGet</code> は一切使いません。これはテストスイートで保証しています。</li>
+            <li><code>system.query_log</code>、クエリ本文、ミューテーションのコマンド、エラーメッセージ</li>
+          </ul>
+          <p class="small muted">ローカルのレポートには実際のデータベース名とテーブル名が表示されます。対処を実行するときに必要だからです。レポートはお使いのマシンの外には出ません。</p>
+        </div>
+      </div>
+      <h3>安全に実行する 2 つの方法</h3>
+      <ul>
+        <li><strong>既存のユーザーを使う。</strong>クエリは <code>readonly=2</code> と各種制限（30 秒、10,000 行、2 スレッド、500 MB）付きで実行されます。サーバーがこのユーザーに読み取り専用モードを許可しない場合、スクリプトは何も実行せずに停止します。</li>
+        <li><strong>専用ユーザーを使う。</strong>セキュリティレビューが必要な場合向けです。上記のシステムテーブルに限定した最小限の権限だけを与え、プロダクトのデータにはアクセスできないようにします。<a href="https://github.com/Protemir/diskvet#two-ways-to-run-it-safely">具体的な SQL は README に記載しています。</a></li>
+      </ul>
+      <p class="small muted">公式の標準イメージ <code>clickhouse/clickhouse-server</code> の 24.1、24.8、25.12、26.9 で、Langfuse や SigNoz に近い構成を使ってテストしています。まだテストしていないもの：レプリケーション構成のクラスター、Kubernetes、オブジェクトストレージ上のディスク、macOS。</p>
+    </section>
+
+    <section aria-labelledby="guide-title">
+      <h2 id="guide-title">手動で解決したい場合</h2>
+      <div class="callout">
+        <p><strong><a href="https://github.com/Protemir/diskvet/blob/main/docs/ja/guide.md">セルフホストの Langfuse・SigNoz で ClickHouse のディスクがいっぱいになる原因と対処法</a></strong></p>
+        <p>問題を確認するための読み取り専用クエリ 1 つ、今すぐ容量を空ける方法、そして既知の落とし穴を避けながら再発を防ぐ方法をまとめています。ガイド内のコマンドはすべて ClickHouse 24.8、25.12、26.9 で実際に実行して確認しています。ガイドに沿って作業するのに diskvet は必要ありません。</p>
+      </div>
+    </section>
+
+    <section aria-labelledby="beta-title">
+      <h2 id="beta-title">1 時間ごとの診断：10 月に無料ベータ</h2>
+      <p>スクリプトは無料で、今後も無料のままです。ただ、1 回の実行だけでは、ディスクが実際にいつ満杯になるかはわかりません。その部分を補うものとして、現在次の機能を開発しています。</p>
+      <ul>
+        <li>1 時間ごとのスナップショット。内容は <code>sh diskvet.sh --print-payload</code> が出力する JSON そのもので、それ以外は含みません。</li>
+        <li>ディスクが満杯になる<strong>前に</strong>届くメール通知（状態が変わったときのみ）</li>
+        <li>スナップショットが届かなくなったときのアラート</li>
+        <li>毎週月曜日の短いレポート</li>
+      </ul>
+      <p>お使いの環境で何かをホストする必要も、ポートを開ける必要もありません。サーバーから署名付きの小さなスナップショットを外部へ送信するだけで、外部から接続されることはありません。ホスト名、IP アドレス、ユーザー名、クエリ本文、エラーは一切送信しません。お使いのテーブル名は、ソルト付きハッシュとしてのみサーバーの外に出ます。</p>
+      <div class="callout">
+        <p><strong>参加したい場合は</strong>、スレッド「<a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a>」（ディスカッション #1）に、お使いの ClickHouse がどの環境で動いているかと、ディスクのおおよそのサイズをコメントしてください。日本語で書き込んでも構いませんが、返信は英語になる場合があります。ベータの受付が始まったら、そのスレッドで返信します。公開スレッドなので、会社名やホスト名は書かないでください。</p>
+        <p class="small muted">ベータ期間は 30 日間です。その後、1 時間ごとの診断は有料プランになりますが、スクリプトは引き続き無料のオープンソースです。カザフスタン国内のサーバーは、当面はローカルレポートのみの対応となります。</p>
+      </div>
+      <p>スクリプトが見逃している問題や、誤った対処を見つけたら、<a href="https://github.com/Protemir/diskvet/issues/new/choose">Issue を作成してください</a>。それが何よりの助けになります。日本語で書いても構いませんが、返信は英語になる場合があります。</p>
+    </section>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/blob/main/docs/ja/guide.md">ガイド</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">問題を報告</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">脆弱性を報告</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet は無料のオープンソースソフトウェアです（Apache-2.0）。</p>
+    <p>ClickHouse は ClickHouse, Inc. の登録商標です。diskvet は ClickHouse, Inc. とは関係ありません。Langfuse、SigNoz、ClickStack はそれぞれの所有者の商標です。互換性を説明するためにのみ記載しています。</p>
+  </div>
+</footer>
+<script src="../langs.js" defer></script>
+</body>
+</html>
