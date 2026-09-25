@@ -24,7 +24,7 @@ jobs:
         run: sh tests/check_sql.sh
       - name: shellcheck (POSIX sh)
         # preinstalled on ubuntu-latest
-        run: shellcheck -s sh diskvet.sh tests/*.sh
+        run: shellcheck -s sh diskvet.sh tests/*.sh tests/fixtures/fake-kubectl/*
       - name: Offline tests with dash and mawk
         run: dash tests/replay.sh
       - name: Offline tests with busybox ash and busybox awk
@@ -37,7 +37,8 @@ jobs:
 
   clickhouse:
     # Real servers in Docker: seed problems, run the script from the host and
-    # inside the container, as the Variant B user, then run the fix commands.
+    # inside the container, with --k8s through the fake kubectl (tests/k8s_shim.sh),
+    # as the Variant B user, then run the fix commands.
     runs-on: ubuntu-latest
     needs: offline
     strategy:

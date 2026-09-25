@@ -13,3 +13,5 @@ SELECT 'not_the_id', 1 FROM system.one;
 SELECT 'two_statements' FROM system.one; SELECT 1 FROM system.one;
 -- @query joins_data
 SELECT 'joins_data' FROM system.parts AS p JOIN customer.orders AS o ON 1 = 1;
+-- @query _target
+SELECT '_target' AS check_id FROM system.disks;

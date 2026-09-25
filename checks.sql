@@ -7,8 +7,12 @@
 --     server_settings); never system.query_log or other logs with query texts;
 --   * no table functions (url, remote, remoteSecure, file, s3, cluster, input, ...),
 --     no dictGet / joinGet, no "IN <table>", no comma joins, no query parameters;
+--   * no hostName(), currentUser() and the like, except currentUser() in the
+--     passport: the report header names the user the checks ran as (the
+--     payload never includes it);
 --   * no SETTINGS inside SQL: the wrapper sets readonly=2 and resource limits;
 --   * one query per check, the first column is check_id and equals the query id;
+--     ids start with a letter or a digit (ids starting with _ are reserved);
 --   * if a query fails (old version, missing grant, no part_log), only that
 --     check becomes NOT_RUN; the others still run.
 --
@@ -25,7 +29,8 @@
 
 -- @query passport
 -- 0. Version, uptime, which product lives here (by table names only),
---    size of product data vs ClickHouse's own logs.
+--    size of product data vs ClickHouse's own logs, and the user the checks
+--    run as (for the report header only).
 SELECT
     'passport'                                               AS check_id,
     version()                                                AS clickhouse_version,
@@ -37,7 +42,8 @@ SELECT
     t.has_replicated                                         AS replicated,
     p.product_bytes                                          AS product_bytes,
     p.system_log_bytes                                       AS system_log_bytes,
-    p.year_9999_parts                                        AS year_9999_parts
+    p.year_9999_parts                                        AS year_9999_parts,
+    currentUser()                                            AS ran_as
 FROM
 (
     SELECT

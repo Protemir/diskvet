@@ -102,17 +102,31 @@ GROUP BY database, table, partition_id;
 
 ## Kubernetes (Helm chart)
 
-Not tested yet. The script needs `clickhouse-client`, which the ClickHouse pod
-has. One way:
-
 ```sh
-kubectl cp diskvet.sh  <namespace>/<clickhouse-pod>:/tmp/diskvet.sh
-kubectl cp checks.sql <namespace>/<clickhouse-pod>:/tmp/checks.sql
-kubectl exec -n <namespace> <clickhouse-pod> -- sh /tmp/diskvet.sh report --host 127.0.0.1 --user <user> --password '<password>' > report.md
+sh diskvet.sh report --k8s auto -n langfuse > report.md     # -n: the namespace of your Langfuse release
 ```
 
-The fix commands in such a report are written for a plain server (`sudo sh -c
-...`); run the shell parts with `kubectl exec` instead.
+`--k8s` runs `clickhouse-client` inside the ClickHouse pod with
+`kubectl exec -i`: nothing is copied into the pod, and you type no password
+(diskvet uses the pod's own login). The shell commands in the report are
+complete `kubectl` lines for that pod.
+
+- Langfuse chart 2.x runs ClickHouse through the ClickHouse operator: one
+  pod, and `--k8s auto` finds it.
+- Langfuse chart 1.x uses the Bitnami ClickHouse chart with 3 replicas by
+  default (`langfuse-clickhouse-shard0-0`, `-1` and `-2` for a release named
+  `langfuse`), and each has its own disk and system logs. `--k8s auto` then
+  runs nothing and prints one command per pod. Run it once per pod:
+
+  ```sh
+  for pod in langfuse-clickhouse-shard0-0 langfuse-clickhouse-shard0-1 langfuse-clickhouse-shard0-2; do
+      sh diskvet.sh report --k8s "langfuse/$pod" > "report-$pod.md"
+  done
+  ```
+
+Not tested on a real cluster yet. What diskvet sends to the cluster, the
+permissions it needs, what the API server's audit log shows, and
+troubleshooting: [README → Kubernetes](../../README.md#kubernetes).
 
 ---
 

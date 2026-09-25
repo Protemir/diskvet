@@ -1,0 +1,161 @@
+#!/bin/sh
+# Fake kubectl for the offline tests (tests/k8s_offline.sh) and the shim test
+# (tests/k8s_shim.sh). It never talks to a cluster: "get" prints
+# tests/fixtures/k8s/pods.$KFAKE (kubectl's custom-columns output) and "exec"
+# runs the command right here, in a clean environment, as if inside the pod (or,
+# in docker mode, in a ClickHouse container). Anything diskvet must never do
+# (another verb, a TTY, other columns) fails loudly.
+# Every call is logged to $KLOG as one line: [arg] [arg] ... (a newline inside
+# an argument is written as ~); $KLOG.n counts the execs.
+#   KFAKE=NAME          list tests/fixtures/k8s/pods.NAME (KFAKE_PODS: another folder)
+#   KFAKE_CTX=C         the current context (default fake-ctx; "none": no current context)
+#   KFAKE_NS=NS         the current namespace (default "default")
+#   KFAKE_FORBID_ALL=1  "get pods -A" is Forbidden (namespace-scoped RBAC)
+#   KFAKE_CRLF=1        kubectl's own output lines end in CR LF
+#   KFAKE_EXEC=MODE     run (default), forbidden, nosh, hang, hang_at=N (the Nth exec
+#                       hangs), docker (docker exec -i into $KFAKE_DOCKER instead)
+#   KFAKE_DOCKER_USER=U docker mode: docker exec -u U (a pod's runAsUser, e.g. 101:101)
+#   KFAKE_ENV="K=V ..." the pod's environment (words without spaces)
+#   KFAKE_PODPATH=P     PATH inside the pod (default: this PATH)
+#   KFAKE_PRINTED=1     the exec is a command the report prints for people: -i is
+#                       not required (diskvet itself must always send it)
+set -u
+# (one printf for all the arguments: a process per argument is slow in Git Bash)
+if [ $# -gt 0 ]; then printf '[%s] ' "$@" | tr '\n' '~'; fi >>"${KLOG:?}"
+printf '\n' >>"$KLOG"
+
+# exactly the columns of the spec (section 3); diskvet must ask for these
+cols='custom-columns=NS:.metadata.namespace,POD:.metadata.name,PHASE:.status.phase,CTRS:.spec.containers[*].name,IMAGES:.spec.containers[*].image,PVCS:.spec.volumes[*].persistentVolumeClaim.claimName,ROLE:.metadata.labels.clickhouse\.com/role,CHC:.metadata.labels.clickhouse\.com/cluster,CHI:.metadata.labels.clickhouse\.altinity\.com/chi,CHART:.metadata.labels.helm\.sh/chart,OWNER:.metadata.ownerReferences[*].kind'
+pods=${KFAKE_PODS:-tests/fixtures/k8s}/pods.${KFAKE:-none}
+cr() { if [ "${KFAKE_CRLF:-0}" = 1 ]; then awk '{ printf "%s\r\n", $0 }'; else cat; fi; }
+bad() { printf 'FAKE: %s\n' "$*" >&2; exit 99; }
+
+if [ "${1:-}" = --context ]; then
+    [ -n "${2:-}" ] || bad "--context without a name"
+    shift 2
+fi
+
+case ${1:-} in
+config)
+    [ "$*" = "config current-context" ] || bad "only 'config current-context' is allowed: $*"
+    if [ "${KFAKE_CTX-fake-ctx}" = none ]; then
+        echo "error: current-context is not set" | cr >&2
+        exit 1
+    fi
+    printf '%s\n' "${KFAKE_CTX-fake-ctx}" | cr
+    ;;
+get)
+    shift
+    name=""; ns=""; all=""; running=""; rt=""; nh=""; o=""
+    case ${1:-} in
+        pods) shift ;;
+        pod)  name=${2:-}; [ -n "$name" ] || bad "get pod without a name"; shift 2 ;;
+        *)    bad "get ${1:-}: diskvet only reads pods" ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case $1 in
+            -n) ns=${2:-}; [ -n "$ns" ] || bad "-n without a namespace"; shift ;;
+            -A) all=1 ;;
+            --field-selector=status.phase=Running) running=1 ;;
+            --request-timeout=30s) rt=1 ;;
+            --no-headers) nh=1 ;;
+            -o) o=${2:-}; shift ;;
+            *) bad "get: unexpected argument $1" ;;
+        esac
+        shift
+    done
+    if [ -z "$rt" ] || [ -z "$nh" ]; then bad "get needs --request-timeout=30s and --no-headers"; fi
+    [ "$o" = "$cols" ] || bad "get: -o is not the custom-columns of the spec: $o"
+    if [ -n "$name" ] && [ -n "$all" ]; then bad "get pod NAME with -A"; fi
+    if [ -n "$all" ] && [ "${KFAKE_FORBID_ALL:-0}" = 1 ]; then
+        echo 'Error from server (Forbidden): pods is forbidden: User "system:serviceaccount:lf:diskvet" cannot list resource "pods" in API group "" at the cluster scope' | cr >&2
+        exit 1
+    fi
+    [ -r "$pods" ] || bad "no fixture $pods"
+    [ -n "$all" ] || ns=${ns:-${KFAKE_NS:-default}}
+    if [ -n "$name" ]; then
+        rows=$(awk -v ns="$ns" -v n="$name" '$1 == ns && $2 == n' "$pods")
+        if [ -z "$rows" ]; then
+            printf 'Error from server (NotFound): pods "%s" not found\n' "$name" | cr >&2
+            exit 1
+        fi
+    else
+        rows=$(awk -v ns="$ns" -v r="$running" '(ns == "" || $1 == ns) && (r == "" || $3 == "Running")' "$pods")
+        if [ -z "$rows" ]; then
+            if [ -n "$all" ]; then echo "No resources found" | cr >&2
+            else echo "No resources found in $ns namespace." | cr >&2; fi
+            exit 0
+        fi
+    fi
+    printf '%s\n' "$rows" | cr
+    ;;
+exec)
+    shift
+    si=""; ns=""; ctr=""; pod=""; dd=""
+    while [ $# -gt 0 ]; do
+        case $1 in
+            -i) si=1 ;;
+            -n) ns=${2:-}; shift ;;
+            -c) ctr=${2:-}; shift ;;
+            --) dd=1; shift; break ;;
+            -*) bad "bad exec argv: $1 (diskvet never asks for a TTY: no -t, --tty, -it or -ti)" ;;
+            *)  [ -z "$pod" ] || bad "bad exec argv: two pods ($pod, $1)"; pod=$1 ;;
+        esac
+        shift
+    done
+    [ "${KFAKE_PRINTED:-0}" != 1 ] || si=1
+    if [ -z "$si" ] || [ -z "$ns" ] || [ -z "$ctr" ] || [ -z "$pod" ] || [ -z "$dd" ] || [ $# -eq 0 ]; then
+        bad "bad exec argv (needs -i -n NS POD -c CTR -- CMD)"
+    fi
+    n=$(cat "$KLOG.n" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$KLOG.n"
+    mode=${KFAKE_EXEC:-run}
+    if [ "$mode" != docker ]; then
+        # the pod and its container must be in the fixture, as on a real cluster
+        [ -r "$pods" ] || bad "no fixture $pods"
+        awk -v ns="$ns" -v p="$pod" -v c="$ctr" '
+            $1 == ns && $2 == p { found = 1; k = split($4, cn, ","); for (i = 1; i <= k; i++) if (cn[i] == c) hit = 1 }
+            END { exit found ? (hit ? 0 : 2) : 1 }' "$pods"
+        case $? in
+            1) printf 'Error from server (NotFound): pods "%s" not found\n' "$pod" | cr >&2; exit 1 ;;
+            2) printf 'Error from server (BadRequest): container %s is not valid for pod %s\n' "$ctr" "$pod" | cr >&2; exit 1 ;;
+        esac
+    fi
+    case $mode in
+        run) ;;
+        forbidden)
+            printf 'Error from server (Forbidden): pods "%s" is forbidden: User "system:serviceaccount:%s:diskvet" cannot create resource "pods/exec" in API group "" in the namespace "%s"\n' \
+                "$pod" "$ns" "$ns" | cr >&2
+            exit 1 ;;
+        nosh)
+            # shellcheck disable=SC2016
+            printf 'error: Internal error occurred: error executing command in container: failed to exec in container: failed to start exec "3f9a1c": OCI runtime exec failed: exec failed: unable to start container process: exec: "%s": executable file not found in $PATH: unknown\n' \
+                "$1" | cr >&2
+            exit 1 ;;
+        hang) exec sleep 600 ;;
+        hang_at=*) if [ "$n" -eq "${mode#hang_at=}" ]; then exec sleep 600; fi ;;
+        docker)
+            # the "pod" is a real ClickHouse container (tests/k8s_shim.sh):
+            # docker exec -i [-u USER] [-e K=V]... $KFAKE_DOCKER CMD...
+            k=$#
+            if [ -n "${KFAKE_DOCKER_USER:-}" ]; then set -- "$@" -u "$KFAKE_DOCKER_USER"; fi
+            # shellcheck disable=SC2086
+            for kv in ${KFAKE_ENV:-}; do set -- "$@" -e "$kv"; done
+            set -- "$@" "${KFAKE_DOCKER:?}"
+            # move CMD (the first k arguments) behind the container name
+            while [ "$k" -gt 0 ]; do a=$1; shift; set -- "$@" "$a"; k=$((k - 1)); done
+            exec docker exec -i "$@" ;;
+        *) bad "unknown KFAKE_EXEC=$mode" ;;
+    esac
+    # inside the "pod": only its own environment, plus what the fake client needs
+    # shellcheck disable=SC2086
+    env -i PATH="${KFAKE_PODPATH:-$PATH}" CLOG="${CLOG:-/dev/null}" KFAKE_STREAM="${KFAKE_STREAM:-}" \
+        KFAKE_AUTH="${KFAKE_AUTH:-0}" KFAKE_PROFILE_RO="${KFAKE_PROFILE_RO:-0}" ${KFAKE_ENV:-} "$@"
+    rc=$?
+    # what kubectl adds when the command failed inside the pod
+    if [ "$rc" -ne 0 ]; then echo "command terminated with exit code $rc" | cr >&2; fi
+    exit "$rc"
+    ;;
+*)
+    bad "verb ${1:-} is not one diskvet may use (config current-context, get, exec)"
+    ;;
+esac

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Fake clickhouse for the offline tests: "clickhouse local" always fails, so
+# --print-payload must drop its tables rather than send a name unhashed.
+case ${1:-} in
+    local)
+        echo "Code: 1001. DB::Exception: fake clickhouse local: no hashing in the offline tests." >&2
+        exit 1 ;;
+esac
+echo "FAKE: clickhouse ${1:-} is not faked" >&2
+exit 2

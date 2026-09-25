@@ -6,11 +6,15 @@
 #     tables in ALLOWED below (so never system.query_log, system.processes, ...);
 #   - no comma joins ("FROM system.parts, other.table") and no "IN <table>";
 #   - no table functions (url, remote, remoteSecure, file, s3, cluster, input, ...)
-#     and no functions that read other tables or dictionaries (dictGet, joinGet, ...);
+#     and no functions that read other tables or dictionaries (dictGet, joinGet, ...)
+#     or reveal identities (hostName, currentUser, ...; currentUser() is allowed in
+#     the passport only, whose ran_as column the payload never reads);
 #   - no SETTINGS, no FORMAT and no INTO OUTFILE inside SQL (the wrapper sets them);
 #   - no statements other than SELECT (INSERT, ALTER, DROP, TRUNCATE, CREATE, SYSTEM, ...);
 #   - one statement per "-- @query <id>" block, starting with SELECT or WITH,
-#     whose first string literal (the check_id column) equals <id>.
+#     whose first string literal (the check_id column) equals <id>;
+#   - <id> is lower-case letters, digits and _, and does not start with _
+#     (diskvet reserves those ids for its own sections, such as _target).
 # The SQL is tokenized the way ClickHouse reads it: string literals with \ and ''
 # escapes, "--" and "/* */" comments only outside strings. Characters the
 # checks do not need outside string literals (quoted identifiers, "#" comments,
@@ -104,6 +108,7 @@ function skip_group(k,   depth) {
 function flush(   k, t, nxt, tbl, after, stmt_end) {
     if (id == "") return
     nq++
+    if (id !~ /^[a-z0-9][a-z0-9_]*$/) bad("query id must be lower-case letters, digits and _, not starting with _ (reserved for diskvet)")
     if (!tokenize(body)) return
     if (nt == 0) { bad("empty"); return }
     if (T[1] != "SELECT" && T[1] != "WITH") bad("does not start with SELECT or WITH")
@@ -115,7 +120,8 @@ function flush(   k, t, nxt, tbl, after, stmt_end) {
         if (t == ";") bad("more than one statement")
         if (t in BADKW && nxt != "(") bad("keyword " t " (only SELECT is allowed, no SETTINGS / OUTFILE)")
         if (t == "FORMAT" && nxt != "(") bad("FORMAT clause (the wrapper sets the format)")
-        if (t in BADFN && nxt == "(") bad("function " t "() reads outside system metadata or reveals identities")
+        if (t in BADFN && nxt == "(" && !(t == "CURRENTUSER" && id == "passport"))
+            bad("function " t "() reads outside system metadata or reveals identities")
         if (t == "IN" && nxt != "(") bad("IN " nxt ": IN must be followed by a list or a subquery in parentheses")
         if (t ~ /^SYSTEM\./) {
             tbl = substr(t, 8)

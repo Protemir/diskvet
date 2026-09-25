@@ -67,6 +67,35 @@ SigNoz can run ClickHouse with ZooKeeper and replicated tables. The report's
 `TRUNCATE` and `DROP` commands for `system.*` tables are local to one server:
 run them on each replica. Replicated clusters are not covered by the tests yet.
 
+## Kubernetes (Helm chart)
+
+```sh
+sh diskvet.sh report --k8s auto -n signoz > report.md     # -n: the namespace of your SigNoz release
+```
+
+`--k8s` runs `clickhouse-client` inside the ClickHouse pod with
+`kubectl exec -i`: nothing is copied into the pod, and you type no password
+(diskvet uses the pod's own login). The shell commands in the report are
+complete `kubectl` lines for that pod.
+
+- The SigNoz chart runs ClickHouse through the Altinity operator: a pod like
+  `chi-signoz-clickhouse-cluster-0-0-0`, container `clickhouse`. diskvet logs
+  in as the `default` user from inside the pod, which needs no password from
+  localhost (not verified yet).
+- With several shards or replicas each pod has its own disk and system logs.
+  `--k8s auto` then runs nothing and prints one command per pod. Run each of
+  them, or loop over the pod names it prints:
+
+  ```sh
+  for pod in chi-signoz-clickhouse-cluster-0-0-0 chi-signoz-clickhouse-cluster-0-1-0; do
+      sh diskvet.sh report --k8s "signoz/$pod" > "report-$pod.md"
+  done
+  ```
+
+Not tested on a real cluster yet. What diskvet sends to the cluster, the
+permissions it needs, what the API server's audit log shows, and
+troubleshooting: [README → Kubernetes](../../README.md#kubernetes).
+
 ---
 
 Sources for every command: [README → Sources](../../README.md#sources). ClickHouse is a registered trademark of ClickHouse, Inc.; diskvet is not affiliated with ClickHouse, Inc.

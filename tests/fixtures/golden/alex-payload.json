@@ -1,0 +1,14 @@
+{
+  "schema": 1, "agent": "diskvet/0.2.2", "status": "ok",
+  "server": { "clickhouse_version": "25.12.1.649", "uptime_s": 864000, "product": "langfuse", "replicated": 0, "product_bytes": 5798205849, "system_log_bytes": 95241216819, "year_9999_parts": 0, "parts_to_delay_insert": 1000, "parts_to_throw_insert": 3000, "delayed_inserts": 0, "rejected_inserts": 0, "max_parts_in_partition": 214, "mutations_pending": 0, "mutations_failing": 0 },
+  "disks": [
+    { "disk": "default", "total_bytes": 161061273600, "free_bytes": 27058293965, "parts_bytes": 101036953190 }
+  ],
+  "tables": [
+    { "db": "system", "table": "trace_log", "has_ttl": 0, "bytes": 62599690649, "rows": 912345678, "active_parts": 38, "max_parts_in_partition": 38, "oldest_days": 212, "written_bytes_24h": 1503238553 },
+    { "db": "default", "table": "observations", "has_ttl": 0, "bytes": 4198330532, "rows": 51234567, "active_parts": 260, "max_parts_in_partition": 214, "written_bytes_24h": 107374182, "lwd_parts": 3, "lwd_parts_bytes": 1932735283, "inactive_parts": 12, "inactive_bytes": 104857600 },
+    { "db": "db_00a41f09c2d1e0b7", "table": "t_3f9a1c2e0b77d104", "has_ttl": 0, "bytes": 1048576, "rows": 1000, "active_parts": 1, "max_parts_in_partition": 1 },
+    { "db": "system", "table": "processors_profile_log", "has_ttl": 1, "ttl_days": 30, "bytes": 300000000, "rows": 1234567, "active_parts": 12, "max_parts_in_partition": 12, "oldest_days": 45 }
+  ],
+  "not_run": []
+}

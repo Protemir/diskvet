@@ -1,0 +1,2 @@
+sentry   sentry-clickhouse-0          Running   sentry-clickhouse   altinity/clickhouse-server:23.8.11.29.altinitystable   <none>   <none>   <none>   <none>   clickhouse-3.13.0   StatefulSet
+sentry   sentry-web-5f8d7c6b9-w2e4r   Running   sentry-web          getsentry/sentry:24.8.0                                <none>   <none>   <none>   <none>   sentry-25.20.0      ReplicaSet

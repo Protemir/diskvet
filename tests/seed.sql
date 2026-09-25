@@ -44,3 +44,12 @@ INSERT INTO default.observations SELECT toString(number), now64(3) - number, 'p1
 INSERT INTO default.scores SELECT toString(number), now64(3) - number, 'p1' FROM numbers(1000);
 -- Langfuse deletes with lightweight DELETE FROM (plan, point 5).
 DELETE FROM default.observations WHERE toUInt64(id) % 10 = 0;
+
+-- Logins for tests/k8s_shim.sh, which passes them in the "pod's" environment:
+-- the official image's CLICKHOUSE_USER / CLICKHOUSE_PASSWORD, and Bitnami's
+-- CLICKHOUSE_ADMIN_USER with CLICKHOUSE_ADMIN_PASSWORD or _PASSWORD_FILE. They
+-- see what the default user sees in system.*, so the reports are the same.
+CREATE USER IF NOT EXISTS clickhouse IDENTIFIED WITH sha256_password BY 'shim-official-pw-5d1c' HOST LOCAL;
+CREATE USER IF NOT EXISTS bn_admin IDENTIFIED WITH sha256_password BY 'shim-bitnami-pw-9e4a' HOST LOCAL;
+GRANT SHOW TABLES ON *.* TO clickhouse, bn_admin;
+GRANT SELECT ON system.* TO clickhouse, bn_admin;

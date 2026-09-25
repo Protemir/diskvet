@@ -1,0 +1,3 @@
+trigger   trigger-clickhouse-shard0-0       Running   clickhouse   docker.io/bitnamilegacy/clickhouse:25.7.5-debian-12-r0    data-trigger-clickhouse-shard0-0   <none>   <none>   <none>   clickhouse-9.4.7     StatefulSet
+trigger   trigger-webapp-7b9c6d5f48-h2k9x   Running   webapp       ghcr.io/triggerdotdev/trigger.dev:v4.0.4                  <none>                             <none>   <none>   <none>   trigger-4.0.4        ReplicaSet
+trigger   trigger-postgres-0                Running   postgresql   docker.io/bitnamilegacy/postgresql:17.5.0-debian-12-r20   data-trigger-postgres-0            <none>   <none>   <none>   postgresql-16.7.21   StatefulSet

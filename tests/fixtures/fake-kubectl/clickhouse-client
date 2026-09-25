@@ -1,0 +1,34 @@
+#!/bin/sh
+# Fake clickhouse-client for the offline tests: the fake kubectl runs it
+# "inside the pod". It logs its arguments to $CLOG as one line ([arg] [arg] ...),
+# answers the probe from its --readonly= flag, and every checks.sql query with
+# that query's section of $KFAKE_STREAM (a --save-raw file, e.g. tests/fixtures/alex.tsv).
+#   KFAKE_AUTH=1        refuse the login (Code: 516)
+#   KFAKE_PROFILE_RO=N  readonly of the user's own profile, when no --readonly= is given
+set -u
+for a in "$@"; do printf '[%s] ' "$a"; done >>"${CLOG:-/dev/null}"
+printf '\n' >>"${CLOG:-/dev/null}"
+if [ "${KFAKE_AUTH:-0}" = 1 ]; then
+    echo "Code: 516. DB::Exception: default: Authentication failed: password is incorrect, or there is no user with such name. (AUTHENTICATION_FAILED)" >&2
+    exit 4
+fi
+sql=$(cat)
+case $sql in
+    *"getSetting('readonly')"*)
+        for a in "$@"; do
+            case $a in --readonly=*) echo "${a#--readonly=}"; exit 0 ;; esac
+        done
+        echo "${KFAKE_PROFILE_RO:-0}"
+        exit 0 ;;
+esac
+id=$(printf '%s\n' "$sql" | sed -n "s/^[[:space:]]*'\([a-z0-9_]*\)'[[:space:]]*AS check_id.*/\1/p" | sed -n '1p')
+st=$(awk -F '\t' -v id="$id" '$1 == "@@" && $2 == id { print $3; exit }' "${KFAKE_STREAM:?}")
+case $st in
+    ok) awk -F '\t' -v id="$id" '$1 == "@@" { cur = $2; next } cur == id' "$KFAKE_STREAM" ;;
+    fail)
+        # the saved error comes back as this query's error
+        why=$(awk -F '\t' -v id="$id" '$1 == "@@" && $2 == id { print $5; exit }' "$KFAKE_STREAM")
+        printf 'Code: 60. DB::Exception: %s\n' "$why" >&2
+        exit 60 ;;
+    *) printf "Code: 60. DB::Exception: fake clickhouse-client: no section '%s' in %s. (UNKNOWN_TABLE)\n" "$id" "$KFAKE_STREAM" >&2; exit 60 ;;
+esac

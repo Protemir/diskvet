@@ -7,7 +7,9 @@
 # For every version it starts a throw-away container, seeds the problems from
 # tests/seed.sql (plus 1.2 GiB of synthetic trace_log rows, 310 tiny inserts,
 # fake disk history), then:
-#   1. runs diskvet.sh from this machine with --docker <container>;
+#   1. runs diskvet.sh from this machine with --docker <container>, then with
+#      --k8s default/<container> through the fake kubectl, whose exec becomes
+#      docker exec (tests/k8s_shim.sh: logins, query_log, hashing, flag line);
 #   2. runs it inside the container with /bin/sh (dash) and busybox ash;
 #   3. runs it as the Variant B user (readonly=1 profile, narrow grants);
 #   4. runs the fix commands printed by the report and checks that they work:
@@ -138,6 +140,18 @@ for V in $VERSIONS; do
         2[6-9].*|[3-9]?.*) has "$R" "partitions of year 9999" "year-9999 partition noticed (26.8+ numeric DateTime64)" ;;
         *) hasnt "$R" "partitions of year 9999" "no year-9999 partition before 26.8" ;;
     esac
+
+    # ------------------------------------------------------------ 1b. --k8s through the fake kubectl
+    # tests/k8s_shim.sh: this container as the pod default/$C. It runs before the
+    # payload step below, which sends the salt in a query, because the shim checks
+    # that the salt is nowhere in the server's logs.
+    sh tests/k8s_shim.sh "$C" "$F" | tee "$F-k8s-shim.txt"
+    k=$(sed -n 's/^k8s_shim: \([0-9][0-9]*\) passed, \([0-9][0-9]*\) failed$/\1 \2/p' "$F-k8s-shim.txt")
+    if [ -n "$k" ]; then
+        PASS=$((PASS + ${k% *})); FAIL=$((FAIL + ${k#* }))
+    else
+        fail "tests/k8s_shim.sh stopped before its summary"
+    fi
 
     # ------------------------------------------------------------ payload
     P=$F-payload.json

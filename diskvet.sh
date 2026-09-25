@@ -7,14 +7,20 @@
 # commands. It never changes anything and never sends anything anywhere.
 #
 # Plain POSIX sh (dash, busybox ash, bash). Needs awk, sed, od, date, and either
-# docker (for --docker) or clickhouse-client / `clickhouse client`.
+# docker (for --docker), kubectl (for --k8s) or clickhouse-client / `clickhouse client`.
 #
 #   sh diskvet.sh report --docker auto > report.md
 #   sh diskvet.sh --print-payload --docker auto     # the JSON a future cloud would get
+#   sh diskvet.sh report --k8s auto > report.md
+#   sh diskvet.sh report --k8s auto -n langfuse > report.md
+#   sh diskvet.sh report --k8s langfuse/langfuse-clickhouse-0-0-0 > report.md
+#   sh diskvet.sh report --k8s signoz/chi-signoz-clickhouse-cluster-0-0-0 --context prod-eu > report.md
+#   sh diskvet.sh --print-payload --k8s auto -n trigger --env ./diskvet.env
+#   sh diskvet.sh report --replay raw.tsv          # a --save-raw file from a --k8s run
 #   sh diskvet.sh --help
 
 NAME=diskvet
-VERSION=0.2.2
+VERSION=0.3.0
 BETA_URL='https://github.com/Protemir/diskvet#early-access'
 
 # Git Bash on Windows rewrites arguments that look like /paths before they
@@ -35,10 +41,18 @@ Connection (pick one):
   --docker auto               find the ClickHouse container (docker compose service
                               "clickhouse" in this folder, else by image clickhouse-server)
   --docker NAME               run clickhouse-client inside this container (docker exec -i)
+  --k8s auto                  find the one running ClickHouse pod (kubectl; all namespaces,
+                              or -n NS); refuses if there are several
+  --k8s POD | NS/POD          run clickhouse-client inside this pod (kubectl exec -i)
+  -n, --namespace NS          namespace for --k8s
+  --container NAME            container in the pod (default: the one with a ClickHouse image)
+  --context NAME              kubectl context (default: the current one, kept for the whole run)
   (nothing)                   use clickhouse-client on this machine
-  --host H --port P           server address (inside the container when --docker is used)
-  --user U --password P       ClickHouse user; with --docker and no --user, the container's
-                              CLICKHOUSE_USER / CLICKHOUSE_PASSWORD are used if set
+  --host H --port P           server address (inside the container or pod with --docker/--k8s)
+  --user U --password P       ClickHouse user; with --docker/--k8s and no --user, the login in the
+                              container's env is used (CLICKHOUSE_USER/PASSWORD, or Bitnami's
+                              CLICKHOUSE_ADMIN_*), else clickhouse-client's own config.
+                              --password is refused with --k8s (it would reach the audit log).
 
 Other options:
   --ttl-days N                days of logs to keep in the generated TTL config (default 7)
@@ -65,6 +79,16 @@ host=""
 port=""
 user=""
 password=""
+password_set=""
+k8s_arg=""
+k8s_set=""
+kns=""
+kns_set=""
+kpod=""
+kctr=""
+kctr_set=""
+kctx=""
+kctx_typed=""
 env_file="/etc/$NAME.env"
 ttl_days=7
 checks_file=""
@@ -80,14 +104,22 @@ while [ $# -gt 0 ]; do
         push|--push) cmd=push ;;
         --docker)   need_value "$1" $#; docker_arg=$2; shift ;;
         --docker=*) docker_arg=${1#*=} ;;
+        --k8s)      need_value "$1" $#; k8s_arg=$2; k8s_set=1; shift ;;
+        --k8s=*)    k8s_arg=${1#*=}; k8s_set=1 ;;
+        -n|--namespace) need_value "$1" $#; kns=$2; kns_set=1; shift ;;
+        --namespace=*) kns=${1#*=}; kns_set=1 ;;
+        --container) need_value "$1" $#; kctr=$2; kctr_set=1; shift ;;
+        --container=*) kctr=${1#*=}; kctr_set=1 ;;
+        --context)  need_value "$1" $#; kctx=$2; kctx_typed=1; shift ;;
+        --context=*) kctx=${1#*=}; kctx_typed=1 ;;
         --host)     need_value "$1" $#; host=$2; shift ;;
         --host=*)   host=${1#*=} ;;
         --port)     need_value "$1" $#; port=$2; shift ;;
         --port=*)   port=${1#*=} ;;
         --user)     need_value "$1" $#; user=$2; shift ;;
         --user=*)   user=${1#*=} ;;
-        --password) need_value "$1" $#; password=$2; shift ;;
-        --password=*) password=${1#*=} ;;
+        --password) need_value "$1" $#; password=$2; password_set=1; shift ;;
+        --password=*) password=${1#*=}; password_set=1 ;;
         --env)      need_value "$1" $#; env_file=$2; shift ;;
         --env=*)    env_file=${1#*=} ;;
         --ttl-days) need_value "$1" $#; ttl_days=$2; shift ;;
@@ -110,10 +142,91 @@ if [ "$cmd" = push ]; then
     exit 2
 fi
 
+# A Kubernetes name (DNS-1123): k8s_name NAME MAXLEN [.]; with "." dots are
+# allowed too (pod and PVC names). These names are printed into commands that
+# people paste, so nothing else gets through.
+k8s_name() {
+    case $1 in ''|-*|*-|.*|*.) return 1 ;; esac
+    if [ "${3:-}" = . ]; then
+        case $1 in *[!a-z0-9.-]*) return 1 ;; esac
+    else
+        case $1 in *[!a-z0-9-]*) return 1 ;; esac
+    fi
+    [ "${#1}" -le "$2" ]
+}
+
+# shq WORD: WORD as it must be typed into sh, in single quotes only when it
+# needs them (a path with a space, say). For the commands diskvet prints.
+shq() {
+    case $1 in
+        ''|*[!A-Za-z0-9._/:@+,=-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+# --k8s: everything is checked here, before any kubectl call.
+transport=local
+[ -n "$docker_arg" ] && transport=docker
+kauto=""
+kto=${DISKVET_EXEC_TIMEOUT:-120}
+if [ -n "$k8s_set" ]; then
+    [ -z "$docker_arg" ] || die "use either --docker or --k8s, not both"
+    [ -z "$password_set" ] || die "--password is not accepted with --k8s: kubectl puts the command line into the exec request URL, and the API server can keep it in its audit log. Leave out --password: diskvet then uses the pod's own login. Or use kubectl port-forward and --host 127.0.0.1 --port 9000 --user U --password P (README: Kubernetes)."
+    if [ "$k8s_arg" = auto ]; then
+        kauto=1
+    else
+        # a leading pod/ or pods/ (kubectl's TYPE/NAME) is dropped: pod/x, ns/pod/x
+        _a=$k8s_arg
+        case $_a in
+            pod/*|pods/*) _a=${_a#*/} ;;
+            */pod/*)  _a=${_a%%/pod/*}/${_a#*/pod/} ;;
+            */pods/*) _a=${_a%%/pods/*}/${_a#*/pods/} ;;
+        esac
+        case $_a in
+            ''|/*|*/|*/*/*) die "--k8s takes auto, POD or NAMESPACE/POD" ;;
+            */*)
+                if [ -n "$kns_set" ] && [ "$kns" != "${_a%/*}" ]; then die "namespace given twice: -n $kns and --k8s $k8s_arg"; fi
+                kns=${_a%/*}; kns_set=1; kpod=${_a#*/} ;;
+            *)  kpod=$_a ;;
+        esac
+    fi
+    [ -z "$kauto" ] || [ -z "$kctr_set" ] || die "--container needs a pod: --k8s NAMESPACE/POD --container NAME"
+    if [ -n "$kns_set" ]; then k8s_name "$kns" 63 || die "not a valid Kubernetes name: $kns"; fi
+    if [ -n "$kpod" ]; then k8s_name "$kpod" 253 . || die "not a valid Kubernetes name: $kpod"; fi
+    if [ -n "$kctr_set" ]; then k8s_name "$kctr" 63 || die "not a valid Kubernetes name: $kctr"; fi
+    if [ -n "$kctx_typed" ]; then
+        case $kctx in
+            ''|*[!A-Za-z0-9._:/@-]*) die "--context: diskvet prints this name into the fix commands, so it accepts only letters, digits and . _ : / @ -" ;;
+        esac
+    fi
+    case $kto in
+        ''|*[!0-9]*) die "DISKVET_EXEC_TIMEOUT must be a whole number of seconds (5 or more)" ;;
+    esac
+    [ "$kto" -ge 5 ] 2>/dev/null || die "DISKVET_EXEC_TIMEOUT must be a whole number of seconds (5 or more)"
+    if [ -n "$replay" ] && { [ -n "$kauto" ] || [ -z "$kns" ]; }; then
+        die "with --replay, name the pod: --k8s NAMESPACE/POD"
+    fi
+    transport=k8s
+elif [ -n "$kns_set$kctr_set$kctx_typed" ]; then
+    die "-n/--namespace, --container and --context only work with --k8s"
+fi
+
 case $ttl_days in
     ''|*[!0-9]*) die "--ttl-days must be a whole number of days" ;;
 esac
 [ "$ttl_days" -ge 1 ] || die "--ttl-days must be at least 1"
+
+# --k8s auto with several pods prints one command per pod (k8s_find): it repeats
+# the typed options that change the run, so each command runs what was asked for.
+kcarry=""
+if [ -n "$kauto" ]; then
+    if [ -n "$host" ]; then kcarry="$kcarry --host $(shq "$host")"; fi
+    if [ -n "$port" ]; then kcarry="$kcarry --port $(shq "$port")"; fi
+    if [ -n "$user" ]; then kcarry="$kcarry --user $(shq "$user")"; fi
+    if [ "$ttl_days" != 7 ]; then kcarry="$kcarry --ttl-days $ttl_days"; fi
+    if [ "$env_file" != "/etc/$NAME.env" ]; then kcarry="$kcarry --env $(shq "$env_file")"; fi
+    if [ -n "$checks_file" ]; then kcarry="$kcarry --checks $(shq "$checks_file")"; fi
+fi
 
 if [ -z "$checks_file" ]; then
     case $0 in
@@ -129,7 +242,10 @@ if [ -z "$tmp" ] || [ ! -d "$tmp" ]; then
     (umask 077 && mkdir "$tmp") || die "cannot create a temporary directory"
 fi
 trap 'rm -rf "$tmp"' EXIT
-trap 'exit 130' INT TERM
+# Ctrl-C or TERM: background jobs of a non-interactive sh ignore SIGINT, so the
+# kubectl run by bounded() and its watchdog are killed here.
+_bp=""; _bw=""; timed_out=""
+trap '[ -n "$_bp" ] && kill "$_bp" 2>/dev/null; [ -n "$_bw" ] && kill "$_bw" 2>/dev/null; exit 130' INT TERM
 
 # ---------------------------------------------------------------- helpers
 # First useful line of a clickhouse-client / docker error, without noise.
@@ -149,16 +265,90 @@ unreachable_json() {
         "$NAME" "$VERSION" "$now_iso"
 }
 
-# Inside the container: use the image's CLICKHOUSE_USER / CLICKHOUSE_PASSWORD
-# when no user was given. The password stays inside the container.
+# Inside the container or pod, when no user was given: the image's
+# CLICKHOUSE_USER / CLICKHOUSE_PASSWORD, else Bitnami's CLICKHOUSE_ADMIN_USER
+# with CLICKHOUSE_ADMIN_PASSWORD or CLICKHOUSE_ADMIN_PASSWORD_FILE, else nothing
+# (clickhouse-client's own config, as the ClickHouse operator sets it up).
+# The password stays inside the container; never --user default --password ''.
 # Single quotes on purpose: this runs inside the container, not here.
 # shellcheck disable=SC2016
-inner='m=$1; shift; if [ "$m" = env ]; then if [ -n "${CLICKHOUSE_PASSWORD:-}" ]; then set -- --password "$CLICKHOUSE_PASSWORD" "$@"; fi; if [ -n "${CLICKHOUSE_USER:-}" ]; then set -- --user "$CLICKHOUSE_USER" "$@"; fi; fi; exec clickhouse-client "$@"'
+inner='m=$1; shift
+if [ "$m" = env ]; then
+  if [ -n "${CLICKHOUSE_USER:-}" ] || [ -n "${CLICKHOUSE_PASSWORD:-}" ]; then
+    if [ -n "${CLICKHOUSE_PASSWORD:-}" ]; then set -- --password "$CLICKHOUSE_PASSWORD" "$@"; fi
+    if [ -n "${CLICKHOUSE_USER:-}" ]; then set -- --user "$CLICKHOUSE_USER" "$@"; fi
+  elif [ -n "${CLICKHOUSE_ADMIN_USER:-}" ]; then
+    p=${CLICKHOUSE_ADMIN_PASSWORD:-}
+    if [ -z "$p" ] && [ -r "${CLICKHOUSE_ADMIN_PASSWORD_FILE:-}" ]; then p=$(cat "$CLICKHOUSE_ADMIN_PASSWORD_FILE"); fi
+    if [ -n "$p" ]; then set -- --password "$p" "$@"; fi
+    set -- --user "$CLICKHOUSE_ADMIN_USER" "$@"
+  fi
+fi
+if command -v clickhouse-client >/dev/null 2>&1; then exec clickhouse-client "$@"; fi
+exec clickhouse client "$@"'
 
 safe_flags="--readonly=2 --max_execution_time=30 --max_result_rows=10000 --result_overflow_mode=break --max_threads=2 --max_memory_usage=500000000 --log_comment=$NAME"
 run_mode="Queries ran with readonly=2 and resource limits."
 container=""
 client=""
+
+# bounded IN OUT ERR CMD...: CMD <IN >OUT 2>ERR, killed after $kto s (then status
+# 124 and timed_out=1). The explicit <IN beats the /dev/null stdin POSIX gives
+# background jobs. The watchdog's stdio is /dev/null, so "| tee" and "| cat"
+# pipelines close on time, and its sleep is killed through the TERM trap, so no
+# sleep is left behind. Once the time is up it ignores TERM, so the timed-out
+# mark is always written. Only that mark means a timeout: kubectl exec passes on
+# the status of the command in the pod, and clickhouse-client exits with its
+# error code mod 256 (Code 380 is status 124 too).
+bounded() {
+    _bi=$1 _bo=$2 _be=$3; shift 3
+    rm -f "$tmp/timedout"; timed_out=""
+    "$@" <"$_bi" >"$_bo" 2>"$_be" &
+    _bp=$!
+    (
+        trap 'kill "$_bs" 2>/dev/null; exit 0' TERM
+        sleep "$kto" & _bs=$!
+        if wait "$_bs"; then trap '' TERM; kill "$_bp" 2>/dev/null && : >"$tmp/timedout"; fi
+    ) </dev/null >/dev/null 2>&1 &
+    _bw=$!
+    wait "$_bp"; _brc=$?
+    kill "$_bw" 2>/dev/null; wait "$_bw" 2>/dev/null
+    _bp=""; _bw=""
+    if [ -e "$tmp/timedout" ]; then
+        rm -f "$tmp/timedout"; timed_out=1
+        printf 'kubectl exec timed out after %s s\n' "$kto" >>"$_be"
+        return 124
+    fi
+    return "$_brc"
+}
+
+# kubectl: every call goes through kc (get, config) or kx (exec), with the
+# context pinned once at the start, so a "kubectl config use-context" in another
+# terminal can't move a running check to another cluster.
+kc() { if [ -n "$kctx" ]; then set -- --context "$kctx" "$@"; fi; kubectl "$@"; }
+kx() {  # kx IN OUT ERR CMD...: CMD inside the pod, never with a TTY
+    _ki=$1 _ko=$2 _ke=$3; shift 3
+    set -- exec -i -n "$kns" "$kpod" -c "$kctr" -- "$@"
+    if [ -n "$kctx" ]; then set -- --context "$kctx" "$@"; fi
+    bounded "$_ki" "$_ko" "$_ke" kubectl "$@"
+}
+die_unreachable() { [ "$cmd" = payload ] && unreachable_json; die "$@"; }
+
+# What to try when the probe fails inside a pod (empty for --docker and local).
+k8s_hint() {
+    [ "$transport" = k8s ] || return 0
+    if grep -qi 'pods/exec' "$1" && grep -qi 'forbidden' "$1"; then
+        printf ' (kubectl exec needs the create verb on pods/exec in namespace %s: README, Kubernetes, Permissions. Without it, use kubectl port-forward and --host 127.0.0.1 with a read-only user.)' "$kns"
+    elif grep -q 'executable file not found' "$1"; then
+        printf ' (the container has no sh, for example a distroless image: use kubectl port-forward and --host 127.0.0.1 instead)'
+    elif grep -Eq 'clickhouse(-client)?: not found' "$1"; then
+        printf ' (container %s has no clickhouse-client; pass --container NAME for the ClickHouse container)' "$kctr"
+    elif grep -q 'Code: 516' "$1"; then
+        printf " (diskvet used the pod's own login: its clickhouse-client config, CLICKHOUSE_USER or CLICKHOUSE_ADMIN_USER. ClickHouse refused it. Pass --user for a user that needs no password from inside the pod, or use kubectl port-forward with --user and --password.)"
+    elif grep -q 'timed out after' "$1"; then
+        printf ' (the API server or the pod did not answer. Set DISKVET_EXEC_TIMEOUT to wait longer; if your API server is older than your kubectl, try KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false.)'
+    fi
+}
 
 # run_query SQL_FILE OUT_FILE ERR_FILE [extra clickhouse-client args...]
 run_query() {
@@ -170,8 +360,10 @@ run_query() {
     # $safe_flags is a list of --name=value words without spaces: split on purpose.
     # shellcheck disable=SC2086
     set -- $safe_flags --format=TSV "$@"
-    if [ -n "$container" ]; then
-        if [ -n "$user" ] || [ -n "$password" ]; then _m='explicit'; else _m='env'; fi
+    if [ -n "$user" ] || [ -n "$password" ]; then _m='explicit'; else _m='env'; fi
+    if [ "$transport" = k8s ]; then
+        kx "$_in" "$_out" "$_err" sh -c "$inner" sh "$_m" "$@"
+    elif [ -n "$container" ]; then
         docker exec -i "$container" sh -c "$inner" sh "$_m" "$@" <"$_in" >"$_out" 2>"$_err"
     else
         # $client may be "clickhouse client": split on purpose.
@@ -200,11 +392,140 @@ find_container() {
     container=$_id
 }
 
+# --k8s: one list call gives all diskvet needs to pick the pod, by names, images,
+# volumes and labels only (never env values, never Secrets). <none> is an empty field.
+K8S_COLS='custom-columns=NS:.metadata.namespace,POD:.metadata.name,PHASE:.status.phase,CTRS:.spec.containers[*].name,IMAGES:.spec.containers[*].image,PVCS:.spec.volumes[*].persistentVolumeClaim.claimName,ROLE:.metadata.labels.clickhouse\.com/role,CHC:.metadata.labels.clickhouse\.com/cluster,CHI:.metadata.labels.clickhouse\.altinity\.com/chi,CHART:.metadata.labels.helm\.sh/chart,OWNER:.metadata.ownerReferences[*].kind'
+# awk: a Kubernetes name, as k8s_name checks it (lbl: namespace, container,
+# group; dom: pod, PVC).
+K8S_AWK='function lbl(s) { return length(s) <= 63 && s ~ /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/ }
+function dom(s) { return length(s) <= 253 && s ~ /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/ }
+'
+tab=$(printf '\t')
+
+# k8s_pick EXPLICIT: reads $tmp/pods (the columns above), prints one line per usable pod:
+#   POD NS POD CTR FLAVOR PVCS GROUP PHASE   (tab-separated; PVCS comma-separated)
+# For a named pod (EXPLICIT=1) an unusable one gives NOCTR NS POD "CTR CTR ..."
+# instead, and a Keeper or version-probe pod ROLE NS POD ROLE. Unexpected columns: ERR.
+k8s_pick() {
+    tr -d '\r' <"$tmp/pods" | awk -v explicit="$1" -v want="$kctr" "$K8S_AWK"'
+        function none(s) { return (s == "<none>") ? "" : s }
+        NF == 0 { next }
+        NF != 11 { print "ERR"; exit }
+        {
+            nc = split(none($4), cn, ","); ni = split(none($5), im, ",")
+            if (nc != ni) { print "ERR"; exit }
+            if (!lbl($1) || !dom($2)) next
+            role = none($7)
+            # Keeper and version-probe pods of the ClickHouse operator
+            if (role != "" && role != "clickhouse-server") { if (explicit) print "ROLE\t" $1 "\t" $2 "\t" role; next }
+            # backup and probe jobs run the server image too
+            if (!explicit && index(none($11), "Job")) next
+            pick = 0; hits = 0
+            for (i = 1; i <= nc; i++) {
+                if (want != "") { if (cn[i] == want) { pick = i; hits++ } }
+                else if (im[i] ~ /(^|\/)clickhouse(-server)?([:@]|$)/) { pick = i; hits++ }
+            }
+            if (explicit && want == "" && hits == 0 && nc == 1) { pick = 1; hits = 1 }
+            if (hits != 1 || !lbl(cn[pick])) {
+                if (explicit) {
+                    s = ""
+                    for (i = 1; i <= nc; i++) s = (s == "") ? cn[i] : s " " cn[i]
+                    print "NOCTR\t" $1 "\t" $2 "\t" s
+                }
+                next
+            }
+            grp = ""
+            if (role == "clickhouse-server") { fl = "official"; grp = none($8) }
+            else if (none($9) != "") { fl = "altinity"; grp = none($9) }
+            else if (im[pick] ~ "(^|/)bitnami[^/]*/clickhouse([:@]|$)") {
+                chart = none($10)
+                if (chart ~ /^clickhouse-9\./) fl = "bitnami9"
+                else if (chart ~ /^clickhouse-[5-8]\./) fl = "bitnami8"
+                else fl = "bitnami"
+            } else fl = "plain"
+            if (!lbl(grp)) grp = ""
+            pv = ""; np = split(none($6), pvs, ",")
+            for (i = 1; i <= np; i++) if (dom(pvs[i])) pv = (pv == "") ? pvs[i] : pv "," pvs[i]
+            print "POD\t" $1 "\t" $2 "\t" cn[pick] "\t" fl "\t" pv "\t" grp "\t" $3
+        }'
+}
+
+# Find the pod and container for --k8s (auto or named) and pin the context.
+# Sets kns, kpod, kctr, kflavor, kpvc and kgroup. Never prompts: one note on stderr.
+k8s_find() {
+    command -v kubectl >/dev/null 2>&1 || die_unreachable "kubectl is not installed or not in PATH"
+    # Git Bash: MSYS_NO_PATHCONV (top of this file) also stops the conversion of
+    # KUBECONFIG=/c/Users/... (or a : list) that kubectl.exe needs, and kubectl
+    # would then run with an empty config. cygpath does it; no cygpath, no change.
+    case ${KUBECONFIG:-} in
+        /*) if command -v cygpath >/dev/null 2>&1; then
+                _kcfg=$(cygpath -w -p "$KUBECONFIG" 2>/dev/null | tr -d '\r')
+                if [ -n "$_kcfg" ]; then KUBECONFIG=$_kcfg; export KUBECONFIG; fi
+            fi ;;
+    esac
+    # the context is resolved once and passed on every call
+    [ -n "$kctx_typed" ] || kctx=$(kc config current-context 2>/dev/null | tr -d '\r')
+    if [ -n "$kauto" ]; then
+        _where="in any namespace you can list"
+        if [ -n "$kns" ]; then set -- -n "$kns"; _where="in namespace $kns"; else set -- -A; fi
+        if ! kc get pods "$@" --field-selector=status.phase=Running --request-timeout=30s --no-headers -o "$K8S_COLS" >"$tmp/pods" 2>"$tmp/pods.err"; then
+            if [ -z "$kns" ] && grep -q 'Forbidden' "$tmp/pods.err"; then
+                note "not allowed to list pods in all namespaces; looking in your current namespace only (pass -n NAMESPACE to choose)"
+                _where="in your current namespace"
+                kc get pods --field-selector=status.phase=Running --request-timeout=30s --no-headers -o "$K8S_COLS" >"$tmp/pods" 2>"$tmp/pods.err" \
+                    || die_unreachable "cannot list pods: $(err_line "$tmp/pods.err")"
+            else
+                die_unreachable "cannot list pods: $(err_line "$tmp/pods.err")"
+            fi
+        fi
+        k8s_pick 0 >"$tmp/picked"
+    else
+        set -- get pod "$kpod"
+        if [ -n "$kns" ]; then set -- "$@" -n "$kns"; fi
+        kc "$@" --request-timeout=30s --no-headers -o "$K8S_COLS" >"$tmp/pods" 2>"$tmp/pods.err" \
+            || die_unreachable "cannot find pod ${kns:+$kns/}$kpod: $(err_line "$tmp/pods.err")"
+        k8s_pick 1 >"$tmp/picked"
+    fi
+    if grep -q '^ERR' "$tmp/picked"; then
+        die_unreachable "cannot read kubectl's output (unexpected columns); please report this with kubectl version"
+    fi
+    _n=$(grep -c "^POD$tab" "$tmp/picked")
+    if [ "$_n" -gt 1 ]; then
+        if [ "$cmd" = payload ]; then unreachable_json; _run=--print-payload; _to=payload; _ext=json
+        else _run=report; _to=report; _ext=md; fi
+        note "found $_n ClickHouse pods. Each has its own disk and system logs, so diskvet checks one pod per run:"
+        _me=$(shq "$0")
+        grep "^POD$tab" "$tmp/picked" | cut -f2,3 | while IFS=$tab read -r _pns _ppod; do
+            printf '  sh %s %s --k8s %s/%s%s%s > %s-%s.%s\n' "$_me" "$_run" "$_pns" "$_ppod" "${kctx_typed:+ --context $kctx}" "$kcarry" "$_to" "$_ppod" "$_ext"
+        done >&2
+        exit 2
+    fi
+    if [ "$_n" -eq 0 ]; then
+        [ -z "$kauto" ] || die_unreachable "no running ClickHouse pod found $_where (looked for a container with image clickhouse-server, clickhouse or bitnami*/clickhouse; keeper, operator, backup and job pods are skipped). Pass --k8s NAMESPACE/POD, and --container NAME for a custom image."
+        IFS='|' read -r _k _pns _ppod _x <<EOF
+$(sed -n '1p' "$tmp/picked" | tr '\t' '|')
+EOF
+        case $_k in
+            ROLE) die_unreachable "pod $_pns/$_ppod is not a ClickHouse server: its clickhouse.com/role is $_x (a Keeper or version-probe pod of the ClickHouse operator)" ;;
+            NOCTR)
+                [ -z "$kctr" ] || die_unreachable "pod $_pns/$_ppod has no container '$kctr' (it has: $_x)"
+                die_unreachable "pod $_pns/$_ppod has containers $_x, and not exactly one with a ClickHouse image; pass --container NAME" ;;
+        esac
+        die_unreachable "cannot read kubectl's output (unexpected columns); please report this with kubectl version"
+    fi
+    IFS='|' read -r _k kns kpod kctr kflavor kpvc kgroup _phase <<EOF
+$(grep "^POD$tab" "$tmp/picked" | tr '\t' '|')
+EOF
+    [ "$_phase" = Running ] || die_unreachable "pod $kns/$kpod is $_phase, not Running"
+    note "kubectl context ${kctx:-(none)} · pod $kns/$kpod · container $kctr"
+}
+
 # Salted hashes of your own database and table names, for --print-payload.
 # The rows of the "tables" query go through `clickhouse local` (inside the
-# container with --docker, else on this machine): the salt travels only on
-# stdin, so it never reaches the server's query_log, text_log or log files,
-# and never shows up in the process list. Columns 4 and 5 of each row come in
+# container with --docker, inside the pod with --k8s, else on this machine):
+# the salt travels only on stdin, so it never reaches the server's query_log,
+# text_log or log files, never shows up in the process list and never in the
+# kubectl exec URL. Columns 4 and 5 of each row come in
 # as "keep this name" flags and go out as the name or its hash:
 # db_ / t_ + 16 hex of sipHash64(salt, db) / sipHash64(salt, db, table).
 hash_names() {
@@ -217,7 +538,10 @@ hash_names() {
     tr -d '\r' <"$tmp/o.tables" | while IFS= read -r _line; do printf '%s\t%s\n' "$salt" "$_line"; done >"$tmp/h.in"
     : >"$tmp/h.out"
     [ -s "$tmp/h.in" ] || return 0
-    if [ -n "$container" ]; then
+    if [ "$transport" = k8s ]; then
+        kx "$tmp/h.in" "$tmp/h.out" "$tmp/h.err" sh -c 'cd /tmp && exec clickhouse local "$@"' sh \
+            --input-format TSV --output-format TSV --structure "$_st" --query "$_sql" || return 1
+    elif [ -n "$container" ]; then
         docker exec -i -w /tmp "$container" clickhouse local --input-format TSV --output-format TSV \
             --structure "$_st" --query "$_sql" <"$tmp/h.in" >"$tmp/h.out" 2>"$tmp/h.err" || return 1
     else
@@ -242,14 +566,39 @@ container_name=""
 
 if [ -n "$replay" ]; then
     [ -r "$replay" ] || die "cannot read $replay"
-    cp "$replay" "$stream" || die "cannot read $replay"
+    if tr -d '\r' <"$replay" | grep -q "^@@${tab}_target$tab"; then
+        # saved from a --k8s run: it names its pod, and the report prints those
+        # names into commands, so they must be what a live run writes. The check
+        # reads the stream the report is rendered from, without any CR (a live
+        # run writes none), so a CR inside a name can't reach a printed command.
+        [ -z "$docker_arg" ] || die "$replay was saved from a --k8s run; leave out --docker"
+        [ "$transport" != k8s ] || die "$replay was saved from a --k8s run and already names its pod; leave out --k8s"
+        tr -d '\r' <"$replay" >"$stream" || die "cannot read $replay"
+        awk -F '\t' "$K8S_AWK"'
+            function pvcs(s,   a, k, i) {
+                if (s == "" || s == "?") return 1
+                k = split(s, a, ",")
+                for (i = 1; i <= k; i++) if (!dom(a[i])) return 0
+                return 1
+            }
+            $1 == "_target" { nt++; good = (NF == 9 && $2 == "k8s" && lbl($3) && dom($4) && lbl($5) && $6 ~ /^[a-z0-9]+$/ && pvcs($7) && ($8 == "" || lbl($8)) && $9 ~ "^[A-Za-z0-9._:/@-]*$") }
+            END { exit !(nt == 1 && good) }' "$stream" || die "cannot read the pod from $replay: its _target line is not what diskvet writes"
+    elif [ "$transport" = k8s ]; then
+        # render as a report about this pod (flavor and volumes unknown)
+        { printf '@@\t_target\tok\n_target\tk8s\t%s\t%s\t%s\tplain\t?\t\t%s\n' "$kns" "$kpod" "${kctr:-clickhouse}" "${kctx_typed:+$kctx}"
+          cat "$replay"; } >"$stream" || die "cannot read $replay"
+    else
+        cp "$replay" "$stream" || die "cannot read $replay"
+    fi
     container_name=$docker_arg
     [ "$container_name" = auto ] && container_name=clickhouse
     run_mode="Rendered from saved query results (--replay)."
 else
     [ -r "$checks_file" ] || die "cannot read $checks_file (keep checks.sql next to the script or pass --checks FILE)"
 
-    if [ -n "$docker_arg" ]; then
+    if [ "$transport" = k8s ]; then
+        k8s_find
+    elif [ -n "$docker_arg" ]; then
         command -v docker >/dev/null 2>&1 || die "docker is not installed or not in PATH"
         if [ "$docker_arg" = auto ]; then find_container; else container=$docker_arg; fi
         container_name=$(docker inspect --format '{{.Name}}' "$container" 2>/dev/null | tr -d '\r' | sed 's|^/||')
@@ -268,11 +617,12 @@ else
     fi
 
     # Split checks.sql into one file per query; the index keeps the order.
+    # Ids starting with _ are reserved for diskvet's own sections (_target).
     awk -v dir="$tmp" '
         { sub(/\r$/, "") }
         /^-- @query / {
             if (f != "") close(f)
-            if ($3 !~ /^[a-z0-9_]+$/) { bad = 1; exit 1 }
+            if ($3 !~ /^[a-z0-9][a-z0-9_]*$/) { bad = 1; exit 1 }
             f = dir "/q." $3
             print $3, $4 > (dir "/index")
             next
@@ -316,13 +666,13 @@ else
                     *)   cannot_run "the server refuses readonly=2 and readonly=1 for this user, and the user is not read-only, so nothing was run. Use a read-only user (README, variant B)." ;;
                 esac
             else
-                cannot_run "$(err_line "$tmp/probe.err")"
+                cannot_run "$(err_line "$tmp/probe.err")$(k8s_hint "$tmp/probe.err")"
             fi
         else
-            cannot_run "$(err_line "$tmp/probe.err")"
+            cannot_run "$(err_line "$tmp/probe.err")$(k8s_hint "$tmp/probe.err")"
         fi
     else
-        cannot_run "$(err_line "$tmp/probe.err")"
+        cannot_run "$(err_line "$tmp/probe.err")$(k8s_hint "$tmp/probe.err")"
     fi
 
     salt=""
@@ -343,9 +693,20 @@ else
     fi
 
     : >"$stream"
+    if [ "$transport" = k8s ]; then
+        # the pod the report is about: names only, the context only when typed
+        printf '@@\t_target\tok\n_target\tk8s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$kns" "$kpod" "$kctr" "$kflavor" "$kpvc" "$kgroup" "${kctx_typed:+$kctx}" >>"$stream"
+    fi
+    k8s_dead=""
     while read -r qid qtag; do
         [ -n "$qid" ] || continue
         if [ "$qtag" = payload ] && [ "$cmd" != payload ]; then continue; fi
+        # after one kubectl exec timed out, don't wait for every other check too
+        if [ -n "$k8s_dead" ]; then
+            printf '@@\t%s\tfail\t%s\t%s\n' "$qid" "${qtag:-required}" "skipped: an earlier kubectl exec timed out" >>"$stream"
+            continue
+        fi
         if run_query "$tmp/q.$qid" "$tmp/o.$qid" "$tmp/e.$qid"; then
             if [ "$qid" = tables ]; then
                 # never let a real name through: without hashes the rows are dropped
@@ -361,6 +722,8 @@ else
             printf '@@\t%s\tok\n' "$qid" >>"$stream"
             tr -d '\r' <"$tmp/o.$qid" >>"$stream"
         else
+            # the watchdog's mark, not status 124 (see bounded)
+            if [ -n "$timed_out" ]; then k8s_dead=1; fi
             printf '@@\t%s\tfail\t%s\t%s\n' "$qid" "${qtag:-required}" "$(err_line "$tmp/e.$qid")" >>"$stream"
         fi
     done <"$tmp/index"
@@ -453,6 +816,7 @@ function ident(s) {
 }
 function fq(db, t) { return ident(db) "." ident(t) }
 function shcmd(s) {
+    if (kt) return kp " sh -c '" s "'"
     if (ctr != "") return "docker exec " ctr " sh -c '" s "'"
     return "sudo sh -c '" s "'"
 }
@@ -461,11 +825,25 @@ function jint(x) { return isint(x) ? x : "0" }
 
 # Data disk, drop limit, version, product: used by several checks.
 function context(   i, f, best) {
-    ver = ""; product = "other"; product_bytes = 0; syslog_bytes = 0; y9999 = 0
+    ver = ""; product = "other"; product_bytes = 0; syslog_bytes = 0; y9999 = 0; ran_as = ""
     if (ok("passport") && n["passport"] > 0) {
         split(row["passport", 1], f, "\t")
         ver = f[2]; uptime = f[3]; product = f[4]; replicated = f[5]
-        product_bytes = num(f[6]); syslog_bytes = num(f[7]); y9999 = num(f[8])
+        product_bytes = num(f[6]); syslog_bytes = num(f[7]); y9999 = num(f[8]); ran_as = f[9]
+    }
+    # --k8s: the pod the report is about (the _target section). The names were
+    # checked when they were written; kp/kpit/kget start the printed commands.
+    kt = 0
+    if (mode != "payload" && ok("_target") && n["_target"] > 0) {
+        split(row["_target", 1], f, "\t")
+        if (f[2] == "k8s") {
+            kt = 1; kns = f[3]; kpod = f[4]; kctr = f[5]; kflavor = f[6]; kpvc = f[7]; kgroup = f[8]; kctx = f[9]
+            if (kflavor !~ /^(official|altinity|bitnami8|bitnami9|bitnami|plain)$/) kflavor = "plain"
+            kget = "kubectl" ((kctx != "") ? " --context " kctx : "")
+            kp = kget " exec -n " kns " " kpod " -c " kctr " --"
+            kpit = kget " exec -it -n " kns " " kpod " -c " kctr " --"
+            hctx = (kctx != "") ? " --kube-context " kctx : ""
+        }
     }
     split(ver, vp, ".")
     vmaj = vp[1] + 0; vmin = vp[2] + 0
@@ -491,6 +869,10 @@ function context(   i, f, best) {
         }
     }
     if (dd_path !~ /\/$/) dd_path = dd_path "/"
+    # The path comes from the server (or a --replay file) and goes into printed
+    # sh -c '...' commands, where a quote or a $( in it would run where the
+    # command is pasted: anything but a plain path becomes a placeholder.
+    if (dd_path !~ "^/[-A-Za-z0-9._/+:@,=]*$") dd_path = "<data path>/"
     flag_path = dd_path "flags/force_drop_table"
 }
 
@@ -591,7 +973,25 @@ function check1(   i, f, name, is_old, has_ttl, tdays, b, rows, od, dcol, pexpr,
             s = s shcmd("touch " flag_path " && chmod 666 " flag_path) "`\n"
         }
     }
-    if (xml != "") {
+    if (xml != "" && kt) {
+        # Kubernetes: the config goes in through the chart, and the pod restarts
+        fixb_printed = 1
+        s = s "\n**Fix B: stop it coming back.** Safe; the ClickHouse pod restarts (about a minute; with several replicas, one at a time). Keeps " ttl_days " days of each log (change with --ttl-days).\n"
+        s = s "Save as `clickhouse-ttl.xml` (only logs without TTL are listed):\n"
+        s = s "```xml\n<clickhouse>\n    <!-- " name_ver ": TTL for system logs that had none -->\n" xml "</clickhouse>\n```\n"
+        s = s "Put it into the pod's config through your chart, never by copying it into the running pod (it is gone after the next restart):\n"
+        s = s "- trigger.dev chart 4.5.10 and later: values `clickhouse.configdFiles`, key `clickhouse-ttl.xml`;\n"
+        s = s "- Sentry chart up to 28 (bundled ClickHouse): `clickhouse.clickhouse.configmap.configOverride`; the sentry-kubernetes clickhouse chart on its own: `clickhouse.configmap.configOverride`;\n"
+        s = s "- other charts: a ConfigMap of your own, mounted with subPath at `/etc/clickhouse-server/conf.d/clickhouse-ttl.xml` (conf.d, because many charts mount config.d as one ConfigMap).\n\n"
+        s = s "Then run your usual `helm upgrade`: `helm list -n " kns hctx "` shows the release, and if you don't have your values file,"
+        s = s " `helm get values RELEASE -n " kns hctx " -o yaml > values.yaml` saves the values in use. The chart or the operator restarts the pod."
+        s = s " If the pod has not restarted within 5 minutes (the AGE column of `" kget " get pod -n " kns " " kpod "`), restart it yourself:"
+        s = s " `" kget " delete pod -n " kns " " kpod "` (its StatefulSet recreates it with the same volume; about a minute of downtime).\n\n"
+        s = s "On restart ClickHouse renames every changed log to `<name>_0` (its old rows stay there) and starts a new table with the TTL."
+        s = s " Do Fix A first so these copies are small, then run this report again: it lists the copies to drop.\n"
+        s = s "If the pod crash-loops and `" kget " logs -n " kns " " kpod " -c " kctr " --previous` says `TTL parameters should be specified directly inside 'engine'`,"
+        s = s " that log is defined with `<engine>` elsewhere: take it out of your values and upgrade again.\n"
+    } else if (xml != "") {
         s = s "\n**Fix B: stop it coming back.** Safe; needs a ClickHouse restart (about 10 s). Keeps " ttl_days " days of each log (change with --ttl-days).\n"
         s = s "Save as `clickhouse-ttl.xml` (only logs without TTL are listed):\n"
         s = s "```xml\n<clickhouse>\n    <!-- " name_ver ": TTL for system logs that had none -->\n" xml "</clickhouse>\n```\n"
@@ -633,11 +1033,26 @@ function check2(   i, f, s, total, free, parts, inact, det, used, inparts, notin
         tbl = tbl "| " cell(f[2]) " | " hs(total) " | " hs(used) " | " hs(inparts) " | " hs(notin) " (" fpct(p) ") | " rs " |\n"
         one = "Disk " f[2] ": " hs(total) ", used " hs(used) ". ClickHouse table parts: " hs(inparts)
         one = one " (inactive " hs(inact) ", detached " hs(det) ").\n"
-        one = one "Not in table parts: " hs(notin) " (" fpct(p) " of the disk): Docker logs and images, other services (MinIO, Postgres), OS files,"
-        one = one " and the blocks the file system reserves for root (often 5% on ext4). The script can't see which.\n"
+        if (kt) {
+            one = one "Not in table parts: " hs(notin) " (" fpct(p) " of the disk): files ClickHouse keeps outside table parts (its server log files when they share this volume,"
+            one = one " backup/ and shadow/, tmp/), lost+found, and the blocks the file system reserves for root (often 5% on ext4). The script can't see which.\n"
+        } else {
+            one = one "Not in table parts: " hs(notin) " (" fpct(p) " of the disk): Docker logs and images, other services (MinIO, Postgres), OS files,"
+            one = one " and the blocks the file system reserves for root (often 5% on ext4). The script can't see which.\n"
+        }
     }
     if (n["not_in_parts"] == 1) s = one; else s = tbl
-    if (RANK[st[2]] >= RANK["WARN"]) {
+    if (kt && RANK[st[2]] >= RANK["WARN"]) {
+        # Kubernetes: no Docker logs here, the kubelet rotates container logs
+        s = s "\nSee what takes the space (read-only, inside the pod):\n"
+        s = s "```sh\n" kp " sh -c 'du -xk -d 2 " dd_path " 2>/dev/null | sort -n | tail -15; du -sk /var/log/clickhouse-server 2>/dev/null; df -k " dd_path " /var/log/clickhouse-server 2>/dev/null'\n```\n"
+        s = s "The usual finds: backup/ or shadow/ (local backups: delete them with the tool that made them, such as `clickhouse-backup delete local <name>`,"
+        s = s " or `ALTER TABLE <table> UNFREEZE WITH NAME '<name>'` for ALTER TABLE ... FREEZE), tmp/, or server log files when df shows both paths on the same file system."
+        s = s " Container console logs are not the cause on Kubernetes: the kubelet rotates them (10 MiB x 5 per container by default)."
+        s = s " If the volume is simply too small for your data, see check 3.\n"
+    } else if (kt) {
+        s = s "\nIf this part grows, look at ClickHouse's server log files first: `" kp " du -sh /var/log/clickhouse-server`.\n"
+    } else if (RANK[st[2]] >= RANK["WARN"]) {
         s = s "\nMost common cause: Docker container logs without rotation (langfuse#16339: 89.1 GiB)."
         s = s " See what takes the space (on the server):\n"
         s = s "```sh\nsudo sh -c 'du -h /var/lib/docker/containers/*/*-json.log | sort -h | tail -5'\nsudo du -xh --max-depth=2 / 2>/dev/null | sort -h | tail -15\n```\n"
@@ -697,7 +1112,8 @@ function check3(   i, f, src, hdisk, hspan, hgrow, total, free, used, up, rs, fc
     if (note != "") s = s "\n" note "\n"
     s = s "\nA real forecast needs hourly history: one run of this script sees only one moment.\n"
     if (RANK[st[3]] >= RANK["WARN"]) {
-        s = s "\nWhere to get space back fastest: check 1 (system logs), check 2 (Docker logs), check 7 (deleted rows).\n"
+        if (kt) s = s "\nWhere to get space back fastest: check 1 (system logs), check 2 (files outside table parts), check 7 (deleted rows).\n"
+        else s = s "\nWhere to get space back fastest: check 1 (system logs), check 2 (Docker logs), check 7 (deleted rows).\n"
     }
     body[3] = s
 }
@@ -895,7 +1311,9 @@ function report(   i, s, notes) {
     check1(); check2(); check3(); check4(); check5(); check6(); check7()
     printf "# ClickHouse check-up · %s\n", now_human
     s = name_ver " · ClickHouse " ((ver != "") ? ver : "unknown") " · detected: " plabel
-    if (ctr != "") s = s " · container " ctr
+    if (kt) s = s " · pod " kns "/" kpod
+    else if (ctr != "") s = s " · container " ctr
+    if (ran_as != "") s = s " · user " ran_as
     print s
     print "Nothing was changed. Nothing was sent anywhere. " run_mode
     print ""
@@ -914,9 +1332,39 @@ function report(   i, s, notes) {
             notes = notes "- ClickHouse " vmaj "." vmin " is fine for Langfuse. Before upgrading ClickHouse to 26.8+, update Langfuse first (DateTime64 fix: langfuse#16858, PR #16892).\n"
     }
     if (notes != "") print "### Heads-up for your version\n" notes
+    if (kt) {
+        notes = ""
+        if (kpvc == "")
+            notes = notes "- This pod mounts no PersistentVolumeClaim: ClickHouse data is on the node's disk (emptyDir or the container layer), and the sizes above are the node's. The data is lost when the pod moves to another node, and a full node disk makes the kubelet evict pods before ClickHouse reports an error. Turn persistence on in the chart (Bitnami, IMIO Plausible: `persistence.enabled`; sentry-kubernetes clickhouse chart: `clickhouse.persistentVolumeClaim.enabled`). Existing data does not move to the new volume by itself.\n"
+        if (replicated + 0 == 1) {
+            if (kflavor == "official" && kgroup != "") s = kget " get pods -n " kns " -l clickhouse.com/cluster=" kgroup ",clickhouse.com/role=clickhouse-server"
+            else if (kflavor == "altinity" && kgroup != "") s = kget " get pods -n " kns " -l clickhouse.altinity.com/chi=" kgroup
+            else if (kflavor ~ /^bitnami/) s = kget " get pods -n " kns " -l app.kubernetes.io/name=clickhouse,app.kubernetes.io/component=clickhouse"
+            else s = kget " get pods -n " kns
+            notes = notes "- Replicated tables: this installation may run several ClickHouse pods, and each has its own disk and system logs. List them with `" s "` and run diskvet with `--k8s " kns "/<pod>` on each. Fix B (chart values) covers every pod; Fix A and Fix C are per pod.\n"
+        }
+        if (notes != "") print "### Heads-up for Kubernetes\n" notes
+    }
     print "### How to run the fixes"
     print "Nothing below runs by itself: read each command, then run it yourself."
-    if (ctr != "")
+    if (kt) {
+        if (kflavor == "official" || kflavor == "altinity") {
+            s = kpit " clickhouse-client"
+            notes = "Inside the pod it logs in as `default` with the login the operator set up; if it asks for a password or is refused, add `--user <user> --password`."
+        } else if (kflavor ~ /^bitnami/) {
+            s = kpit " sh -c 'exec clickhouse-client --user \"$CLICKHOUSE_ADMIN_USER\" --password \"${CLICKHOUSE_ADMIN_PASSWORD:-$(cat \"$CLICKHOUSE_ADMIN_PASSWORD_FILE\")}\"'"
+            notes = "It logs in with the chart's admin user from the pod's own environment; the password is never typed or shown."
+        } else {
+            s = kpit " sh -c 'exec clickhouse-client ${CLICKHOUSE_USER:+--user \"$CLICKHOUSE_USER\"} ${CLICKHOUSE_PASSWORD:+--password \"$CLICKHOUSE_PASSWORD\"}'"
+            notes = "It uses the pod's CLICKHOUSE_USER and CLICKHOUSE_PASSWORD when it has them, else the `default` user."
+        }
+        s = "SQL goes into clickhouse-client inside the pod, as a user that may change tables (a read-only user can't): `" s "`. " notes
+        s = s " Shell commands below are complete kubectl lines for "
+        s = s "" ((kctx != "") ? "context " kctx : "your current kubectl context (check it with `kubectl config current-context` before you paste)") "."
+        s = s " Config changes go into your Helm values (or the operator's resource), never into files in the pod: its config folders come from ConfigMaps that Helm and the operator rewrite."
+        s = s " Keys per chart: https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md"
+        print s
+    } else if (ctr != "")
         print "SQL goes into clickhouse-client as a user that may change tables (a read-only user can't): `docker exec -it " ctr " clickhouse-client --user <user> --password`. In Langfuse's docker compose the user is CLICKHOUSE_USER from your .env. Shell commands run on the Docker host."
     else
         print "SQL goes into `clickhouse-client` as a user that may change tables (a read-only user can't). Shell commands run on the ClickHouse server."

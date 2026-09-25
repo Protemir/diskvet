@@ -1,0 +1,1 @@
+dv-custom   analytics-db-0   Running   metrics,db   prom/statsd-exporter:v0.28.0,registry.example.com/team/ch-custom:25.8   data-analytics-db-0   <none>   <none>   <none>   <none>   StatefulSet

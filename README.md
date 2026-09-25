@@ -40,7 +40,8 @@ Two files, both short enough to read before you run them:
 | `diskvet.sh` | POSIX `sh` wrapper: runs the queries with `readonly=2`, renders the report |
 
 Apache-2.0. No registration. The script talks only to your ClickHouse (or
-`docker exec` into its container); nothing is sent anywhere else.
+`docker exec` into its container, or `kubectl exec` into its pod); nothing is
+sent anywhere else.
 
 ## Quick start: Langfuse with docker compose (30 seconds)
 
@@ -70,7 +71,11 @@ Other ways to connect:
 ```sh
 sh diskvet.sh report --docker signoz-clickhouse                # a container by name
 sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # local clickhouse-client
+sh diskvet.sh report --k8s auto                                # the ClickHouse pod on Kubernetes
 ```
+
+On Kubernetes, read [Kubernetes](#kubernetes) first: it says what diskvet
+sends to the cluster and which permissions it needs.
 
 ## What it checks
 
@@ -167,6 +172,9 @@ GRANT SELECT ON system.events TO diskvet;
 sh diskvet.sh report --docker auto --user diskvet --password '<long random password>'
 ```
 
+On Kubernetes, `--k8s` refuses `--password`; use this user through
+`kubectl port-forward` instead (see [Permissions](#permissions)).
+
 `GRANT SELECT ON system.*` is not given on purpose: `system.query_log` holds the
 query texts of all users.
 
@@ -181,6 +189,271 @@ What we saw with this user on ClickHouse 24.8, 25.12 and 26.9:
 - `system.server_settings` is not granted, so the report assumes the default
   drop limit (50 GB) and says so. Add `GRANT SELECT ON system.server_settings`
   if you changed `max_table_size_to_drop`.
+
+## Kubernetes
+
+`--k8s` does what `--docker` does, with `kubectl exec -i` instead of
+`docker exec -i`: it runs `clickhouse-client` inside the ClickHouse pod. You
+need `kubectl` with a context for the cluster and the
+[permissions](#permissions) below. Nothing is copied into the pod, no port is
+opened, and you need no ClickHouse client on your machine.
+
+**Not tested on a real cluster yet.** So far the test suite runs `--k8s` only
+against a fake `kubectl` (see [Tested on](#tested-on)); a test job on a real
+cluster comes next. If you try it, an
+[issue](https://github.com/Protemir/diskvet/issues/new/choose) with what you
+saw helps a lot.
+
+### Quick start on Kubernetes
+
+Download the files as in the
+[quick start](#quick-start-langfuse-with-docker-compose-30-seconds), on any
+machine where `kubectl` works, then:
+
+```sh
+sh diskvet.sh report --k8s auto > report.md                  # the one ClickHouse pod you can see
+sh diskvet.sh report --k8s auto -n langfuse > report.md      # only in namespace langfuse
+sh diskvet.sh report --k8s langfuse/langfuse-clickhouse-0-0-0 > report.md
+sh diskvet.sh report --k8s signoz/chi-signoz-clickhouse-cluster-0-0-0 --context prod-eu > report.md
+sh diskvet.sh --print-payload --k8s auto -n trigger --env ./diskvet.env
+sh diskvet.sh report --replay raw.tsv          # a --save-raw file from a --k8s run
+```
+
+- `--k8s auto` looks at the running pods in every namespace you may list (or
+  only in `-n NS`) and takes the pod that has exactly one container with the
+  image `clickhouse-server`, `clickhouse` or `bitnami*/clickhouse` (from any
+  registry). It skips ClickHouse Keeper, operator, backup and version-probe
+  pods, and pods run by a Job. If it finds several pods, it runs nothing: see
+  [One pod per run](#one-pod-per-run).
+- `--k8s NS/POD` names the pod (`--k8s POD`: in the context's current
+  namespace; `pod/NAME` from `kubectl get pods -o name` works too).
+  `--container NAME` picks the container when its image has another name.
+  `--context NAME` uses another kubectl context.
+- Before the first query diskvet names the pod on stderr, then runs without
+  asking anything, so it can run from cron:
+
+  ```text
+  diskvet: kubectl context kind-dev · pod langfuse/langfuse-clickhouse-0-0-0 · container clickhouse-server
+  ```
+
+  The context is read once and passed to every kubectl call, so a
+  `kubectl config use-context` in another terminal can't move a running check
+  to another cluster. The report names the context only if you typed
+  `--context`, so a cloud context name (an EKS ARN, say) doesn't end up in a
+  report you share.
+- The shell commands in the report are complete `kubectl` lines for that pod,
+  for example
+  `kubectl exec -n langfuse langfuse-clickhouse-0-0-0 -c clickhouse-server -- sh -c 'touch /var/lib/clickhouse/flags/force_drop_table && chmod 666 /var/lib/clickhouse/flags/force_drop_table'`.
+  Config changes go into your Helm values (or the operator's resource), never
+  into files in the pod: Helm and the operators rewrite those.
+
+### What diskvet sends to the cluster
+
+Only these kubectl calls, each with `--context C` when there is a current
+context:
+
+1. `kubectl config current-context`, once, unless you pass `--context`.
+2. `kubectl get pods` for `--k8s auto` (with `-A`, or `-n NS`; a second call
+   without `-A` only after a Forbidden), or `kubectl get pod POD` for a named
+   pod. Both use `--request-timeout=30s` and `-o custom-columns=...`: they
+   read names, phases, images, volume claims, owner kinds and four labels,
+   never env values and never Secrets.
+3. `kubectl exec`, once for the probe and once per query: about 14 calls for
+   `report`, 16 for `--print-payload`. Each has this shape (`explicit` instead
+   of `env` when you pass `--user`):
+
+   ```text
+   kubectl --context C exec -i -n NS POD -c CTR -- sh -c '<login script>' sh env --readonly=2 --max_execution_time=30 --max_result_rows=10000 --result_overflow_mode=break --max_threads=2 --max_memory_usage=500000000 --log_comment=diskvet --format=TSV [--host H] [--port P] [--user U]
+   ```
+
+   With `--print-payload` one of them runs `clickhouse local` in the pod
+   instead, to hash names (see
+   [`--print-payload`](#--print-payload-what-a-snapshot-would-contain)).
+
+- No TTY: `-i`, never `-t`. `sh -c` only picks the login and starts
+  `clickhouse-client` (or `clickhouse local`). The SQL goes in on stdin and
+  the results come back on stdout: only the SELECTs of `checks.sql`, with
+  `readonly=2` and the limits, marked `log_comment = 'diskvet'` in
+  `system.query_log`.
+- Never `cp`, `debug`, `attach`, `port-forward`, `apply`, `patch`, `edit`,
+  `delete`, `scale`, `rollout`, `logs` or `get secret`. Nothing is written to
+  the cluster; the only thing written in the pod is `clickhouse local`'s
+  temporary folder under `/tmp` with `--print-payload`, as with `--docker`.
+- Every call to the API server has a time limit: 30 s for `get`, 120 s for
+  each `exec` (set `DISKVET_EXEC_TIMEOUT` to other seconds, 5 or more). After
+  one exec timed out, diskvet makes no more calls, and the checks left show
+  `NOT_RUN`.
+
+### How diskvet logs in
+
+Inside the pod, a short `sh` script (`inner` in `diskvet.sh`) picks the login,
+in this order:
+
+1. `--user U`, if you pass it. With `--k8s` only the user name is passed
+   (`--password` is refused, see below), so this is for a user that needs no
+   password from inside the pod.
+2. The pod's `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD`: the variables of the
+   official ClickHouse image, as in plain manifests.
+3. Bitnami's `CLICKHOUSE_ADMIN_USER` with `CLICKHOUSE_ADMIN_PASSWORD`, or with
+   the file that `CLICKHOUSE_ADMIN_PASSWORD_FILE` names: the Bitnami ClickHouse
+   chart, which Langfuse chart 1.x uses.
+4. None of them: no `--user` and no `--password`, so clickhouse-client uses its
+   own config in the pod. With the ClickHouse operator (Langfuse chart 2.x,
+   ClickStack chart 2.x and later) that is the config the operator writes to
+   `/etc/clickhouse-client/`: user `default`, port 9001, the password from the
+   pod's env. With the Altinity operator (SigNoz) it is the `default` user
+   without a password from localhost (not verified yet).
+
+diskvet never sends `--user default --password ''`, which would override that
+config. The password is read inside the pod and stays there (in the pod's env
+and in clickhouse-client's command line in the pod), as with `--docker`. It is
+not on your machine's command line, not in the exec request and not in the
+audit log. diskvet never reads a Secret and needs no permission on Secrets.
+The first lines of the report name the user ClickHouse ran the queries as
+(`· user default`).
+
+### What the API server's audit log shows
+
+With audit logging on, each `kubectl exec` is an entry for the pod's `exec`
+subresource (`pods/exec`) in its namespace, by your kubectl user. kubectl
+sends the command line as `command=` parameters of the request URL, so the log's
+`requestURI` holds the exec line above: the login script (it names the
+variables, never their values), the read-only flags, the `--host`, `--port`
+and `--user` you passed, and for `--print-payload` the constant hashing query.
+It never holds a password, the salt, the SQL of the checks or a result: those
+go through the exec stream (stdin and stdout), and the audit log records the
+request, not the stream. That is why `--password` is refused with `--k8s`: it
+would be part of that URL. (This is how kubectl and the API server work; it is
+not checked against a real audit log yet.)
+
+Runtime security tools and audit alerts often watch for `kubectl exec` into
+production pods and for a shell started in a container. They may flag every
+diskvet run, even without a TTY. Tell whoever watches them before you schedule
+it.
+
+### One pod per run
+
+Each ClickHouse pod has its own disk and its own system logs, so diskvet
+checks one pod per run. When `--k8s auto` finds several (Langfuse chart 1.x
+runs 3 replicas by default), it runs nothing, exits with code 2 and prints one
+command per pod:
+
+```text
+diskvet: found 3 ClickHouse pods. Each has its own disk and system logs, so diskvet checks one pod per run:
+  sh diskvet.sh report --k8s langfuse/langfuse-clickhouse-shard0-0 > report-langfuse-clickhouse-shard0-0.md
+  sh diskvet.sh report --k8s langfuse/langfuse-clickhouse-shard0-1 > report-langfuse-clickhouse-shard0-1.md
+  sh diskvet.sh report --k8s langfuse/langfuse-clickhouse-shard0-2 > report-langfuse-clickhouse-shard0-2.md
+```
+
+Run each of them, or all in a loop:
+
+```sh
+for pod in langfuse-clickhouse-shard0-0 langfuse-clickhouse-shard0-1 langfuse-clickhouse-shard0-2; do
+    sh diskvet.sh report --k8s "langfuse/$pod" > "report-$pod.md"
+done
+```
+
+The TTL fix (Fix B, in your chart values) covers every pod; Fix A and Fix C
+of check 1 are per pod.
+
+### `--save-raw` on Kubernetes
+
+A `--save-raw` file from a `--k8s` run also names the pod the report is about,
+because the report prints it into its commands: namespace, pod, container and
+PVC names, the operator's cluster or installation name, and the context if
+you typed `--context`. Look at the file before you attach it to a public
+issue. `sh diskvet.sh report --replay FILE` renders the same Kubernetes report
+from it, without kubectl.
+
+### Permissions
+
+A Role in the ClickHouse pod's namespace:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: diskvet, namespace: NS}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]        # list: only for --k8s auto
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create", "get"]      # get: API servers that authorize the WebSocket upgrade as GET (unverified)
+```
+
+Bind it to the user or ServiceAccount that runs diskvet, for example
+`kubectl create rolebinding diskvet --role=diskvet --user=<user> -n NS` (or
+`--serviceaccount=NS:NAME` instead of `--user`).
+
+**`pods/exec` is effectively a shell in the ClickHouse pod.** diskvet uses it
+only for the calls listed above, but Kubernetes can't limit it to them:
+whoever has it can run any command in the pod as the pod's user, read
+ClickHouse's data files and the pod's environment, passwords included. Grant
+it only to people and accounts that may have that access anyway.
+
+**Smaller: port-forward.** To grant no shell, put `pods/portforward` in the
+Role instead of `pods/exec`, create the read-only user of
+[variant B](#two-ways-to-run-it-safely), and run diskvet with a
+clickhouse-client on your machine:
+
+```sh
+kubectl port-forward -n langfuse pod/langfuse-clickhouse-0-0-0 9000:9000   # leave it running
+sh diskvet.sh report --host 127.0.0.1 --port 9000 --user diskvet --password '<long random password>' --save-raw raw.tsv > report.md
+```
+
+The password is then on your machine's command line, not in the cluster. That
+report's shell commands are written for a plain server (`sudo sh -c '...'`,
+and Docker advice in check 2). For `kubectl` lines instead, render the saved
+results as a report about the pod; this connects to nothing (`--container`
+defaults to `clickhouse` here):
+
+```sh
+sh diskvet.sh report --replay raw.tsv --k8s langfuse/langfuse-clickhouse-0-0-0 --container clickhouse-server > report.md
+```
+
+Listing pods in all namespaces is optional. With only the Role,
+`--k8s auto` without `-n` prints `not allowed to list pods in all namespaces;
+looking in your current namespace only (pass -n NAMESPACE to choose)` and
+looks there; a ClusterRole with `list` on `pods` lets it look everywhere. A
+named pod (`--k8s NS/POD`) needs only `get` on `pods`, plus `pods/exec`.
+
+### Troubleshooting
+
+diskvet stops with exit code 2 when it can't find or name the pod, and with 3
+when it can't run the queries; with `--print-payload`, stdout then holds one
+`"status": "ch_unreachable"` line.
+
+- **`Error from server (Forbidden)` ... `"pods/exec"`**: your kubectl user may
+  not exec into pods in that namespace. Add the Role above, or use
+  port-forward.
+- **`found N ClickHouse pods`**: see [One pod per run](#one-pod-per-run).
+- **`no running ClickHouse pod found`**: pass `--k8s NAMESPACE/POD`, and
+  `--container NAME` when the ClickHouse image has another name.
+  **`pod NS/POD is Pending, not Running`**: wait for the pod.
+- **`Code: 516` (authentication failed)**: ClickHouse refused the pod's own
+  login. Pass `--user` for a user that needs no password from inside the pod,
+  or use port-forward with `--user` and `--password`. With the ClickHouse
+  operator, `--user U` alone may be refused as well: the config the operator
+  writes for clickhouse-client also carries the `default` user's password,
+  which clickhouse-client would then send for U (not verified yet).
+- **`executable file not found`**: the container has no `sh` (a distroless
+  image). Use port-forward.
+- **`clickhouse-client: not found`**: diskvet is in the wrong container. Pass
+  `--container NAME`.
+- **`cannot hash table names, so the payload has no tables`**
+  (`--print-payload` only): `clickhouse local` could not run in the pod's
+  `/tmp`, for example with a read-only root file system and no writable
+  `/tmp`. The payload then leaves your own tables out instead of sending their
+  names; `report` is not affected.
+- **`kubectl exec timed out after 120 s`**: the API server or the pod did not
+  answer. Wait longer with `DISKVET_EXEC_TIMEOUT=300 sh diskvet.sh ...`. If your
+  API server is older than your kubectl, try
+  `KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false sh diskvet.sh ...` (kubectl then
+  uses its older SPDY protocol for exec).
+- **`cannot read kubectl's output (unexpected columns)`**: please
+  [open an issue](https://github.com/Protemir/diskvet/issues/new/choose) with
+  the output of `kubectl version`.
 
 ## Example report (shortened)
 
@@ -250,14 +523,18 @@ before anything is ever sent. **Sending is not implemented**: `push` only says
   ClickHouse version. `tests/check_payload.sh` fails on any other key.
 - Never: host names, IPs, ClickHouse cluster names, users, paths, UUIDs,
   `engine_full`, query texts, mutation ids or commands, error texts, partition
-  names or values.
+  names or values, Kubernetes namespace, pod, container, volume or context
+  names.
 - Names of system tables and of known Langfuse, SigNoz and ClickStack tables
   are kept. Every other database and table name becomes a salted hash:
   `db_` / `t_` + 16 hex digits of `sipHash64(salt, name)`. The hash is computed
-  by `clickhouse local` on your side (inside the container with `--docker`),
-  which gets the salt on stdin: the salt never reaches the ClickHouse server,
-  so it is not in `system.query_log`, `system.text_log`, the server log files
-  or the process list. Disks other than `default` become `disk_1`, `disk_2`, ...
+  by `clickhouse local` on your side (inside the container with `--docker`,
+  inside the pod with `--k8s`), which gets the salt on stdin: the salt never
+  reaches the ClickHouse server, so it is not in `system.query_log`,
+  `system.text_log`, the server log files or the process list. With `--k8s`
+  the salt passes the API server inside the exec stream, over TLS; the audit
+  log records the exec request, not the stream, so the salt is not in the
+  audit log either. Disks other than `default` become `disk_1`, `disk_2`, ...
 - The salt lives only on your server, in `/etc/diskvet.env`
   (`--env` to change), as `SALT=<64 hex chars>` (at least 32 characters, or
   the script refuses it):
@@ -342,31 +619,46 @@ These are the traps the report handles for you. Each was checked on ClickHouse
 A clean server with nothing seeded (fresh container, default config) gets OK on
 all seven checks on 24.1, 24.8, 25.12 and 26.9.
 
+`--k8s` has not run on a real Kubernetes cluster yet. What tests it so far:
+
+| Test | Instead of a cluster | Shells | Coverage |
+|---|---|---|---|
+| `tests/k8s_offline.sh` (run by `tests/replay.sh`) | a fake `kubectl` (`tests/fixtures/fake-kubectl/`) that lists hand-written pods (ClickHouse operator, Bitnami, Altinity, plain, sidecars; not recorded from a real cluster yet) and runs every exec, login script included, in the test's own shell; a fake clickhouse-client answers from the fixtures | dash + mawk, busybox ash + busybox awk | finding the pod and every refusal, argument checks, each login branch, the exact kubectl argv with the pinned context, timeouts, error hints, the Kubernetes report text, payload privacy, `--save-raw` and `--replay` |
+| `tests/k8s_shim.sh` (run by `tests/run.sh`) | the same fake `kubectl`, whose exec becomes `docker exec -u 101:101` into the test's ClickHouse container | Git Bash | a real ClickHouse 25.12: the same statuses as `--docker`, logins with `CLICKHOUSE_USER` and with Bitnami's admin variables (password in env and in a file), only read-only SELECTs in `query_log`, names hashed in the container, no salt or password in any kubectl command line, and the printed `kubectl exec` flag line works as uid 101 |
+
 Not tested yet: a real Langfuse, SigNoz or ClickStack install, replicated
-clusters, Kubernetes, disks on object storage (the script skips remote disks),
+clusters, a real Kubernetes cluster (so no Helm chart, operator, API server or
+`kubectl` version), disks on object storage (the script skips remote disks),
 macOS.
 
 ## Requirements
 
 - POSIX `sh` (dash, busybox ash, bash), `awk` (gawk, mawk, busybox awk), `sed`,
   `od`, `date`. No `jq`, no Python.
-- `docker` for `--docker`, or `clickhouse-client` / `clickhouse client` on the
-  machine for `--host`.
+- `docker` for `--docker`, `kubectl` for `--k8s` (with the
+  [permissions](#permissions) above), or `clickhouse-client` /
+  `clickhouse client` on the machine for `--host`.
 - For `--print-payload` also `clickhouse local` (to hash names): it is in every
-  ClickHouse image and package; with `--docker` the container's copy is used.
+  ClickHouse image and package; with `--docker` the container's copy is used,
+  with `--k8s` the pod's.
 - ClickHouse 24.8 or newer is what the test suite covers (24.1 also runs, see [Tested on](#tested-on)).
 
 ## Development
 
 ```sh
-sh tests/replay.sh              # offline: fixtures, SQL safety, payload privacy
+sh tests/replay.sh              # offline: fixtures, SQL safety, payload privacy, --k8s
+sh tests/k8s_offline.sh         # offline: --k8s with the fake kubectl (replay.sh runs it too)
 sh tests/check_sql.sh           # checks.sql: SELECT from the allowed system tables only
 sh tests/run.sh                 # Docker: ClickHouse 24.8, 25.12, latest (~2 min each)
 sh tests/auto.sh                # Docker: --docker auto with a Langfuse-like compose file
 ```
 
+The `--k8s` tests never contact a cluster: they put the fake `kubectl` first
+on `PATH`, set `KUBECONFIG=/dev/null`, and stop if another `kubectl` would run.
+
 `tests/run.sh` seeds each server with the problems above, runs the script from
-the host and inside the container (dash, busybox), as Variant B and as users
+the host and inside the container (dash, busybox), with `--k8s` through the
+fake `kubectl` (`tests/k8s_shim.sh`), as Variant B and as users
 with setting constraints, checks in `system.query_log` that every query ran
 read-only and that the salt never reached the server, then runs the fix
 commands from the report (both the flag and the `SETTINGS` variant for tables

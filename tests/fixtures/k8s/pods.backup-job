@@ -1,0 +1,2 @@
+ops   ch-backup-29310420-7xk2p                Running   clickhouse          clickhouse/clickhouse-server:25.8   <none>   <none>   <none>   <none>   <none>   Job
+ops   clickhouse-backup-cron-29310420-q8w4z   Running   clickhouse-backup   altinity/clickhouse-backup:2.6.3    <none>   <none>   <none>   <none>   <none>   Job

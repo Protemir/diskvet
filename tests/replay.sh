@@ -1,7 +1,7 @@
 #!/bin/sh
-# Offline tests: render saved query results (tests/fixtures/*.tsv) and check the
-# statuses, the fix commands and the payload. No server needed, so this also
-# runs under dash, busybox ash + busybox awk, and mawk:
+# Offline tests: render saved query results (tests/fixtures/*.tsv), check the
+# statuses, the fix commands and the payload, and cmp them with tests/fixtures/golden/.
+# No server needed, so this also runs under dash, busybox ash + busybox awk, and mawk:
 #   sh tests/replay.sh            # uses ./diskvet.sh
 #   busybox sh tests/replay.sh
 set -u
@@ -30,7 +30,7 @@ if sh tests/check_sql.sh tests/fixtures/bad_checks.sql >"$out/bad.txt" 2>&1; the
     fail "check_sql.sh accepted tests/fixtures/bad_checks.sql"
 else
     n=$(grep -c '^FAIL' "$out/bad.txt")
-    if [ "$n" -ge 7 ]; then ok "check_sql.sh rejects bad_checks.sql ($n findings)"; else fail "check_sql.sh found only $n problems in bad_checks.sql"; fi
+    if [ "$n" -ge 8 ] && grep -q "^FAIL: query _target: query id" "$out/bad.txt"; then ok "check_sql.sh rejects bad_checks.sql ($n findings, the reserved id _target too)"; else fail "check_sql.sh found only $n problems in bad_checks.sql, or missed the reserved id _target"; fi
 fi
 sh tests/check_sql.sh tests/fixtures/bad_checks_tricky.sql >"$out/tricky.txt" 2>&1
 missed=""
@@ -109,12 +109,61 @@ sh diskvet.sh --print-payload --replay tests/fixtures/notrun.tsv >"$p" 2>/dev/nu
 has "$p" '"not_run": ["passport", "system_logs", "not_in_parts", "disk_now", "growth_24h", "too_many_parts", "inactive_parts", "deleted_rows", "mutations", "tables"]' "not_run lists required queries only"
 if sh tests/check_payload.sh "$p" >"$out/p3.txt" 2>&1; then ok "empty payload passes check_payload.sh"; else fail "payload: $(cat "$out/p3.txt")"; fi
 
+echo "== golden files: docker and local renders are byte-identical to v0.2.2"
+# tests/fixtures/golden/ holds what v0.2.2 printed for these fixtures, frozen
+# before the Kubernetes work: the reports without their date line, the payload
+# without sent_at. New report text must not reach docker or local reports, so
+# only the version number may differ. Never regenerate them to make this pass.
+ver=$(sed -n 's/^VERSION=//p' diskvet.sh | sed 's/\./\\./g')
+same() {  # NAME FILE: FILE, minus the date line and sent_at, with this version written as 0.2.2, is golden/NAME
+    g=tests/fixtures/golden/$1
+    sed -e '/^# ClickHouse check-up /d' -e 's/"sent_at": "[^"]*", //' \
+        -e "s|diskvet $ver|diskvet 0.2.2|g" -e "s|\"diskvet/$ver\"|\"diskvet/0.2.2\"|" "$2" >"$2.cmp"
+    if cmp -s "$g" "$2.cmp"; then
+        ok "$1 is byte-identical to the v0.2.2 render"
+    else
+        fail "$1: $(cmp "$g" "$2.cmp" 2>&1)"
+        diff "$g" "$2.cmp" 2>/dev/null | head -20
+    fi
+}
+sh diskvet.sh report --replay tests/fixtures/alex.tsv >"$out/alex-local.md" 2>/dev/null
+sh diskvet.sh report --replay tests/fixtures/worst.tsv --docker langfuse-clickhouse-1 >"$out/worst-docker.md" 2>/dev/null
+same alex-docker.md "$out/alex.md"
+same alex.md "$out/alex-local.md"
+same worst-docker.md "$out/worst-docker.md"
+same worst.md "$out/worst.md"
+same notrun.md "$out/notrun.md"
+same alex-payload.json "$out/alex.json"
+
+echo "== a disk path that is not a plain path never reaches a printed shell command"
+# TSV sends a ' in the path as \'; inside sh -c '...' it would end the quotes and
+# run the rest where the command is pasted (as root, with sudo)
+qpath="/var/lib/clickhouse/\\\\'\$(id>/tmp/pwned)\\\\'/"   # awk -v makes each \\ one \
+awk -F '\t' -v p="$qpath" 'BEGIN { OFS = "\t" } $1 == "disk_now" && $2 == "default" { $3 = p } 1' tests/fixtures/alex.tsv >"$out/quote.tsv"
+has "$out/quote.tsv" "/var/lib/clickhouse/\\'\$(id>/tmp/pwned)\\'/" "the test file has the path as TSV sends it"
+sh diskvet.sh report --replay "$out/quote.tsv" --docker x >"$out/quote-docker.md" 2>/dev/null
+hasnt "$out/quote-docker.md" "pwned" "docker: the path is in no printed command"
+has "$out/quote-docker.md" "docker exec x sh -c 'touch <data path>/flags/force_drop_table && chmod 666 <data path>/flags/force_drop_table'" "docker: the flag line gets <data path>"
+sh diskvet.sh report --replay "$out/quote.tsv" >"$out/quote-local.md" 2>/dev/null
+hasnt "$out/quote-local.md" "pwned" "local: the path is in no printed command"
+has "$out/quote-local.md" "sudo sh -c 'touch <data path>/flags/force_drop_table && chmod 666 <data path>/flags/force_drop_table'" "local: the flag line gets <data path>"
+
 echo "== command line"
 sh diskvet.sh push >/dev/null 2>"$out/push.err"
 if [ $? -eq 2 ] && grep -q "not available yet" "$out/push.err"; then ok "push says not available yet"; else fail "push"; fi
 sh diskvet.sh --bogus >/dev/null 2>&1
 if [ $? -eq 2 ]; then ok "unknown option rejected"; else fail "unknown option accepted"; fi
 if sh diskvet.sh --help | grep -q -- '--print-payload'; then ok "--help"; else fail "--help"; fi
+
+echo "== --k8s with a fake kubectl (tests/k8s_offline.sh)"
+# its checks count here too; no summary line means it stopped early
+sh tests/k8s_offline.sh | tee "$out/k8s.txt"
+k=$(sed -n 's/^k8s_offline: \([0-9][0-9]*\) passed, \([0-9][0-9]*\) failed$/\1 \2/p' "$out/k8s.txt")
+if [ -n "$k" ]; then
+    PASS=$((PASS + ${k% *})); FAIL=$((FAIL + ${k#* }))
+else
+    fail "tests/k8s_offline.sh stopped before its summary"
+fi
 
 echo
 echo "replay: $PASS passed, $FAIL failed"

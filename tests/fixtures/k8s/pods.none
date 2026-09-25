@@ -1,0 +1,4 @@
+default       web-5d8f7c9b64-abcde               Running   web        nginx:1.29                                <none>            <none>   <none>   <none>   <none>   ReplicaSet
+default       clickhouse-proxy-6b7c8d9f5-x4z2w   Running   chproxy    contentsquare/chproxy:v1.26.4             <none>            <none>   <none>   <none>   <none>   ReplicaSet
+default       postgres-0                         Running   postgres   postgres:17.6                             data-postgres-0   <none>   <none>   <none>   <none>   StatefulSet
+kube-system   coredns-668d6bf9bc-7x2kq           Running   coredns    registry.k8s.io/coredns/coredns:v1.12.0   <none>            <none>   <none>   <none>   <none>   ReplicaSet
