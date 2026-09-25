@@ -375,6 +375,12 @@ a compose service named `clickhouse` with `CLICKHOUSE_USER` /
 `CLICKHOUSE_PASSWORD`, like Langfuse's, and checks in `system.query_log` that
 the script ran as that user and sent only `SELECT` queries.
 
+The site ([diskvet.dev](https://diskvet.dev/)) is `docs/`, served by GitHub
+Pages, in seven languages. The guide pages (`docs/guide/`, `docs/<xx>/guide/`)
+and `docs/sitemap.xml` are generated from the Markdown guides; after editing
+`docs/guide.md` or a translation, run `node tools/build-guides.mjs` (Node 18+
+and a logged-in `gh`, which renders the Markdown).
+
 ## Early access
 
 The script is free and stays free. Separately, I'm building the part a

@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+# The Markdown sources are for GitHub; the site serves the same guides as HTML.
+Disallow: /*.md$
+
+Sitemap: https://diskvet.dev/sitemap.xml

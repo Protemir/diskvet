@@ -32,7 +32,7 @@
       <nav aria-label="メインメニュー">
         <ul>
           <li><a href="index.html" aria-current="page">ホーム</a></li>
-          <li><a href="https://github.com/Protemir/diskvet/blob/main/docs/ja/guide.md">ガイド</a></li>
+          <li><a href="guide/">ガイド</a></li>
           <li><a href="https://github.com/Protemir/diskvet/discussions/1">アーリーアクセス</a></li>
           <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
         </ul>
@@ -63,7 +63,7 @@
       <p class="lead">ディスクはいっぱいになるのに、実際に保存しているデータはわずかしかありません。多くの場合、容量を使っているのは ClickHouse 自身のシステムログテーブル（system log tables）で、これらのテーブルにはデフォルトではサイズの上限がありません。diskvet はディスクを何が占めているかを示し、解決するための具体的なコマンドを出力します。自動で実行されるものは何もなく、コマンドはすべて自分で実行します。</p>
       <div class="actions">
         <a class="btn btn-primary" href="#quick-start">クイックスタート</a>
-        <a class="btn btn-secondary" href="https://github.com/Protemir/diskvet/blob/main/docs/ja/guide.md">ガイドを見て手動で解決</a>
+        <a class="btn btn-secondary" href="guide/">ガイドを見て手動で解決</a>
         <a class="btn btn-secondary" href="https://github.com/Protemir/diskvet">GitHub</a>
       </div>
       <p class="muted small">無料、Apache-2.0、登録不要です。短いファイルが 2 つだけなので、実行前に中身を読めます。スクリプトが通信するのはお使いの ClickHouse だけで、ほかの場所には何も送信しません。</p>
@@ -149,7 +149,7 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # ロー
     <section aria-labelledby="guide-title">
       <h2 id="guide-title">手動で解決したい場合</h2>
       <div class="callout">
-        <p><strong><a href="https://github.com/Protemir/diskvet/blob/main/docs/ja/guide.md">セルフホストの Langfuse・SigNoz で ClickHouse のディスクがいっぱいになる原因と対処法</a></strong></p>
+        <p><strong><a href="guide/">セルフホストの Langfuse・SigNoz で ClickHouse のディスクがいっぱいになる原因と対処法</a></strong></p>
         <p>問題を確認するための読み取り専用クエリ 1 つ、今すぐ容量を空ける方法、そして既知の落とし穴を避けながら再発を防ぐ方法をまとめています。ガイド内のコマンドはすべて ClickHouse 24.8、25.12、26.9 で実際に実行して確認しています。ガイドに沿って作業するのに diskvet は必要ありません。</p>
       </div>
     </section>
@@ -178,7 +178,7 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # ロー
   <div class="wrap">
     <ul>
       <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
-      <li><a href="https://github.com/Protemir/diskvet/blob/main/docs/ja/guide.md">ガイド</a></li>
+      <li><a href="guide/">ガイド</a></li>
       <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">問題を報告</a></li>
       <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">脆弱性を報告</a></li>
       <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>

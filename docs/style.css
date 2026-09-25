@@ -230,6 +230,14 @@ pre code { background: none; padding: 0; font-size: 0.88rem; }
    narrow screens; in CJK text there is often no space to break at. */
 :not(pre) > code { overflow-wrap: anywhere; }
 
+/* Guide pages (built from docs/**/guide.md by tools/build-guides.mjs) */
+.guide h2, .guide h3 { scroll-margin-top: 16px; }
+.guide a { overflow-wrap: anywhere; }  /* the Sources list is full of long bare URLs */
+.guide h2 { margin-top: 40px; }
+.guide li > p { margin: 0 0 4px; }
+.guide hr { border: 0; border-top: 1px solid var(--border); margin: 40px 0 16px; }
+.guide-source { margin-top: 24px; }
+
 /* Buttons */
 
 .actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
@@ -290,7 +298,7 @@ th { background: var(--surface-2); font-weight: 600; }
 .two-col {
   display: grid;
   gap: 16px 32px;
-  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
 }
 
 .status-crit { color: var(--crit); font-weight: 600; }

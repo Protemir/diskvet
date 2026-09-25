@@ -32,7 +32,7 @@
       <nav aria-label="주 메뉴">
         <ul>
           <li><a href="index.html" aria-current="page">홈</a></li>
-          <li><a href="https://github.com/Protemir/diskvet/blob/main/docs/ko/guide.md">가이드</a></li>
+          <li><a href="guide/">가이드</a></li>
           <li><a href="https://github.com/Protemir/diskvet/discussions/1">얼리 액세스</a></li>
           <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
         </ul>
@@ -63,7 +63,7 @@
       <p class="lead">디스크는 가득 차는데, 실제로 저장한 데이터는 많지 않습니다. 대개 공간을 차지하는 것은 ClickHouse 자체의 시스템 로그 테이블(system log tables)이며, 이 테이블에는 기본적으로 크기 제한이 없습니다. diskvet은 디스크를 무엇이 차지하고 있는지 보여 주고, 해결에 필요한 정확한 명령을 출력합니다. 자동으로 실행되는 것은 없으며, 명령은 모두 직접 실행합니다.</p>
       <div class="actions">
         <a class="btn btn-primary" href="#quick-start">빠른 시작</a>
-        <a class="btn btn-secondary" href="https://github.com/Protemir/diskvet/blob/main/docs/ko/guide.md">직접 해결하기: 가이드</a>
+        <a class="btn btn-secondary" href="guide/">직접 해결하기: 가이드</a>
         <a class="btn btn-secondary" href="https://github.com/Protemir/diskvet">GitHub</a>
       </div>
       <p class="muted small">무료이며 Apache-2.0 라이선스로 제공되고, 가입도 필요 없습니다. 짧은 파일 두 개뿐이라 실행하기 전에 내용을 읽어 볼 수 있습니다. 스크립트는 사용 중인 ClickHouse와만 통신하며, 다른 곳으로는 아무것도 보내지 않습니다.</p>
@@ -149,7 +149,7 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # 로컬
     <section aria-labelledby="guide-title">
       <h2 id="guide-title">직접 해결하고 싶다면</h2>
       <div class="callout">
-        <p><strong><a href="https://github.com/Protemir/diskvet/blob/main/docs/ko/guide.md">셀프 호스팅 Langfuse와 SigNoz에서 ClickHouse 디스크가 가득 차는 이유와 해결 방법</a></strong></p>
+        <p><strong><a href="guide/">셀프 호스팅 Langfuse와 SigNoz에서 ClickHouse 디스크가 가득 차는 이유와 해결 방법</a></strong></p>
         <p>문제를 확인하는 읽기 전용 쿼리 하나, 지금 바로 공간을 확보하는 방법, 알려진 함정을 피하면서 재발을 막는 방법을 정리했습니다. 가이드의 모든 명령은 ClickHouse 24.8, 25.12, 26.9에서 실제로 실행해 확인했습니다. 가이드를 따라 하는 데 diskvet은 필요 없습니다.</p>
       </div>
     </section>
@@ -178,7 +178,7 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # 로컬
   <div class="wrap">
     <ul>
       <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
-      <li><a href="https://github.com/Protemir/diskvet/blob/main/docs/ko/guide.md">가이드</a></li>
+      <li><a href="guide/">가이드</a></li>
       <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">문제 보고</a></li>
       <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">보안 문제 보고</a></li>
       <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>

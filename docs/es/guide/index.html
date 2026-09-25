@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Por qué ClickHouse® llena el disco en Langfuse y SigNoz autoalojados y cómo solucionarlo · diskvet</title>
+  <meta name="description" content="Tu servidor de Langfuse o SigNoz se está quedando sin espacio en disco, pero tus trazas ocupan poco. En la mayoría de los casos publicados, el espacio se lo…">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../../style.css">
+  <meta property="og:title" content="Por qué ClickHouse® llena el disco en Langfuse y SigNoz autoalojados y cómo solucionarlo">
+  <meta property="og:description" content="Tu servidor de Langfuse o SigNoz se está quedando sin espacio en disco, pero tus trazas ocupan poco. En la mayoría de los casos publicados, el espacio se lo…">
+  <meta property="og:url" content="https://diskvet.dev/es/guide/">
+  <meta property="og:type" content="article">
+  <meta property="og:locale" content="es_ES">
+  <link rel="canonical" href="https://diskvet.dev/es/guide/">
+  <link rel="alternate" hreflang="en" href="https://diskvet.dev/guide/">
+  <link rel="alternate" hreflang="es" href="https://diskvet.dev/es/guide/">
+  <link rel="alternate" hreflang="pt" href="https://diskvet.dev/pt/guide/">
+  <link rel="alternate" hreflang="ru" href="https://diskvet.dev/ru/guide/">
+  <link rel="alternate" hreflang="ja" href="https://diskvet.dev/ja/guide/">
+  <link rel="alternate" hreflang="ko" href="https://diskvet.dev/ko/guide/">
+  <link rel="alternate" hreflang="zh-Hans" href="https://diskvet.dev/zh/guide/">
+  <link rel="alternate" hreflang="x-default" href="https://diskvet.dev/guide/">
+</head>
+<body>
+<a class="skip" href="#main">Saltar al contenido</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="../">diskvet</a>
+    <div class="header-right">
+      <nav aria-label="Menú principal">
+        <ul>
+          <li><a href="../">Inicio</a></li>
+          <li><a href="./" aria-current="page">Guía</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/discussions/1">Acceso anticipado</a></li>
+          <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+        </ul>
+      </nav>
+      <nav class="langs" aria-label="Language">
+        <details>
+          <summary><svg class="globe" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8h13M8 1.5c1.9 2 2.8 4.1 2.8 6.5S9.9 12.5 8 14.5M8 1.5C6.1 3.5 5.2 5.6 5.2 8s.9 4.5 2.8 6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg> Español</summary>
+          <ul>
+            <li><a href="../../guide/" hreflang="en" lang="en">English</a></li>
+            <li><a href="./" hreflang="es" lang="es" aria-current="page">Español</a></li>
+            <li><a href="../../pt/guide/" hreflang="pt" lang="pt-BR">Português</a></li>
+            <li><a href="../../ru/guide/" hreflang="ru" lang="ru">Русский</a></li>
+            <li><a href="../../ja/guide/" hreflang="ja" lang="ja">日本語</a></li>
+            <li><a href="../../ko/guide/" hreflang="ko" lang="ko">한국어</a></li>
+            <li><a href="../../zh/guide/" hreflang="zh-Hans" lang="zh-Hans">中文</a></li>
+          </ul>
+        </details>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow">
+    <article class="guide">
+<h1 id="por-qué-clickhouse-llena-el-disco-en-langfuse-y-signoz-autoalojados-y-cómo-solucionarlo">Por qué ClickHouse® llena el disco en Langfuse y SigNoz autoalojados y cómo solucionarlo</h1>
+<p><em><a href="../../guide/">English</a> · <a href="../../pt/guide/">Português</a> · <a href="../../ru/guide/">Русский</a> · <a href="../../ja/guide/">日本語</a> · <a href="../../ko/guide/">한국어</a> · <a href="../../zh/guide/">中文</a>. Si las versiones no coinciden, la inglesa es la correcta.</em></p>
+<p>Tu servidor de Langfuse o SigNoz se está quedando sin espacio en disco, pero tus trazas<br>
+ocupan poco. En la mayoría de los casos publicados, el espacio se lo lleva el<br>
+propio ClickHouse®: sus tablas de registro del sistema (system log tables), como<br>
+<code>system.trace_log</code> y <code>system.text_log</code>, que por defecto no tienen límite de<br>
+tamaño. ClickStack tiene el mismo problema.</p>
+<p>Esta guía explica cómo confirmarlo con una sola consulta de solo lectura,<br>
+liberar el espacio ahora y evitar que el problema vuelva sin caer en las<br>
+trampas conocidas. No necesitas herramientas adicionales.</p>
+<p><em>Probado con las imágenes estándar de <code>clickhouse/clickhouse-server</code> 24.8, 25.12<br>
+y 26.9 (los comandos de SigNoz, con 25.5 y 25.12), con el servicio y la<br>
+configuración de ClickHouse tomados de los archivos compose de Langfuse y SigNoz.</em></p>
+<h2 id="resumen">Resumen</h2>
+<ol>
+<li><strong>Comprueba.</strong> Ejecuta una consulta de solo lectura sobre <code>system.parts</code>. Si las tablas <code>system.*_log</code> ocupan más que tus datos, el problema son las tablas de registro del propio ClickHouse.</li>
+<li><strong>Libera espacio ya.</strong> Vacía las tablas de registro grandes con <code>TRUNCATE</code>. Para una tabla de más de 50 GB, añade <code>SETTINGS max_table_size_to_drop = 0</code>.</li>
+<li><strong>Evita que vuelva.</strong> Añade un archivo en <code>config.d</code> con un TTL (tiempo de vida) para cada tabla de registro; en <code>opentelemetry_span_log</code> el TTL va dentro de <code>&lt;engine&gt;</code>. Luego reinicia ClickHouse.</li>
+<li><strong>Limpia.</strong> Elimina las copias <code>*_log_0</code>, <code>*_log_1</code> que deja el reinicio.</li>
+<li><strong>¿Sigue lleno?</strong> Revisa los logs de los contenedores de Docker, las filas eliminadas y las partes (parts) atascadas. En Langfuse, actualiza Langfuse antes de pasar ClickHouse a 26.8+.</li>
+</ol>
+<h2 id="1-qué-ocupa-el-disco-uso-de-disco-de-clickhouse-por-tabla">1. ¿Qué ocupa el disco? Uso de disco de ClickHouse por tabla</h2>
+<p>Guarda esta consulta como <code>size.sql</code>. Muestra las tablas más grandes según su<br>
+tamaño en disco:</p>
+<pre><code>SELECT database, table,
+       formatReadableSize(sum(bytes_on_disk)) AS size,
+       sum(rows) AS rows,
+       count() AS parts
+FROM system.parts
+WHERE active
+GROUP BY database, table
+ORDER BY sum(bytes_on_disk) DESC
+LIMIT 15;</code></pre>
+<p><strong>Langfuse (docker compose).</strong> Ejecuta esto en la carpeta donde está el<br>
+<code>docker-compose.yml</code> de Langfuse. Su archivo compose ya define <code>CLICKHOUSE_USER</code><br>
+y <code>CLICKHOUSE_PASSWORD</code> dentro del contenedor:</p>
+<pre><code>docker compose exec -T clickhouse sh -c \
+  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' &lt; size.sql</code></pre>
+<p><strong>SigNoz (docker compose).</strong> El contenedor suele llamarse <code>signoz-clickhouse</code><br>
+(compruébalo con <code>docker ps</code>). El <code>users.xml</code> de SigNoz deja al usuario<br>
+<code>default</code> sin contraseña:</p>
+<pre><code>docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact &lt; size.sql</code></pre>
+<p><code>--readonly=1</code> pone la sesión en modo de solo lectura: ClickHouse rechaza<br>
+cualquier cambio.</p>
+<p><strong>Cómo interpretarlo.</strong> Compara las filas de <code>system</code> con tus propios datos<br>
+(<code>default</code> en Langfuse, <code>signoz_*</code> en SigNoz). Si <code>system.trace_log</code> o<br>
+<code>system.text_log</code> encabezan la lista, pasa a la sección 2.</p>
+<h2 id="2-cómo-libero-espacio-en-disco-ahora-mismo">2. ¿Cómo libero espacio en disco ahora mismo?</h2>
+<p>Abre un cliente con permisos de escritura:</p>
+<pre><code># Langfuse
+docker compose exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD"'
+# SigNoz
+docker exec -it signoz-clickhouse clickhouse-client</code></pre>
+<p>Vacía las tablas de registro grandes:</p>
+<pre><code>TRUNCATE TABLE system.trace_log;
+TRUNCATE TABLE system.text_log;
+TRUNCATE TABLE system.metric_log;
+TRUNCATE TABLE system.query_log;</code></pre>
+<p>Esto elimina solo los datos de diagnóstico del propio ClickHouse, no tus<br>
+trazas, y no requiere reiniciar.</p>
+<p>Langfuse lee <code>system.query_log</code> para seguir algunas de sus propias consultas<br>
+(<a href="https://github.com/langfuse/langfuse/issues/13123" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/13123/hovercard">#13123</a>). Por eso, vacíala,<br>
+pero no la desactives.</p>
+<h3 id="truncate-falla-con-code-359-tablas-de-más-de-50-gb">¿TRUNCATE falla con Code 359? Tablas de más de 50 GB</h3>
+<p>ClickHouse no elimina ni vacía una tabla que supere <code>max_table_size_to_drop</code><br>
+(por defecto, 50 000 000 000 bytes, unos 46.6 GiB). El límite también afecta a<br>
+<code>TRUNCATE</code>: con una tabla más grande, la sentencia falla con<br>
+<code>Code: 359 ... (TABLE_SIZE_EXCEEDS_MAX_DROP_SIZE_LIMIT)</code>.</p>
+<p>Y las tablas de registro grandes sí llegan a ese límite: el <code>text_log</code> de la<br>
+<a href="https://github.com/orgs/langfuse/discussions/15024">discusión #15024 de Langfuse</a><br>
+ocupaba 59.20 GiB. Hay dos formas de sortearlo.</p>
+<p><strong>Opción A.</strong> Quita el límite para una sola sentencia:</p>
+<pre><code>-- ClickHouse 23.12+: quita el límite solo para esta sentencia
+TRUNCATE TABLE system.text_log SETTINGS max_table_size_to_drop = 0;</code></pre>
+<p><strong>Opción B.</strong> Crea el archivo flag de un solo uso y luego ejecuta el <code>TRUNCATE</code><br>
+normal:</p>
+<pre><code>docker compose exec clickhouse sh -c 'touch /var/lib/clickhouse/flags/force_drop_table &amp;&amp; chmod 666 /var/lib/clickhouse/flags/force_drop_table'</code></pre>
+<p>(En SigNoz: <code>docker exec signoz-clickhouse sh -c '...'</code> con el mismo comando.)<br>
+ClickHouse elimina el flag después del primer <code>DROP</code> o <code>TRUNCATE</code> que lo<br>
+necesita, así que vuelve a crearlo antes de la siguiente tabla grande.</p>
+<p>El espacio ya está libre, pero las tablas de registro empiezan a crecer de nuevo<br>
+enseguida. La sección 4 lo evita, y la sección 3 explica por qué pasa.</p>
+<h2 id="3-por-qué-trace_log-y-text_log-son-tan-grandes">3. ¿Por qué trace_log y text_log son tan grandes?</h2>
+<p>ClickHouse escribe sus propios datos de diagnóstico en tablas de la base de<br>
+datos <code>system</code>: <code>query_log</code>, <code>trace_log</code>, <code>text_log</code>, <code>metric_log</code> y otras. La<br>
+<a href="https://clickhouse.com/docs/reference/system-tables/overview">documentación</a><br>
+lo dice claramente: «By default, table growth is unlimited» (por defecto, el<br>
+crecimiento de las tablas es ilimitado).</p>
+<p>La <a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">configuración por defecto</a><br>
+de las versiones recientes define un TTL solo para algunas tablas de registro pequeñas (desde<br>
+25.9, <code>processors_profile_log</code> conserva 30 días), no para las grandes. Dos<br>
+valores por defecto hacen que las grandes crezcan rápido:</p>
+<ul>
+<li>el perfilador de consultas (query profiler) está activado y escribe en <code>trace_log</code> muestras de la pila de las consultas en ejecución;</li>
+<li><code>text_log</code> guarda el log del servidor con nivel <code>trace</code>.</li>
+</ul>
+<p>Casos públicos:</p>
+<ul>
+<li><strong>Langfuse <a href="https://github.com/langfuse/langfuse/issues/13123" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/13123/hovercard">#13123</a>:</strong> <code>system.trace_log</code> ocupaba 66.86 GiB, mientras que las tablas de Langfuse que aparecen ahí (<code>traces</code>, <code>observations</code>, <code>scores</code>) sumaban unos 51 MiB. Los mantenedores decidieron no cambiar los valores por defecto de ClickHouse y, en su lugar, añadieron una <a href="https://langfuse.com/faq/all/reduce-clickhouse-disk-size">página de FAQ</a>.</li>
+<li><strong>SigNoz <a href="https://github.com/SigNoz/signoz/issues/12050" data-hovercard-type="issue" data-hovercard-url="/SigNoz/signoz/issues/12050/hovercard">#12050</a>:</strong> más de 80 GB en tablas de registro del sistema (incluida una copia <code>trace_log_0</code>) frente a menos de 500 MB de telemetría. Vaciar las tablas <code>system.*</code> liberó unos 80 GB. El nuevo instalador Foundry de SigNoz define los TTL; las instalaciones más antiguas con docker compose no los tienen.</li>
+<li><strong>Chart de Helm de ClickStack, <a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275" data-hovercard-type="pull_request" data-hovercard-url="/ClickHouse/ClickStack-helm-charts/pull/275/hovercard">PR #275</a>:</strong> un volumen de 10 Gi llegó al 100% a los 10 días, con 5.2 GB de logs del servidor de nivel trace y un <code>system.text_log</code> de 3.7 GB, frente a ~70 MB de telemetría. El PR, integrado en septiembre de 2026, añade un TTL de 7 días.</li>
+</ul>
+<h2 id="4-cómo-configuro-un-ttl-en-las-tablas-de-registro-del-sistema-de-clickhouse">4. ¿Cómo configuro un TTL en las tablas de registro del sistema de ClickHouse?</h2>
+<p>Con un TTL, ClickHouse elimina por sí solo las filas antiguas de las tablas de<br>
+registro. Configúralo <strong>después</strong> del <code>TRUNCATE</code> de la sección 2, por la forma<br>
+en que ClickHouse lo aplica.</p>
+<p>Cuando añades un TTL y reinicias, ClickHouse no reduce la tabla antigua: la<br>
+renombra a <code>trace_log_0</code> con todas sus filas y crea una nueva con el TTL. Si la<br>
+vacías antes, estas copias quedan diminutas, y el paso 4 las elimina.</p>
+<p>Ejecuta el SQL siguiente en el mismo cliente con permisos de escritura de la<br>
+sección 2.</p>
+<h3 id="paso-1-qué-tablas-de-registro-no-tienen-ttl">Paso 1: ¿qué tablas de registro no tienen TTL?</h3>
+<pre><code>SELECT name,
+       formatReadableSize(total_bytes) AS size,
+       extract(engine_full, 'TTL [^S]*') AS ttl
+FROM system.tables
+WHERE database = 'system' AND engine LIKE '%MergeTree' AND match(name, '_log(_[0-9]+)?$')
+ORDER BY total_bytes DESC;</code></pre>
+<p>Un <code>ttl</code> vacío significa que la tabla de registro conserva los datos para<br>
+siempre. Los nombres como <code>trace_log_0</code> son copias antiguas; el paso 4 las<br>
+elimina.</p>
+<h3 id="paso-2-añade-un-archivo-de-ttl-en-configd">Paso 2: añade un archivo de TTL en config.d</h3>
+<p>Guarda esto como <code>clickhouse-ttl.xml</code> junto a <code>docker-compose.yml</code>:</p>
+<pre><code>&lt;clickhouse&gt;
+    &lt;!-- Conserva 7 días de datos en las tablas de registro de ClickHouse. Incluye solo las que tiene tu servidor. --&gt;
+    &lt;query_log&gt;&lt;ttl&gt;event_date + INTERVAL 7 DAY DELETE&lt;/ttl&gt;&lt;/query_log&gt;
+    &lt;trace_log&gt;&lt;ttl&gt;event_date + INTERVAL 7 DAY DELETE&lt;/ttl&gt;&lt;/trace_log&gt;
+    &lt;text_log&gt;&lt;ttl&gt;event_date + INTERVAL 7 DAY DELETE&lt;/ttl&gt;&lt;/text_log&gt;
+    &lt;metric_log&gt;&lt;ttl&gt;event_date + INTERVAL 7 DAY DELETE&lt;/ttl&gt;&lt;/metric_log&gt;
+    &lt;asynchronous_metric_log&gt;&lt;ttl&gt;event_date + INTERVAL 7 DAY DELETE&lt;/ttl&gt;&lt;/asynchronous_metric_log&gt;
+    &lt;part_log&gt;&lt;ttl&gt;event_date + INTERVAL 7 DAY DELETE&lt;/ttl&gt;&lt;/part_log&gt;
+
+    &lt;!-- La configuración estándar define esta tabla con &lt;engine&gt;, así que un &lt;ttl&gt; aparte
+         impide que el servidor arranque (ClickHouse#88366). El TTL va dentro. --&gt;
+    &lt;opentelemetry_span_log&gt;
+        &lt;engine&gt;ENGINE = MergeTree PARTITION BY toYYYYMM(finish_date) ORDER BY (finish_date, finish_time_us) TTL finish_date + INTERVAL 7 DAY DELETE&lt;/engine&gt;
+    &lt;/opentelemetry_span_log&gt;
+&lt;/clickhouse&gt;</code></pre>
+<p>Móntalo en el servicio <code>clickhouse</code> (conserva las líneas de volúmenes que ya<br>
+tienes):</p>
+<pre><code>  clickhouse:
+    volumes:
+      - ./clickhouse-ttl.xml:/etc/clickhouse-server/config.d/clickhouse-ttl.xml:ro</code></pre>
+<p>Tres trampas en este paso:</p>
+<ul>
+<li><strong>En <code>opentelemetry_span_log</code>, el TTL va dentro de <code>&lt;engine&gt;</code>.</strong> La configuración estándar define esta tabla de registro con <code>&lt;engine&gt;</code> y, según la <a href="https://clickhouse.com/docs/reference/system-tables/overview">documentación</a>, eso entra en conflicto con <code>&lt;ttl&gt;</code>. En ese caso, el servidor se detiene con el error <code>If 'engine' is specified for system table, TTL parameters should be specified directly inside 'engine'</code> (<a href="https://github.com/ClickHouse/ClickHouse/issues/88366" data-hovercard-type="issue" data-hovercard-url="/ClickHouse/ClickHouse/issues/88366/hovercard">ClickHouse #88366</a>). Copia <code>PARTITION BY</code> y <code>ORDER BY</code> del resultado de <code>SELECT engine_full FROM system.tables WHERE database = 'system' AND name = 'opentelemetry_span_log'</code> (la configuración de SigNoz también ordena por <code>trace_id</code>). O desactiva esta tabla de registro con <code>&lt;opentelemetry_span_log remove="1"/&gt;</code> (<a href="https://langfuse.com/self-hosting/configuration/scaling">documentación de escalado</a> de Langfuse). <code>remove</code> no elimina la tabla existente, así que elimínala tú.</li>
+<li><strong>Incluye solo las tablas de registro que tiene tu servidor.</strong> Lo que activa una tabla de registro es su sección en la configuración (el <code>config.xml</code> estándar desactiva <code>session_log</code> dejando su sección comentada). El <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml"><code>config.xml</code></a> propio de SigNoz no activa <code>text_log</code>, así que en SigNoz borra esa línea de <code>clickhouse-ttl.xml</code>. Añade también ahí <code>processors_profile_log</code>, que no tiene TTL en el <code>config.xml</code> de SigNoz.</li>
+<li><strong>Los ajustes de perfil van en users.d, no en config.d.</strong> Si además desactivas el perfilador de consultas (<code>query_profiler_real_time_period_ns</code> y <code>query_profiler_cpu_time_period_ns</code> = 0, como en la documentación de escalado de Langfuse), pon ese bloque <code>&lt;profiles&gt;</code> en <code>users.d/</code>. En <code>config.d/</code> se ignora sin ningún aviso (<a href="https://github.com/triggerdotdev/trigger.dev/issues/4343" data-hovercard-type="issue" data-hovercard-url="/triggerdotdev/trigger.dev/issues/4343/hovercard">trigger.dev #4343</a>).</li>
+</ul>
+<h3 id="paso-3-reinicia-clickhouse">Paso 3: reinicia ClickHouse</h3>
+<p>El TTL de <code>config.d</code> solo entra en vigor cuando el servidor se reinicia<br>
+(<a href="https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/">Altinity KB</a>).<br>
+Recargar la configuración no basta. Con compose:</p>
+<pre><code>docker compose up -d clickhouse     # recrea el contenedor con el nuevo montaje
+docker compose ps clickhouse</code></pre>
+<p>Si ClickHouse se reinicia una y otra vez, la causa está en su log de errores,<br>
+dentro del contenedor. <code>docker compose logs</code> puede no mostrarla:</p>
+<pre><code>docker cp "$(docker compose ps -aq clickhouse)":/var/log/clickhouse-server/clickhouse-server.err.log .
+tail -n 20 clickhouse-server.err.log</code></pre>
+<h3 id="paso-4-elimina-las-copias-antiguas-trace_log_0">Paso 4: elimina las copias antiguas trace_log_0</h3>
+<p>Después del reinicio, cada tabla de registro modificada tiene una copia como<br>
+<code>trace_log_0</code> (y luego <code>_1</code>, <code>_2</code> tras cambios posteriores). La copia conserva<br>
+todas las filas antiguas y no tiene TTL (nota de actualización del PR #275 de<br>
+ClickStack, <a href="https://github.com/getsentry/snuba/issues/7311" data-hovercard-type="issue" data-hovercard-url="/getsentry/snuba/issues/7311/hovercard">Sentry snuba #7311</a>).</p>
+<p>Esta consulta genera las sentencias <code>DROP</code> por ti. Léelas y luego pégalas en el<br>
+cliente:</p>
+<pre><code>SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
+FROM system.tables
+WHERE database = 'system' AND match(name, '_log_[0-9]+$');</code></pre>
+<p>ClickHouse ya no escribe en estas tablas. <code>DROP</code> no se puede deshacer.</p>
+<h3 id="paso-5-comprueba-el-resultado">Paso 5: comprueba el resultado</h3>
+<p>Vuelve a ejecutar la consulta del paso 1. Todas las tablas de registro grandes<br>
+deberían mostrar un TTL, y no debería quedar ningún nombre con <code>_N</code>.</p>
+<p>ClickHouse elimina las filas caducadas durante las fusiones (merges), por<br>
+defecto como mucho una vez cada 4 horas<br>
+(<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout"><code>merge_with_ttl_timeout</code></a>),<br>
+así que el tamaño irá bajando en las próximas horas.</p>
+<p>Un script puede hacer la comprobación por ti:<br>
+<a href="https://github.com/Protemir/diskvet">diskvet</a> ejecuta la comprobación del paso 1<br>
+en modo de solo lectura e imprime los comandos <code>TRUNCATE</code>, el archivo de TTL y la<br>
+lista de <code>DROP</code> para tus tablas, con el flag para las tablas que superan el<br>
+límite de eliminación (consulta la sección 7).</p>
+<h2 id="5-el-disco-sigue-lleno-a-dónde-más-va-el-espacio">5. ¿El disco sigue lleno? A dónde más va el espacio</h2>
+<p>Compara <code>df -h</code> con el tamaño total de todas las partes<br>
+(<code>SELECT formatReadableSize(sum(bytes_on_disk)) FROM system.parts</code>). Si en el<br>
+disco hay mucho más que eso, el espacio está fuera de las tablas de ClickHouse.</p>
+<h3 id="los-logs-de-los-contenedores-de-docker-llenan-el-disco">¿Los logs de los contenedores de Docker llenan el disco?</h3>
+<p>El driver de logs por defecto de Docker, <code>json-file</code>, no tiene límite de tamaño<br>
+(<code>max-size</code> vale <code>-1</code> por defecto; consulta la <a href="https://docs.docker.com/engine/logging/drivers/json-file/">documentación de Docker</a>).<br>
+En <a href="https://github.com/langfuse/langfuse/issues/16339" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/16339/hovercard">Langfuse #16339</a>, el log<br>
+del contenedor de ClickHouse llegó a 89.1 GiB y llenó un disco raíz de 244 GiB.</p>
+<p>Busca los más grandes:</p>
+<pre><code>sudo sh -c 'du -h /var/lib/docker/containers/*/*-json.log | sort -h | tail -5'
+docker ps -a --no-trunc --format '{{.ID}} {{.Names}}'   # el nombre de la carpeta es el ID del contenedor</code></pre>
+<p>Para solucionarlo, añade un bloque <code>logging:</code> a cada servicio de<br>
+<code>docker-compose.yml</code>. En #16339, los mantenedores de Langfuse recomendaron<br>
+hacerlo en todos los contenedores, no solo en el de ClickHouse. El<br>
+<a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml">archivo compose</a><br>
+de SigNoz ya define <code>50m</code> × 3.</p>
+<pre><code>    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"</code></pre>
+<p>Luego ejecuta <code>docker compose up -d --force-recreate</code>: las opciones de logs solo<br>
+afectan a los contenedores creados de nuevo. Al recrearlos también se elimina el<br>
+archivo de log antiguo; en #16339 eso liberó 81 GiB.</p>
+<p>Dos observaciones:</p>
+<ul>
+<li>Si tu daemon de Docker usa otro driver de logs, configura la retención en ese driver en lugar de añadir este bloque, porque <code>driver: json-file</code> lo sustituye.</li>
+<li>El README de Langfuse (<a href="https://github.com/langfuse/langfuse/pull/16363" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16363/hovercard">PR #16363</a>) describe cómo hacerlo para todo el daemon: definir <code>max-size</code> y <code>max-file</code> como valores por defecto del daemon, reiniciar Docker y recrear los contenedores. También desaconseja truncar o rotar estos archivos con herramientas externas.</li>
+</ul>
+<h3 id="son-grandes-los-archivos-de-log-del-propio-clickhouse">¿Son grandes los archivos de log del propio ClickHouse?</h3>
+<p>ClickHouse también escribe archivos de log normales en <code>/var/log/clickhouse-server</code><br>
+(un volumen en el compose de Langfuse). Por defecto usan el nivel <code>trace</code>, rotan<br>
+al llegar a 1000M y se conservan hasta 10 archivos antiguos<br>
+(<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger">documentación de <code>logger</code></a>).</p>
+<p>El PR #275 de ClickStack usa los valores siguientes. Guárdalos en otro archivo de<br>
+<code>config.d</code>, móntalo igual que el archivo de TTL y reinicia ClickHouse (sección 4,<br>
+paso 3):</p>
+<pre><code>&lt;clickhouse&gt;
+    &lt;logger&gt;&lt;level&gt;information&lt;/level&gt;&lt;size&gt;100M&lt;/size&gt;&lt;count&gt;10&lt;/count&gt;&lt;/logger&gt;
+&lt;/clickhouse&gt;</code></pre>
+<h3 id="por-qué-las-filas-eliminadas-siguen-ocupando-espacio">¿Por qué las filas eliminadas siguen ocupando espacio?</h3>
+<p>La retención de datos de Langfuse elimina las filas antiguas con una<br>
+<a href="https://clickhouse.com/docs/reference/statements/delete">eliminación ligera (lightweight <code>DELETE</code>)</a>.<br>
+ClickHouse solo marca esas filas; el espacio se recupera cuando la parte se<br>
+fusiona.</p>
+<p>Las fusiones en segundo plano omiten las partes que superan<br>
+<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool"><code>max_bytes_to_merge_at_max_space_in_pool</code></a><br>
+(150 GiB), y las particiones (partitions) mensuales antiguas casi nunca se<br>
+fusionan. En la<br>
+<a href="https://github.com/orgs/langfuse/discussions/13969">discusión #13969 de Langfuse</a>,<br>
+una partición de mayo de ~802 GiB estaba formada en un ~85% por filas eliminadas.</p>
+<p>Busca las particiones con filas eliminadas:</p>
+<pre><code>SELECT database, table, partition_id, count() AS parts,
+       formatReadableSize(sum(bytes_on_disk)) AS size
+FROM system.parts
+WHERE active AND has_lightweight_delete
+GROUP BY database, table, partition_id
+ORDER BY sum(bytes_on_disk) DESC;</code></pre>
+<p>Luego aplica la máscara de eliminación partición por partición<br>
+(<a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">APPLY DELETED MASK</a>):</p>
+<pre><code>ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';</code></pre>
+<p><strong>Cuidado:</strong> es una mutación pesada (heavyweight mutation). Reescribe las partes afectadas,<br>
+así que necesita espacio libre para las copias nuevas y carga el disco.<br>
+Ejecútala en horas de poca carga y sigue su avance con<br>
+<code>SELECT * FROM system.mutations WHERE NOT is_done</code>. En #13969 liberó ~360 GiB por<br>
+réplica en ~17 minutos.</p>
+<p>Desde v3.179.0, el worker de Langfuse puede hacerlo de forma programada:<br>
+<code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code> (desactivado por<br>
+defecto; consulta <code>.env.prod.example</code>, <a href="https://github.com/langfuse/langfuse/pull/14035" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/14035/hovercard">PR #14035</a>).</p>
+<h3 id="hay-partes-antiguas-atascadas-en-el-disco-partes-inactivas-y-separadas">¿Hay partes antiguas atascadas en el disco? (partes inactivas y separadas)</h3>
+<pre><code>SELECT database, table, count() AS parts,
+       formatReadableSize(sum(bytes_on_disk)) AS size,
+       min(remove_time) AS oldest, max(refcount) AS max_refcount
+FROM system.parts
+WHERE NOT active
+GROUP BY database, table
+ORDER BY sum(bytes_on_disk) DESC;</code></pre>
+<p>Las partes inactivas (inactive parts) son restos de las fusiones. ClickHouse las<br>
+elimina cuando transcurre el plazo de<br>
+<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime"><code>old_parts_lifetime</code></a><br>
+(480 s) y ninguna consulta las usa ya (<code>refcount</code> = 1).</p>
+<p>Si se acumulan (en la discusión #15024 de Langfuse llegaron a 112.55 GiB) y<br>
+<code>oldest</code> es de hace horas, busca consultas de larga duración en <code>system.processes</code> y<br>
+detenlas con <code>KILL QUERY WHERE query_id = '...'</code>.</p>
+<p>Las partes separadas (detached parts) permanecen en el disco hasta que las<br>
+elimines:</p>
+<pre><code>SELECT database, table, reason, count() AS parts,
+       formatReadableSize(sum(bytes_on_disk)) AS size
+FROM system.detached_parts
+GROUP BY database, table, reason;</code></pre>
+<p>Revisa primero <code>reason</code>. Elimina una parte con<br>
+<code>ALTER TABLE &lt;db&gt;.&lt;table&gt; DROP DETACHED PART '&lt;name&gt;' SETTINGS allow_drop_detached = 1</code>,<br>
+en lugar de borrar carpetas.</p>
+<h2 id="6-vas-a-actualizar-clickhouse-revisa-esto-antes">6. ¿Vas a actualizar ClickHouse? Revisa esto antes</h2>
+<ul>
+<li>
+<p><strong>Langfuse + ClickHouse 26.8 o posterior: actualiza Langfuse primero.</strong> ClickHouse 26.8 cambió el valor por defecto de <code>input_format_read_datetime_number_as_raw_value</code> de 1 a 0. Las versiones antiguas de Langfuse envían los valores <code>DateTime64</code> como números en milisegundos, y en 26.8+ acaban guardados como <code>9999-12-31 23:59:59</code> (<a href="https://github.com/langfuse/langfuse/issues/16858" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/16858/hovercard">Langfuse #16858</a>: del 0.59% al 21.43% de las escrituras, según el proyecto). La corrección llegó con el <a href="https://github.com/langfuse/langfuse/pull/16892" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16892/hovercard">PR #16892</a> (llevado también a v3 en el <a href="https://github.com/langfuse/langfuse/pull/16957" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16957/hovercard">PR #16957</a>) y está publicada en Langfuse v4.28.0 y v3.225.7. Langfuse particiona por mes, así que esas filas acaban en la partición <code>999912</code>. Revisa tu versión y búscalas:</p>
+<pre><code>SELECT version();
+SELECT database, table, partition_id, count() AS parts
+FROM system.parts
+WHERE active AND startsWith(partition_id, '9999')
+GROUP BY database, table, partition_id;</code></pre>
+</li>
+<li>
+<p><strong>Después de cualquier actualización, vuelve a ejecutar la consulta del paso 1 de la sección 4.</strong> Cuando una versión cambia el esquema de una tabla de registro, ClickHouse renombra la tabla actual y crea una nueva, así que aparecen nuevas copias <code>_N</code>. Elimínalas como en el paso 4.</p>
+</li>
+</ul>
+<h2 id="7-comprueba-todo-de-una-vez">7. Comprueba todo de una vez</h2>
+<p><a href="https://github.com/Protemir/diskvet">diskvet</a> es un script de código abierto<br>
+(Apache-2.0) y de solo lectura que ejecuta la mayoría de las comprobaciones<br>
+anteriores e imprime un informe con los comandos para solucionar cada problema.<br>
+No puede ver los archivos de log de Docker, pero muestra cuánto espacio del<br>
+disco está fuera de las partes de ClickHouse. El informe está en inglés.</p>
+<p>En la máquina con el <code>docker-compose.yml</code> de Langfuse (lee <code>checks.sql</code> antes de<br>
+ejecutarlo):</p>
+<pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
+sh diskvet.sh report --docker auto &gt; report.md</code></pre>
+<p>Para SigNoz, usa <code>--docker signoz-clickhouse</code>.</p>
+<p>Solo lee metadatos de las tablas <code>system.*</code> (<code>system.tables</code>,<br>
+<code>system.parts</code>, <code>system.disks</code>, <code>system.detached_parts</code>, <code>system.mutations</code>,<br>
+<code>system.part_log</code> y algunas más), con <code>readonly=2</code> y límites de recursos. Nunca<br>
+lee filas de tus tablas, ni <code>system.query_log</code>, ni textos de consultas, y no<br>
+envía nada a ninguna parte. Nada se ejecuta por sí solo: tú lees cada<br>
+corrección y la ejecutas.</p>
+<p>Pronto habrá una versión que revisará el servidor cada hora y avisará antes de<br>
+que el disco se llene (la beta gratuita empezará en octubre de 2026).</p>
+<h2 id="fuentes">Fuentes</h2>
+<p>Documentación y código fuente de ClickHouse:</p>
+<ul>
+<li>Descripción general de las tablas del sistema (crecimiento ilimitado, <code>&lt;engine&gt;</code> frente a <code>&lt;ttl&gt;</code>, cambio de nombre al cambiar el esquema): <a href="https://clickhouse.com/docs/reference/system-tables/overview">https://clickhouse.com/docs/reference/system-tables/overview</a></li>
+<li><code>config.xml</code> por defecto (tablas de registro sin TTL, motor de <code>opentelemetry_span_log</code>, <code>text_log</code> y logger con nivel <code>trace</code>, <code>session_log</code> comentado): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml</a></li>
+<li><code>max_table_size_to_drop</code>, ajuste del servidor y <code>force_drop_table</code>: <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop</a></li>
+<li><code>max_table_size_to_drop</code>, ajuste de consulta: <a href="https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop</a></li>
+<li>Cambio del límite a nivel de consulta desde 23.12: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="2022426086" data-permission-text="Title is private" data-url="https://github.com/ClickHouse/ClickHouse/issues/57452" data-hovercard-type="pull_request" data-hovercard-url="/ClickHouse/ClickHouse/pull/57452/hovercard" href="https://github.com/ClickHouse/ClickHouse/pull/57452">ClickHouse/ClickHouse#57452</a></li>
+<li>El flag se elimina después de usarse (<code>checkCanBeDropped</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp</a></li>
+<li>TRUNCATE: <a href="https://clickhouse.com/docs/reference/statements/truncate">https://clickhouse.com/docs/reference/statements/truncate</a></li>
+<li>Error de TTL en <code>opentelemetry_span_log</code>: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="3504586668" data-permission-text="Title is private" data-url="https://github.com/ClickHouse/ClickHouse/issues/88366" data-hovercard-type="issue" data-hovercard-url="/ClickHouse/ClickHouse/issues/88366/hovercard" href="https://github.com/ClickHouse/ClickHouse/issues/88366">ClickHouse/ClickHouse#88366</a></li>
+<li>Ajustes de MergeTree: <code>merge_with_ttl_timeout</code> (14400 s) <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout">https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout</a>, <code>old_parts_lifetime</code> (480 s) <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime">https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime</a>, <code>max_bytes_to_merge_at_max_space_in_pool</code> (150 GiB) <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool">https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool</a></li>
+<li>Rotación del log del servidor (<code>logger</code>: <code>level</code>, <code>size</code>, <code>count</code>): <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger</a></li>
+<li>Eliminación ligera (lightweight DELETE): <a href="https://clickhouse.com/docs/reference/statements/delete">https://clickhouse.com/docs/reference/statements/delete</a></li>
+<li>APPLY DELETED MASK: <a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask</a></li>
+<li>system.parts: <a href="https://clickhouse.com/docs/reference/system-tables/parts">https://clickhouse.com/docs/reference/system-tables/parts</a></li>
+<li>system.detached_parts: <a href="https://clickhouse.com/docs/reference/system-tables/detached_parts">https://clickhouse.com/docs/reference/system-tables/detached_parts</a></li>
+<li>DROP DETACHED PART: <a href="https://clickhouse.com/docs/reference/statements/alter/partition">https://clickhouse.com/docs/reference/statements/alter/partition</a></li>
+<li><code>allow_drop_detached</code>: <a href="https://clickhouse.com/docs/reference/settings/session-settings/allow#allow_drop_detached">https://clickhouse.com/docs/reference/settings/session-settings/allow#allow_drop_detached</a></li>
+<li>system.mutations: <a href="https://clickhouse.com/docs/reference/system-tables/mutations">https://clickhouse.com/docs/reference/system-tables/mutations</a></li>
+<li>KILL QUERY: <a href="https://clickhouse.com/docs/reference/statements/kill">https://clickhouse.com/docs/reference/statements/kill</a></li>
+<li>Altinity KB, «System tables ate my disk» (hace falta reiniciar): <a href="https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/">https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/</a></li>
+</ul>
+<p>Docker:</p>
+<ul>
+<li>Driver de logs json-file (<code>max-size</code> vale -1 por defecto; los contenedores existentes mantienen los ajustes antiguos): <a href="https://docs.docker.com/engine/logging/drivers/json-file/">https://docs.docker.com/engine/logging/drivers/json-file/</a></li>
+</ul>
+<p>Langfuse:</p>
+<ul>
+<li>FAQ, cómo reducir el tamaño de ClickHouse en disco: <a href="https://langfuse.com/faq/all/reduce-clickhouse-disk-size">https://langfuse.com/faq/all/reduce-clickhouse-disk-size</a></li>
+<li>Documentación de escalado, tablas de registro del sistema de ClickHouse: <a href="https://langfuse.com/self-hosting/configuration/scaling">https://langfuse.com/self-hosting/configuration/scaling</a></li>
+<li>#13123, las tablas del sistema crecen sin límite: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="4244201137" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/13123" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/13123/hovercard" href="https://github.com/langfuse/langfuse/issues/13123">langfuse/langfuse#13123</a></li>
+<li>#16339, log de Docker sin límite: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5200737006" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16339" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/16339/hovercard" href="https://github.com/langfuse/langfuse/issues/16339">langfuse/langfuse#16339</a></li>
+<li>PR #16363, rotación de logs de Docker en el README (valores por defecto del daemon, sin truncado externo): <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5204821690" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16363" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16363/hovercard" href="https://github.com/langfuse/langfuse/pull/16363">langfuse/langfuse#16363</a></li>
+<li>Discusión #13969, filas con eliminación ligera: <a href="https://github.com/orgs/langfuse/discussions/13969">https://github.com/orgs/langfuse/discussions/13969</a></li>
+<li>Discusión #15024, partes inactivas y text_log de 59 GiB: <a href="https://github.com/orgs/langfuse/discussions/15024">https://github.com/orgs/langfuse/discussions/15024</a></li>
+<li>PR #14035, limpieza con la máscara de eliminación (publicada en v3.179.0): <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="4589266312" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/14035" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/14035/hovercard" href="https://github.com/langfuse/langfuse/pull/14035">langfuse/langfuse#14035</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.179.0">https://github.com/langfuse/langfuse/releases/tag/v3.179.0</a></li>
+<li>#16858, DateTime64 en ClickHouse 26.8+: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5303039699" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16858" data-hovercard-type="issue" data-hovercard-url="/langfuse/langfuse/issues/16858/hovercard" href="https://github.com/langfuse/langfuse/issues/16858">langfuse/langfuse#16858</a></li>
+<li>PR #16892 y su versión para v3, PR #16957: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5312926190" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16892" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16892/hovercard" href="https://github.com/langfuse/langfuse/pull/16892">langfuse/langfuse#16892</a>, <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5323718606" data-permission-text="Title is private" data-url="https://github.com/langfuse/langfuse/issues/16957" data-hovercard-type="pull_request" data-hovercard-url="/langfuse/langfuse/pull/16957/hovercard" href="https://github.com/langfuse/langfuse/pull/16957">langfuse/langfuse#16957</a></li>
+<li>Versiones con la corrección: <a href="https://github.com/langfuse/langfuse/releases/tag/v4.28.0">https://github.com/langfuse/langfuse/releases/tag/v4.28.0</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.225.7">https://github.com/langfuse/langfuse/releases/tag/v3.225.7</a></li>
+</ul>
+<p>SigNoz, ClickStack y otros:</p>
+<ul>
+<li>SigNoz #12050, más de 80 GB en tablas de registro del sistema: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="4846678206" data-permission-text="Title is private" data-url="https://github.com/SigNoz/signoz/issues/12050" data-hovercard-type="issue" data-hovercard-url="/SigNoz/signoz/issues/12050/hovercard" href="https://github.com/SigNoz/signoz/issues/12050">SigNoz/signoz#12050</a></li>
+<li><code>config.xml</code> y <code>users.xml</code> de ClickHouse en SigNoz v0.129.0: <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml</a>, <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml</a></li>
+<li><code>docker-compose.yaml</code> de SigNoz v0.129.0 (contenedor <code>signoz-clickhouse</code>, <code>max-size: 50m</code>, <code>max-file: "3"</code>): <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml</a></li>
+<li>Chart de Helm de ClickStack, PR #275: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="5406160014" data-permission-text="Title is private" data-url="https://github.com/ClickHouse/ClickStack-helm-charts/issues/275" data-hovercard-type="pull_request" data-hovercard-url="/ClickHouse/ClickStack-helm-charts/pull/275/hovercard" href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">ClickHouse/ClickStack-helm-charts#275</a></li>
+<li>Sentry snuba #7311, copias <code>*_log_N</code> sin TTL: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="3263960447" data-permission-text="Title is private" data-url="https://github.com/getsentry/snuba/issues/7311" data-hovercard-type="issue" data-hovercard-url="/getsentry/snuba/issues/7311/hovercard" href="https://github.com/getsentry/snuba/issues/7311">getsentry/snuba#7311</a></li>
+<li>trigger.dev #4343, ajustes de perfil ignorados en config.d: <a class="issue-link js-issue-link" data-error-text="Failed to load title" data-id="4955153791" data-permission-text="Title is private" data-url="https://github.com/triggerdotdev/trigger.dev/issues/4343" data-hovercard-type="issue" data-hovercard-url="/triggerdotdev/trigger.dev/issues/4343/hovercard" href="https://github.com/triggerdotdev/trigger.dev/issues/4343">triggerdotdev/trigger.dev#4343</a></li>
+</ul>
+<hr>
+<p>ClickHouse es una marca registrada de ClickHouse, Inc. diskvet no está afiliado a ClickHouse, Inc.<br>
+Langfuse, SigNoz y ClickStack son marcas de sus respectivos propietarios.</p>
+    </article>
+    <p class="small muted guide-source"><a href="https://github.com/Protemir/diskvet/blob/main/docs/es/guide.md">GitHub</a></p>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="./">Guía</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">Informar de un problema</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">Informar de un problema de seguridad</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet es gratuito y de código abierto (Apache-2.0).</p>
+    <p>ClickHouse es una marca registrada de ClickHouse, Inc. diskvet no está afiliado a ClickHouse, Inc.
+      Langfuse, SigNoz y ClickStack son marcas de sus respectivos propietarios y se mencionan solo para describir la compatibilidad.</p>
+  </div>
+</footer>
+<script src="../../langs.js" defer></script>
+</body>
+</html>
