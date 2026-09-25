@@ -18,6 +18,9 @@
 #   pending              a ClickHouse pod that is not Running
 #   custom-image         no ClickHouse image: needs --container
 #   nopvc                Sentry's bundled ClickHouse without persistence
+# tests/fixtures/k8s/target.* are the _target rows of a --save-raw file, one per
+# flavor (plain-nopvc: no PVC); put in front of alex.tsv, they render the fixes
+# of each chart without kubectl (the flavor replays).
 set -u
 cd "$(dirname "$0")/.." || exit 2
 PASS=0
@@ -631,7 +634,12 @@ sh diskvet.sh report --replay "$W/quote.tsv" </dev/null >"$W/rep.md" 2>"$W/r.err
 if [ "$rc" = 0 ] && grep -qF "/var/lib/clickhouse/\\'\$(id>/tmp/pwned)" "$W/quote.tsv"; then ok "a disk path with a quote: the replay file has it, exit 0"; else fail "quote path: exit $rc: $(grep '^disk_now' "$W/quote.tsv")"; fi
 hasnt "$W/rep.md" "pwned" "a disk path with a quote: not in any printed command"
 has "$W/rep.md" "kubectl exec -n lf langfuse-clickhouse-0-0-0 -c clickhouse-server -- sh -c 'touch <data path>/flags/force_drop_table && chmod 666 <data path>/flags/force_drop_table'" "... the flag line gets <data path>"
-has "$W/rep.md" "sh -c 'du -xk -d 2 <data path>/ 2>/dev/null" "... and so does the du line of check 2"
+# a pod without an operator gets the du line of check 2 and the volume line of check 3
+{ cat tests/fixtures/k8s/target.plain; sed '1,2d' "$W/quote.tsv"; } >"$W/quote-plain.tsv"
+sh diskvet.sh report --replay "$W/quote-plain.tsv" </dev/null >"$W/rep.md" 2>"$W/r.err"; rc_is $? 0 "a disk path with a quote, plain pod: exit 0"
+hasnt "$W/rep.md" "pwned" "... not in any printed command"
+has "$W/rep.md" "sh -c 'du -xk -d 2 <data path>/ 2>/dev/null" "... the du line of check 2 gets <data path>"
+has "$W/rep.md" "Grow the one mounted at <data path>/ with \`kubectl patch pvc -n dv-plain <pvc> -p " "... and so does the volume line of check 3"
 fresh
 sh diskvet.sh report --replay tests/fixtures/alex.tsv --k8s lf/ch-0 --container ch --context ctx-x </dev/null >"$W/rep.md" 2>/dev/null; rc_is $? 0 "--replay alex.tsv --k8s lf/ch-0: exit 0"
 has "$W/rep.md" "kubectl --context ctx-x exec -n lf ch-0 -c ch -- sh -c 'touch /var/lib/clickhouse/flags/force_drop_table && chmod 666 /var/lib/clickhouse/flags/force_drop_table'" "... rendered as a report about that pod"
@@ -654,6 +662,291 @@ has "$W/untyped.md" "\`kubectl exec -it -n lf langfuse-clickhouse-0-0-0 -c click
 dv "KFAKE=nopvc" report --k8s auto >"$W/r.md" 2>/dev/null
 has "$W/r.md" "- This pod mounts no PersistentVolumeClaim: ClickHouse data is on the node's disk" "no PVC: the heads-up"
 has "$W/r.md" "sh -c 'exec clickhouse-client \${CLICKHOUSE_USER:+--user \"\$CLICKHOUSE_USER\"} \${CLICKHOUSE_PASSWORD:+--password \"\$CLICKHOUSE_PASSWORD\"}'" "plain: the client command uses the pod's env when set"
+
+echo "== flavor replays: the fixes per chart (tests/fixtures/k8s/target.* + alex.tsv)"
+# stream TARGET PRODUCT [REPLICATED [ALLTTL [DISK FREE]]]: the _target row of
+# tests/fixtures/k8s/target.TARGET (or of the file TARGET, a path with a /), then
+# alex.tsv with this product and replicated in the passport, with ALLTTL=1 every
+# system log has a TTL, and DISK/FREE (bytes) for the default disk
+stream() {
+    case $1 in */*) cat "$1" ;; *) cat "tests/fixtures/k8s/target.$1" ;; esac
+    awk -F '\t' -v p="$2" -v r="${3:-0}" -v a="${4:-0}" -v t="${5:-}" -v f="${6:-}" 'BEGIN { OFS = "\t" }
+        $1 == "passport" { $4 = p; $5 = r }
+        $1 == "system_logs" && a == 1 { $4 = 1; $5 = 30 }
+        $1 == "disk_now" && t != "" { $4 = t; $5 = f; $6 = f }
+        1' tests/fixtures/alex.tsv
+}
+flavor() {  # NAME TARGET PRODUCT [...]: $W/f.NAME.md, the report of that stream (no kubectl)
+    _n=$1; shift
+    stream "$@" >"$W/f.$_n.tsv"
+    fresh
+    sh diskvet.sh report --replay "$W/f.$_n.tsv" </dev/null >"$W/f.$_n.md" 2>"$W/f.$_n.err"; _rc=$?
+    if [ "$_rc" = 0 ] && [ ! -s "$KLOG" ] && grep -q '^## 7\. ' "$W/f.$_n.md"; then ok "$_n: rendered, no kubectl call"; else fail "$_n: exit $_rc: $(cat "$W/f.$_n.err")"; fi
+    nodocker "$W/f.$_n.md" "$_n: no docker, docker compose, daemon.json, systemctl, sudo or json-file"
+}
+lines() {  # FILE DESC LINE...: FILE has these lines, one right after the other
+    _f=$1 _d=$2; shift 2
+    printf '%s\n' "$@" >"$W/want"
+    if awk 'NR == FNR { w[++k] = $0; next } { l[++n] = $0 }
+            END { for (i = 1; i + k - 1 <= n; i++) { for (j = 1; j <= k; j++) if (l[i + j - 1] != w[j]) break; if (j > k) exit 0 } exit 1 }' "$W/want" "$_f"; then
+        ok "$_d"
+    else
+        fail "$_d (missing: $(tr '\n' '|' <"$W/want"))"
+    fi
+}
+# The YAML of every ```yaml block: 2-space indents, no tabs, a key without a value
+# has children exactly 2 deeper, a value never has children, a block scalar
+# (key: |) is not empty and deeper than its key, "..." values are closed, and
+# plain values are words. First problem to stdout, exit 1; else the block count.
+cat >"$W/yamllint.awk" <<'EOF'
+function bad(m) { printf "line %d: %s: %s\n", FNR, m, $0; err = 1; exit 1 }
+/^```yaml$/ { if (iny) bad("a fence inside a yaml block"); iny = 1; nb++; prev = -1; kids = 0; bs = -1; bsneed = 0; next }
+iny && /^```$/ {
+    if (kids) bad("a key without a value or children at the end")
+    if (bsneed) bad("an empty block scalar at the end")
+    if (prev < 0) bad("an empty yaml block")
+    iny = 0; next
+}
+!iny { next }
+{
+    if (index($0, "\t")) bad("a tab")
+    if ($0 == "") { if (bs >= 0) next; bad("an empty line outside a block scalar") }
+    match($0, /^ */); d = RLENGTH
+    if (d % 2) bad("an indent that is not a multiple of 2")
+    if (bs >= 0) {
+        if (d > bs) { bsneed = 0; next }
+        if (bsneed) bad("a block scalar that is not deeper than its key")
+        bs = -1
+    }
+    if (prev < 0 && d != 0) bad("the first line is indented")
+    if (kids && d != prev + 2) bad("the first child of a key is not 2 deeper")
+    if (!kids && prev >= 0 && d > prev) bad("deeper than a line with a value")
+    line = substr($0, d + 1)
+    if (!match(line, /^[A-Za-z0-9_.\/-]+:/)) bad("not a key")
+    v = substr(line, RLENGTH + 1)
+    kids = 0
+    if (v == "") kids = 1
+    else if (v == " |") { bs = d; bsneed = 1 }
+    else if (v ~ /^ "/) { if (substr(v, 2) !~ /^"([^"\\]|\\.)*"$/) bad("a double-quoted value that is not closed") }
+    else if (v !~ /^ [A-Za-z0-9_.-]+$/) bad("a plain value that is not one word")
+    prev = d
+}
+END { if (err) exit 1; if (iny) { print "a yaml block without its closing fence"; exit 1 } print nb + 0 }
+EOF
+yamlok() {  # FILE DESC: every ```yaml block in FILE passes the lint, and there is one at least
+    if _y=$(awk -f "$W/yamllint.awk" "$1") && [ "$_y" -gt 0 ]; then ok "$2: the YAML passes the lint ($_y block(s))"; else fail "$2: YAML lint: $_y"; fi
+}
+# the lint itself: each of these blocks is refused (~ is a newline, @ a tab)
+for m in 'a:~@b: 1' 'a:~   b: 1' 'a:~    b: 1' 'a: 1~  b: 1' 'a:~  f: |~  <x/>' 'a:~  f: |' 'a:~  b: "x' 'a:~  b: "x\"' \
+        'a:~  b: x y' 'a:' '  a: 1' 'a b: 1' 'a:~~  b: 1'; do
+    { echo '```yaml'; printf '%s\n' "$m" | tr '~@' '\n\t'; echo '```'; } >"$W/lint.md"
+    if awk -f "$W/yamllint.awk" "$W/lint.md" >/dev/null; then fail "the YAML lint misses: $m"; else ok "the YAML lint catches: $m"; fi
+done
+{ echo '```yaml'; printf '%s\n' 'a:' '  b:' '    c: "x \"y\" \\ z"' '    f.xml: |' '        <x>' '' '          <y/>' '        </x>' '  d: 10' 'e: word'; echo '```'; } >"$W/lint.md"
+if [ "$(awk -f "$W/yamllint.awk" "$W/lint.md")" = 1 ]; then ok "the YAML lint passes good YAML"; else fail "the YAML lint refuses good YAML: $(awk -f "$W/yamllint.awk" "$W/lint.md")"; fi
+
+flag_line() { printf '%s' "kubectl exec -n $1 -- sh -c 'touch /var/lib/clickhouse/flags/force_drop_table && chmod 666 /var/lib/clickhouse/flags/force_drop_table'"; }
+fixb_end="Then run your usual \`helm upgrade\`: \`helm list -n"
+flavor official-langfuse official langfuse
+f=$W/f.official-langfuse.md
+yamlok "$f" "official+langfuse"
+lines "$f" "official+langfuse: clickhouse.cluster.logger and clickhouse.cluster.settings in one YAML block" '```yaml' 'clickhouse:' '  cluster:' '    logger:' \
+    '      level: information' '      size: "100M"' '      count: 10' '    settings:' '      trace_log:' '        ttl: "event_date + INTERVAL 7 DAY DELETE"'
+has "$f" '        engine: "ENGINE = MergeTree PARTITION BY toYYYYMM(finish_date) ORDER BY (finish_date, finish_time_us) TTL finish_date + INTERVAL 7 DAY DELETE"' "official+langfuse: opentelemetry_span_log gets its TTL inside engine"
+has "$f" "This pod is run by the ClickHouse operator (Langfuse chart 2.x). Add this to the values you deploy Langfuse with. These keys take YAML, not XML" "official+langfuse: the text"
+hasnt "$f" '```xml' "official+langfuse: no XML block"
+# the YAML lists the logs of the XML (the same stream, rendered as a plain pod)
+sed -n 's/^      \([a-z_]*\):$/\1/p' "$f" >"$W/yaml.logs"
+flavor xml-ref plain other
+sed -n 's/^    <\([a-z_]*\)>$/\1/p' "$W/f.xml-ref.md" >"$W/xml.logs"
+if [ -s "$W/xml.logs" ] && cmp -s "$W/yaml.logs" "$W/xml.logs"; then ok "official+langfuse: the YAML has the logs of the XML, in order ($(tr '\n' ' ' <"$W/yaml.logs"))"; else fail "official+langfuse: YAML logs '$(tr '\n' ' ' <"$W/yaml.logs")', XML logs '$(tr '\n' ' ' <"$W/xml.logs")'"; fi
+has "$f" "$(flag_line "lf langfuse-clickhouse-0-0-0 -c clickhouse-server")" "official+langfuse: the kubectl flag line"
+has "$f" "Most likely: ClickHouse's own server log files. With the ClickHouse operator they are on this volume (/var/log/clickhouse-server)" "official: check 2 names the server log files"
+lines "$f" "official: check 2 prints the du line" '```sh' 'kubectl exec -n lf langfuse-clickhouse-0-0-0 -c clickhouse-server -- du -sh /var/log/clickhouse-server' '```'
+has "$f" "**Fix: free space now.** Irreversible, safe for your data, no restart: it deletes only rotated server log files; the current ones stay." "official: the rm fix says it is irreversible"
+lines "$f" "official: the rm-rotated-logs line" '```sh' "kubectl exec -n lf langfuse-clickhouse-0-0-0 -c clickhouse-server -- sh -c 'rm -f /var/log/clickhouse-server/*.log.*'" '```'
+has "$f" "**Fix: keep them small.** The logger lines in check 1's Fix B do this (level information, 10 files of 100 MB); they apply with the same helm upgrade." "official: check 2 points to the logger lines of Fix B"
+hasnt "$f" "See what takes the space (read-only, inside the pod)" "official: not the generic check 2 text"
+hasnt "$f" "patch pvc" "official: no patch pvc (the operator owns the volume)"
+has "$f" "Or give the volume more room: it belongs to the operator, so grow it through the operator's resource, not the PVC (keys per chart: the Kubernetes page linked above). \`kubectl get pvc -n lf clickhouse-storage-volume-langfuse-clickhouse-0-0-0\` shows its size and StorageClass." "official: check 3 grows the volume through the operator"
+has "$f" "$fixb_end lf\` shows the release" "official+langfuse: the common ending"
+has "$f" "If the pod crash-loops and \`kubectl logs -n lf langfuse-clickhouse-0-0-0 -c clickhouse-server --previous\` says" "official+langfuse: the crash hint"
+
+flavor official-clickstack official clickstack
+f=$W/f.official-clickstack.md
+yamlok "$f" "official+clickstack"
+lines "$f" "official+clickstack: clickhouse.cluster.spec.settings logger and extraConfig" 'clickhouse:' '  cluster:' '    spec:' '      settings:' '        logger:' \
+    '          level: information' '          size: "100M"' '          count: 10' '        extraConfig:' '          trace_log:' '            ttl: "event_date + INTERVAL 7 DAY DELETE"'
+has "$f" "ClickStack chart 3.4.0 and later already sets a 7-day TTL on these logs and this logger, so upgrading the chart is the simplest fix." "official+clickstack: upgrading to 3.4.0 is the simplest fix"
+
+flavor official-other official other
+f=$W/f.official-other.md
+yamlok "$f" "official+other"
+lines "$f" "official+other: spec.settings logger and extraConfig" '```yaml' 'spec:' '  settings:' '    logger:' '      level: information' '      size: "100M"' '      count: 10' '    extraConfig:' '      trace_log:'
+has "$f" "This pod is run by the ClickHouse operator (ClickHouseCluster langfuse-clickhouse in namespace lf). Add this under \`spec\` of that resource (YAML, not XML): in the Helm values that render it, or with \`kubectl edit clickhousecluster -n lf langfuse-clickhouse\` (a helm upgrade overwrites manual edits):" "official+other: the ClickHouseCluster and kubectl edit"
+# a group name that was not a Kubernetes name was dropped: how to find the resource
+awk -F '\t' 'BEGIN { OFS = "\t" } $1 == "_target" { $8 = "" } 1' tests/fixtures/k8s/target.official >"$W/target.nogroup"
+flavor official-nogroup "$W/target.nogroup" other
+f=$W/f.official-nogroup.md
+has "$f" "(the ClickHouseCluster of this pod (\`kubectl get clickhousecluster -n lf\`)). Add this under \`spec\`" "official, no group: how to find the ClickHouseCluster"
+has "$f" "\`kubectl edit clickhousecluster -n lf <name>\`" "official, no group: kubectl edit with <name>"
+
+# every log has a TTL: no Fix B, so check 2 prints the logger block itself
+flavor official-ttl official langfuse 0 1
+f=$W/f.official-ttl.md
+hasnt "$f" "**Fix B" "official, every log has a TTL: no Fix B"
+yamlok "$f" "official, every log has a TTL"
+lines "$f" "official+langfuse, no Fix B: check 2 prints clickhouse.cluster.logger" "**Fix: keep them small.** Set the logger in your values and run your usual helm upgrade (the pod restarts):" \
+    '```yaml' 'clickhouse:' '  cluster:' '    logger:' '      level: information' '      size: "100M"' '      count: 10' '```'
+flavor official-ttl-cs official clickstack 0 1
+lines "$W/f.official-ttl-cs.md" "official+clickstack, no Fix B: check 2 prints clickhouse.cluster.spec.settings.logger" \
+    '```yaml' 'clickhouse:' '  cluster:' '    spec:' '      settings:' '        logger:' '          level: information'
+flavor official-ttl-other official other 0 1
+f=$W/f.official-ttl-other.md
+yamlok "$f" "official+other, no Fix B"
+lines "$f" "official+other, no Fix B: check 2 prints spec.settings.logger of the ClickHouseCluster" \
+    "**Fix: keep them small.** Set the logger in your values and run your usual helm upgrade (the pod restarts). It is \`spec.settings.logger\` of ClickHouseCluster langfuse-clickhouse in namespace lf:" \
+    '```yaml' 'spec:' '  settings:' '    logger:' '      level: information'
+
+flavor altinity-signoz altinity signoz
+f=$W/f.altinity-signoz.md
+yamlok "$f" "altinity+signoz"
+lines "$f" "altinity+signoz: config.d/zz-diskvet-ttl.xml under clickhouse.files" '```yaml' 'clickhouse:' '  files:' '    config.d/zz-diskvet-ttl.xml: |' '        <clickhouse>'
+has "$f" "never here: a second definition of those logs stops ClickHouse from starting." "altinity+signoz: the text"
+# the block scalar holds exactly the XML a plain pod gets, indented
+awk '/^    config.d\/zz-diskvet-ttl.xml: [|]$/ { on = 1; next } on && /^```$/ { exit }
+     on { if (substr($0, 1, 8) != "        ") print "NOT INDENTED BY 8: " $0; else print substr($0, 9) }' "$f" >"$W/signoz.xml"
+awk '/^```xml$/ { on = 1; next } on && /^```$/ { exit } on' "$W/f.xml-ref.md" >"$W/plain.xml"
+if [ -s "$W/plain.xml" ] && cmp -s "$W/signoz.xml" "$W/plain.xml"; then
+    ok "altinity+signoz: the block scalar is the plain XML, every line indented by 8"
+else
+    fail "altinity+signoz: the XML differs from the plain one: $(diff "$W/plain.xml" "$W/signoz.xml" | sed -n '1,4p' | tr '\n' ' ')"
+fi
+has "$f" "See what takes the space (read-only, inside the pod)" "altinity: the generic check 2 text"
+hasnt "$f" "rm -f /var/log/clickhouse-server" "altinity: no rm line (that is the ClickHouse operator's volume)"
+hasnt "$f" "patch pvc" "altinity: no patch pvc (the operator owns the volume)"
+has "$f" "it belongs to the operator, so grow it through the operator's resource, not the PVC (keys per chart: the Kubernetes page linked above). \`kubectl get pvc -n signoz data-volumeclaim-template-chi-signoz-clickhouse-cluster-0-0-0\` shows its size" "altinity: check 3 grows the volume through the operator"
+
+flavor altinity-other altinity other
+f=$W/f.altinity-other.md
+yamlok "$f" "altinity+other"
+lines "$f" "altinity+other: config.d/zz-diskvet-ttl.xml under spec.configuration.files" '```yaml' 'spec:' '  configuration:' '    files:' '      config.d/zz-diskvet-ttl.xml: |' '          <clickhouse>'
+has "$f" "This pod is run by the Altinity operator (ClickHouseInstallation signoz-clickhouse in namespace signoz)." "altinity+other: the ClickHouseInstallation"
+has "$f" "To change the resource directly: \`kubectl edit chi -n signoz signoz-clickhouse\` (a helm upgrade overwrites manual edits)." "altinity+other: kubectl edit chi"
+
+# Langfuse 1.x on the Bitnami chart's default 8Gi volume
+flavor bitnami8 bitnami8 langfuse 0 0 8589934592 1073741824
+f=$W/f.bitnami8.md
+yamlok "$f" "bitnami8"
+lines "$f" "bitnami8: extraOverrides under clickhouse" '```yaml' 'clickhouse:' '  extraOverrides: |' '    <clickhouse>'
+has "$f" "This pod comes from the Bitnami ClickHouse chart (Langfuse chart 1.x uses it). Add this to your values. \`extraOverrides\` is one string" "bitnami8: the text"
+hasnt "$f" "Bitnami chart 9.x uses \`configdFiles\` instead" "bitnami8: no 9.x sentence (only for an unknown Bitnami chart)"
+has "$f" "| default | 8.0 GiB | " "bitnami8: an 8 GiB disk"
+lines "$f" "bitnami8: get pvc, get storageclass and the patch pvc line with 20Gi for an 8 GiB disk" "Or give the volume more room, if its StorageClass allows it:" '```sh' \
+    'kubectl get pvc -n langfuse data-langfuse-clickhouse-shard0-0' "kubectl get storageclass    # the PVC's class needs ALLOWVOLUMEEXPANSION true" \
+    "kubectl patch pvc -n langfuse data-langfuse-clickhouse-shard0-0 -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"20Gi\"}}}}'" '```'
+has "$f" "20Gi is about twice the current size. The patch can't be undone (a volume never shrinks). Leave the size in your Helm values as it is: helm upgrade can't change a StatefulSet's volumeClaimTemplates." "bitnami8: the patch says it can't be undone"
+bitnami_client="kubectl exec -it -n langfuse langfuse-clickhouse-shard0-0 -c clickhouse -- sh -c 'exec clickhouse-client --user \"\$CLICKHOUSE_ADMIN_USER\" --password \"\${CLICKHOUSE_ADMIN_PASSWORD:-\$(cat \"\$CLICKHOUSE_ADMIN_PASSWORD_FILE\")}\"'"
+has "$f" "\`$bitnami_client\`" "bitnami8: the Bitnami client wrapper"
+flavor bitnami8-150 bitnami8 langfuse
+has "$W/f.bitnami8-150.md" "\"storage\":\"300Gi\"" "bitnami8: 300Gi for a 150 GiB disk"
+flavor bitnami8-3 bitnami8 langfuse 0 0 3221225472 1073741824
+has "$W/f.bitnami8-3.md" "\"storage\":\"10Gi\"" "bitnami8: at least 10Gi (a 3 GiB disk)"
+
+flavor bitnami bitnami other
+f=$W/f.bitnami.md
+yamlok "$f" "bitnami (chart unknown)"
+has "$f" "If you installed the Bitnami chart on its own, leave out the \`clickhouse:\` level. Bitnami chart 9.x uses \`configdFiles\` instead: see the Kubernetes page linked above." "bitnami: the 9.x sentence"
+
+# bitnami9: the plain Fix B until the kind job proves the 00- file order
+flavor bitnami9 bitnami9 other
+f=$W/f.bitnami9.md
+hasnt "$f" "00-diskvet-ttl.xml" "bitnami9: no 00-diskvet-ttl.xml yet (not proven in kind)"
+has "$f" "- trigger.dev chart 4.5.10 and later: values \`clickhouse.configdFiles\`, key \`clickhouse-ttl.xml\`;" "bitnami9: the plain Fix B"
+has "$f" "kubectl patch pvc -n trigger data-trigger-clickhouse-shard0-0 -p " "bitnami9: the patch pvc line"
+sed 's/^    bitnami9_proven = 0$/    bitnami9_proven = 1/' diskvet.sh >"$W/dv9.sh"
+sh "$W/dv9.sh" report --replay "$W/f.bitnami9.tsv" </dev/null >"$W/f.bitnami9p.md" 2>/dev/null
+f=$W/f.bitnami9p.md
+if grep -q '^    bitnami9_proven = 1$' "$W/dv9.sh"; then ok "bitnami9: a copy of diskvet.sh with bitnami9_proven = 1"; else fail "bitnami9: no bitnami9_proven = 0 line in diskvet.sh"; fi
+yamlok "$f" "bitnami9 (proven)"
+lines "$f" "bitnami9 (proven): 00-diskvet-ttl.xml under configdFiles" '```yaml' 'configdFiles:' '  00-diskvet-ttl.xml: |' '    <clickhouse>'
+has "$f" "The name starts with 00- so it loads before the chart's 08-sampling.xml: logs the chart turned off stay off." "bitnami9 (proven): the text"
+has "$f" "\`SELECT table, max(modification_time) AS last_write FROM system.parts WHERE database = 'system' AND active GROUP BY table ORDER BY last_write;\`" "bitnami9 (proven): the SELECT for logs no longer written"
+nodocker "$f" "bitnami9 (proven): no docker"
+
+flavor plain plain other
+f=$W/f.plain.md
+lines "$f" "plain: the XML" '```xml' '<clickhouse>' "    <!-- diskvet $(sed -n 's/^VERSION=//p' diskvet.sh): TTL for system logs that had none -->" '    <trace_log>' '        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>'
+has "$f" "- Sentry chart up to 28 (bundled ClickHouse): \`clickhouse.clickhouse.configmap.configOverride\`" "plain: the chart list"
+has "$f" "- other charts: a ConfigMap of your own, mounted with subPath at \`/etc/clickhouse-server/conf.d/clickhouse-ttl.xml\`" "plain: other charts"
+hasnt "$f" '```yaml' "plain: no YAML"
+has "$f" "Or give the volume more room: this pod mounts several volumes (data-ch-0, logs-ch-0); \`kubectl get pvc -n dv-plain\` shows them. Grow the one mounted at /var/lib/clickhouse/ with \`kubectl patch pvc -n dv-plain <pvc> -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"300Gi\"}}}}'\` if its StorageClass allows expansion. The patch can't be undone (a volume never shrinks)." "plain, two PVCs: the several-volumes line"
+has "$f" "See what takes the space (read-only, inside the pod)" "plain: the generic check 2 text"
+flavor plain-clickstack plain clickstack
+f=$W/f.plain-clickstack.md
+has "$f" "This looks like ClickStack chart 1.x (or hdx-oss-v2), which has no value for extra config files." "plain+clickstack: ClickStack 1.x"
+has "$f" "Until then, save this as \`clickhouse-ttl.xml\` and add it with a Kustomize post-renderer (see the Kubernetes page linked above):" "plain+clickstack: the post-renderer"
+hasnt "$f" "- trigger.dev chart" "plain+clickstack: not the chart list"
+flavor plain-nopvc plain-nopvc other
+f=$W/f.plain-nopvc.md
+has "$f" "- This pod mounts no PersistentVolumeClaim: ClickHouse data is on the node's disk" "plain-nopvc: the no-PVC heads-up"
+hasnt "$f" "Or give the volume more room" "plain-nopvc: no volume line in check 3"
+for x in "official|kubectl get pods -n lf -l clickhouse.com/cluster=langfuse-clickhouse,clickhouse.com/role=clickhouse-server|lf" \
+        "altinity|kubectl get pods -n signoz -l clickhouse.altinity.com/chi=signoz-clickhouse|signoz" \
+        "bitnami8|kubectl get pods -n langfuse -l app.kubernetes.io/name=clickhouse,app.kubernetes.io/component=clickhouse|langfuse" \
+        "plain|kubectl get pods -n dv-plain\`|dv-plain"; do
+    fl=${x%%|*}; r=${x#*|}; sel=${r%|*}; xns=${r#*|}
+    flavor "$fl-replicated" "$fl" other 1
+    has "$W/f.$fl-replicated.md" "- Replicated tables: this installation may run several ClickHouse pods, and each has its own disk and system logs. List them with \`" "$fl, replicated=1: the heads-up"
+    has "$W/f.$fl-replicated.md" "$sel" "$fl, replicated=1: the selector line"
+    has "$W/f.$fl-replicated.md" "run diskvet with \`--k8s $xns/<pod>\` on each" "$fl, replicated=1: one run per pod"
+done
+
+echo "== the printed client commands work: pasted into sh and busybox sh, through the fake kubectl"
+# "How to run the fixes" of the Bitnami and plain reports, run as a person would
+# (KFAKE_PRINTED=1: with -it), with the pod's sh the same shell: they must reach
+# the fake clickhouse-client with exactly the login of the pod's env.
+# shellcheck disable=SC2016
+client_cmd() { sed -n 's/^SQL goes into clickhouse-client inside the pod, as a user that may change tables (a read-only user can.t): `\([^`]*\)`\. .*/\1/p' "$1"; }
+shells="sh"
+if command -v busybox >/dev/null 2>&1; then
+    mkdir "$W/bbsh" && ln -s "$(command -v busybox)" "$W/bbsh/sh" && shells="sh busybox"
+fi
+wrapper() {  # SHELL FIXTURE CMD "POD ENV" WANT DESC: CMD, pasted into SHELL, gives the client the argv WANT
+    _s=$1 _fx=$2 _c=$3 _e=$4 _w=$5 _d=$6
+    fresh
+    if [ "$_s" = busybox ]; then _pp=$W/bbsh:$W/bin:$host_path; set -- busybox sh; else _pp=""; set -- sh; fi
+    printf "SELECT getSetting('readonly')\n" | env KFAKE="$_fx" KFAKE_PRINTED=1 KFAKE_ENV="$_e" KFAKE_PODPATH="$_pp" "$@" -c "$_c" >"$W/w.out" 2>"$W/w.err"; _rc=$?
+    if [ "$_rc" = 0 ] && [ "$(cat "$W/w.out")" = 0 ] && [ -s "$CLOG" ] && [ "$(cat "$CLOG")" = "$_w" ] && grep -qF '[exec] [-it] [-n] ' "$KLOG"; then
+        ok "$_s: $_d"
+    else
+        fail "$_s: $_d: exit $_rc, client argv '$(cat "$CLOG")', want '$_w': $(cat "$W/w.err")"
+    fi
+}
+bn8=$(client_cmd "$W/f.bitnami8.md")
+bn9=$(client_cmd "$W/f.bitnami9.md")
+pl=$(client_cmd "$W/f.plain.md")
+if [ "$bn8" = "$bitnami_client" ] && [ -n "$bn9" ] && [ -n "$pl" ]; then ok "the client commands are in the Bitnami and plain reports"; else fail "client commands: '$bn8' '$bn9' '$pl'"; fi
+for sh_ in $shells; do
+    wrapper "$sh_" many-bitnami "$bn8" "CLICKHOUSE_ADMIN_USER=admin CLICKHOUSE_ADMIN_PASSWORD=s3cret-pw" "[--user] [admin] [--password] [s3cret-pw] " "Bitnami: CLICKHOUSE_ADMIN_USER and CLICKHOUSE_ADMIN_PASSWORD"
+    hasnt "$KLOG" "s3cret-pw" "$sh_: Bitnami: the password is not on the kubectl command line"
+    wrapper "$sh_" one-bitnami9 "$bn9" "CLICKHOUSE_ADMIN_USER=admin CLICKHOUSE_ADMIN_PASSWORD_FILE=tests/fixtures/k8s/bitnami-admin-password" "[--user] [admin] [--password] [$fpw] " "Bitnami 9: the password from CLICKHOUSE_ADMIN_PASSWORD_FILE"
+    wrapper "$sh_" plain-sidecar-first "$pl" "CLICKHOUSE_USER=u CLICKHOUSE_PASSWORD=p" "[--user] [u] [--password] [p] " "plain: CLICKHOUSE_USER and CLICKHOUSE_PASSWORD"
+    wrapper "$sh_" plain-sidecar-first "$pl" "CLICKHOUSE_USER=u" "[--user] [u] " "plain: only CLICKHOUSE_USER"
+    wrapper "$sh_" plain-sidecar-first "$pl" "CLICKHOUSE_PASSWORD=p" "[--password] [p] " "plain: only CLICKHOUSE_PASSWORD"
+    wrapper "$sh_" plain-sidecar-first "$pl" "" "" "plain: no login in the env, no --user and no --password (the default user)"
+    # a password with spaces, quotes and a $ stays one argument (the pod's sh -c
+    # alone: the fake's env words can't hold a space)
+    if [ "$sh_" = busybox ]; then set -- busybox sh; else set -- sh; fi
+    # shellcheck disable=SC2016
+    for c in "$pl" "$bn8"; do
+        b=$(printf '%s' "$c" | sed "s/^.* -- sh -c '\\(.*\\)'\$/\\1/")
+        : >"$CLOG"
+        printf "SELECT getSetting('readonly')\n" | env -i PATH="$W/bin:$host_path" CLOG="$CLOG" CLICKHOUSE_USER='my user' CLICKHOUSE_PASSWORD='p "w" $x' \
+            CLICKHOUSE_ADMIN_USER='my user' CLICKHOUSE_ADMIN_PASSWORD='p "w" $x' "$@" -c "$b" >/dev/null 2>&1
+        if [ "$(cat "$CLOG")" = '[--user] [my user] [--password] [p "w" $x] ' ]; then ok "$sh_: $(printf '%s' "$c" | cut -c1-40)...: a user and password with spaces, quotes and \$ stay one argument each"; else fail "$sh_: spaces in the login: '$(cat "$CLOG")' from $b"; fi
+    done
+done
 
 echo "== the fake kubectl's docker mode (used by tests/k8s_shim.sh)"
 DLOG=$W/dlog; export DLOG

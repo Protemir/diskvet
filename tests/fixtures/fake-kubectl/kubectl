@@ -18,7 +18,8 @@
 #   KFAKE_ENV="K=V ..." the pod's environment (words without spaces)
 #   KFAKE_PODPATH=P     PATH inside the pod (default: this PATH)
 #   KFAKE_PRINTED=1     the exec is a command the report prints for people: -i is
-#                       not required (diskvet itself must always send it)
+#                       not required and -it is allowed (diskvet itself must
+#                       always send -i, and never a TTY)
 set -u
 # (one printf for all the arguments: a process per argument is slow in Git Bash)
 if [ $# -gt 0 ]; then printf '[%s] ' "$@" | tr '\n' '~'; fi >>"${KLOG:?}"
@@ -98,6 +99,8 @@ exec)
             -n) ns=${2:-}; shift ;;
             -c) ctr=${2:-}; shift ;;
             --) dd=1; shift; break ;;
+            # the report's client command is for people at a terminal: -it
+            -it|-ti) [ "${KFAKE_PRINTED:-0}" = 1 ] || bad "bad exec argv: $1 (diskvet never asks for a TTY: no -t, --tty, -it or -ti)"; si=1 ;;
             -*) bad "bad exec argv: $1 (diskvet never asks for a TTY: no -t, --tty, -it or -ti)" ;;
             *)  [ -z "$pod" ] || bad "bad exec argv: two pods ($pod, $1)"; pod=$1 ;;
         esac

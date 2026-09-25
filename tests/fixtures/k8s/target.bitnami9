@@ -1,0 +1,2 @@
+@@	_target	ok
+_target	k8s	trigger	trigger-clickhouse-shard0-0	clickhouse	bitnami9	data-trigger-clickhouse-shard0-0		

@@ -748,6 +748,10 @@ BEGIN {
     T[5] = "Too many parts"
     T[6] = "Inactive and detached parts"
     T[7] = "Deleted rows and stuck mutations"
+    # Bitnami chart 9.x gets its own Fix B (a 00- file in configdFiles) only once
+    # the kind job (tests/k8s.sh, phase 2) proves that a 00- file loads before the
+    # chart's 08-sampling.xml; until then it gets the plain Fix B.
+    bitnami9_proven = 0
 }
 { sub(/\r$/, "") }
 /^@@\t/ {
@@ -819,6 +823,29 @@ function shcmd(s) {
     if (kt) return kp " sh -c '" s "'"
     if (ctr != "") return "docker exec " ctr " sh -c '" s "'"
     return "sudo sh -c '" s "'"
+}
+# For the YAML and XML the Kubernetes report prints inside chart values.
+function spaces(k,   s) { s = ""; while (k-- > 0) s = s " "; return s }
+# ind(s, pfx): pfx in front of every line of s (lines end in \n); empty lines stay empty
+function ind(s, pfx,   out, k, i, ln) {
+    out = ""
+    k = split(s, ln, "\n")
+    for (i = 1; i <= k; i++) {
+        if (i == k && ln[i] == "") break
+        if (ln[i] != "") out = out pfx ln[i]
+        out = out "\n"
+    }
+    return out
+}
+# a YAML double-quoted string: only " and \ need a backslash (no newline can be in s)
+function yq(s,   out, i, c) {
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\\" || c == "\"") out = out "\\"
+        out = out c
+    }
+    return "\"" out "\""
 }
 function jstr(s) { gsub(/[^A-Za-z0-9_.:\/+-]/, "_", s); return "\"" s "\"" }
 function jint(x) { return isint(x) ? x : "0" }
@@ -903,6 +930,122 @@ function drop_block(verb, fqname, bytes,   s) {
     return ""
 }
 
+# ---------------------------------------------------------------- Kubernetes: chart values
+# The logs of Fix B as YAML at indent k (the ClickHouse operator's settings keys
+# take a YAML map, not XML); tname/tcol/teng are filled by check1.
+function logs_yaml(k,   i, s, p) {
+    s = ""; p = spaces(k)
+    for (i = 1; i <= tn; i++) {
+        s = s p ((tname[i] ~ /^[A-Za-z0-9_]+$/) ? tname[i] : yq(tname[i])) ":\n"
+        if (teng[i] != "") s = s p "  engine: " yq(teng[i]) "\n"
+        else s = s p "  ttl: " yq(tcol[i] " + INTERVAL " ttl_days " DAY DELETE") "\n"
+    }
+    return s
+}
+# ClickHouse's own server log files: 10 files of 100 MB at level information
+function logger_yaml(k) { return ind("logger:\n  level: information\n  size: \"100M\"\n  count: 10\n", spaces(k)) }
+# the operator's resource of this pod: kind CR in namespace NS, or how to find it
+function grp_text(kind, res) {
+    if (kgroup != "") return kind " " kgroup " in namespace " kns
+    return "the " kind " of this pod (`" kget " get " res " -n " kns "`)"
+}
+function grp_name() { return (kgroup != "") ? kgroup : "<name>" }
+
+# Fix B on Kubernetes: where the TTL config goes, per chart. lx is the
+# <clickhouse> block; it goes into the values as it is, or indented inside a
+# YAML block scalar. The common ending is in check1.
+function fixb_text(lx,   v, s) {
+    v = kflavor
+    if (v == "bitnami9" && !bitnami9_proven) v = "plain"
+    if (v == "official") {
+        if (product == "langfuse") {
+            s = "This pod is run by the ClickHouse operator (Langfuse chart 2.x). Add this to the values you deploy Langfuse with."
+            s = s " These keys take YAML, not XML: the operator writes them to config.d/99-extra-config.yaml."
+            s = s " The logger lines also keep ClickHouse's own server log files small; they share this volume (see check 2).\n"
+            return s "```yaml\nclickhouse:\n  cluster:\n" logger_yaml(4) "    settings:\n" logs_yaml(6) "```\n"
+        }
+        if (product == "clickstack") {
+            s = "This pod is run by the ClickHouse operator (ClickStack chart 2.x or later). ClickStack chart 3.4.0 and later already sets a 7-day TTL on these logs and this logger,"
+            s = s " so upgrading the chart is the simplest fix. Or add this to your values (YAML, not XML):\n"
+            return s "```yaml\nclickhouse:\n  cluster:\n    spec:\n      settings:\n" logger_yaml(8) "        extraConfig:\n" logs_yaml(10) "```\n"
+        }
+        s = "This pod is run by the ClickHouse operator (" grp_text("ClickHouseCluster", "clickhousecluster") "). Add this under `spec` of that resource (YAML, not XML):"
+        s = s " in the Helm values that render it, or with `" kget " edit clickhousecluster -n " kns " " grp_name() "` (a helm upgrade overwrites manual edits):\n"
+        return s "```yaml\nspec:\n  settings:\n" logger_yaml(4) "    extraConfig:\n" logs_yaml(6) "```\n"
+    }
+    if (v == "altinity") {
+        if (product == "signoz") {
+            s = "This pod is run by the Altinity operator (SigNoz chart). Add this to the values you deploy SigNoz with. The file name must sort after the operator's 01-clickhouse-* files."
+            s = s " Logs that already have a TTL from the chart are changed with `clickhouse.clickhouseOperator.<log>.ttl` (days), never here: a second definition of those logs stops ClickHouse from starting.\n"
+            return s "```yaml\nclickhouse:\n  files:\n    config.d/zz-diskvet-ttl.xml: |\n" ind(lx, spaces(8)) "```\n"
+        }
+        s = "This pod is run by the Altinity operator (" grp_text("ClickHouseInstallation", "chi") "). Add the file to `spec.configuration.files` of that resource, or to the Helm values that render it"
+        s = s " (Opik: `clickhouse.configuration.files`; PostHog has no such key, see the Kubernetes page linked above)."
+        s = s " Use `config.d/`, not `conf.d/`: conf.d files load before the operator's files and lose."
+        s = s " To change the resource directly: `" kget " edit chi -n " kns " " grp_name() "` (a helm upgrade overwrites manual edits).\n"
+        return s "```yaml\nspec:\n  configuration:\n    files:\n      config.d/zz-diskvet-ttl.xml: |\n" ind(lx, spaces(10)) "```\n"
+    }
+    if (v == "bitnami8" || v == "bitnami") {
+        s = "This pod comes from the Bitnami ClickHouse chart (Langfuse chart 1.x uses it). Add this to your values."
+        s = s " `extraOverrides` is one string: if you already set it, put these lines inside your existing `<clickhouse>`."
+        s = s " If you installed the Bitnami chart on its own, leave out the `clickhouse:` level."
+        if (v == "bitnami") s = s " Bitnami chart 9.x uses `configdFiles` instead: see the Kubernetes page linked above."
+        return s "\n```yaml\nclickhouse:\n  extraOverrides: |\n" ind(lx, spaces(4)) "```\n"
+    }
+    if (v == "bitnami9") {
+        s = "This pod comes from Bitnami ClickHouse chart 9.x. Add this to your values (when the chart is a subchart, as in trigger.dev up to 4.5.9, put it under `clickhouse:`)."
+        s = s " The name starts with 00- so it loads before the chart's 08-sampling.xml: logs the chart turned off stay off."
+        s = s " Chart 9.1 and later turns most system logs off, but their old tables stay on disk and never shrink: see which ones are no longer written with"
+        s = s " `SELECT table, max(modification_time) AS last_write FROM system.parts WHERE database = 'system' AND active GROUP BY table ORDER BY last_write;` and DROP those instead.\n"
+        return s "```yaml\nconfigdFiles:\n  00-diskvet-ttl.xml: |\n" ind(lx, spaces(4)) "```\n"
+    }
+    if (v == "plain" && kflavor == "plain" && product == "clickstack") {
+        s = "This looks like ClickStack chart 1.x (or hdx-oss-v2), which has no value for extra config files."
+        s = s " ClickStack chart 3.4.0 and later sets these TTLs, but chart 2.0 moved ClickHouse to an operator, which is a migration, not an in-place upgrade."
+        s = s " Until then, save this as `clickhouse-ttl.xml` and add it with a Kustomize post-renderer (see the Kubernetes page linked above):\n"
+        return s "```xml\n" lx "```\n"
+    }
+    s = "Save as `clickhouse-ttl.xml` (only logs without TTL are listed):\n```xml\n" lx "```\n"
+    s = s "Put it into the pod's config through your chart, never by copying it into the running pod (it is gone after the next restart):\n"
+    s = s "- trigger.dev chart 4.5.10 and later: values `clickhouse.configdFiles`, key `clickhouse-ttl.xml`;\n"
+    s = s "- Sentry chart up to 28 (bundled ClickHouse): `clickhouse.clickhouse.configmap.configOverride`; the sentry-kubernetes clickhouse chart on its own: `clickhouse.configmap.configOverride`;\n"
+    s = s "- other charts: a ConfigMap of your own, mounted with subPath at `/etc/clickhouse-server/conf.d/clickhouse-ttl.xml` (conf.d, because many charts mount config.d as one ConfigMap).\n"
+    return s
+}
+
+# Check 3 on Kubernetes: more room for the data volume. A PVC an operator owns
+# is grown through the operator's resource (whether an operator passes a new
+# size on is not proven), so the patch line only for pods without one.
+function pvc_text(   np, pv, i, list, c, size, p, s) {
+    if (kpvc == "" || kpvc == "?") return ""
+    np = split(kpvc, pv, ",")
+    if (kflavor == "official" || kflavor == "altinity") {
+        list = pv[1]
+        for (i = 2; i <= np; i++) list = list " " pv[i]
+        s = "\nOr give the volume more room: it belongs to the operator, so grow it through the operator's resource, not the PVC (keys per chart: the Kubernetes page linked above)."
+        return s " `" kget " get pvc -n " kns " " list "` shows " ((np == 1) ? "its" : "their") " size and StorageClass.\n"
+    }
+    # about twice the disk, rounded up to 10 GiB steps, at least 10Gi
+    c = 2 * dd_total / GiB / 10; size = int(c)
+    if (size < c) size++
+    if (size < 1) size = 1
+    size = size * 10 "Gi"
+    p = "'{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"" size "\"}}}}'"
+    if (np == 1) {
+        s = "\nOr give the volume more room, if its StorageClass allows it:\n```sh\n"
+        s = s kget " get pvc -n " kns " " pv[1] "\n"
+        s = s kget " get storageclass    # the PVC's class needs ALLOWVOLUMEEXPANSION true\n"
+        s = s kget " patch pvc -n " kns " " pv[1] " -p " p "\n```\n"
+        s = s size " is about twice the current size. The patch can't be undone (a volume never shrinks)."
+        return s " Leave the size in your Helm values as it is: helm upgrade can't change a StatefulSet's volumeClaimTemplates.\n"
+    }
+    list = pv[1]
+    for (i = 2; i <= np; i++) list = list ", " pv[i]
+    s = "\nOr give the volume more room: this pod mounts several volumes (" list "); `" kget " get pvc -n " kns "` shows them."
+    s = s " Grow the one mounted at " dd_path " with `" kget " patch pvc -n " kns " <pvc> -p " p "` if its StorageClass allows expansion."
+    return s " The patch can't be undone (a volume never shrinks).\n"
+}
+
 # ---------------------------------------------------------------- check 1
 function check1(   i, f, name, is_old, has_ttl, tdays, b, rows, od, dcol, pexpr, sexpr, dtot,
                    p, rs, why, shown, hidden, hidden_b, tbl, nottl_n, nottl_b, copies_n, copies_b,
@@ -911,7 +1054,7 @@ function check1(   i, f, name, is_old, has_ttl, tdays, b, rows, od, dcol, pexpr,
     st[1] = "OK"
     tbl = "| Table | Size | Rows | TTL | Oldest row | Status |\n|---|---|---|---|---|---|\n"
     shown = 0; hidden = 0; hidden_b = 0; nottl_n = 0; nottl_b = 0; copies_n = 0; copies_b = 0
-    small = ""; big = ""; xml = ""; drops = ""; dropbig = ""; oldttl = ""; total_b = 0; biggest = ""
+    small = ""; big = ""; xml = ""; drops = ""; dropbig = ""; oldttl = ""; total_b = 0; biggest = ""; tn = 0
     for (i = 1; i <= n["system_logs"]; i++) {
         split(row["system_logs", i], f, "\t")
         name = f[2]; is_old = f[3] + 0; has_ttl = f[4] + 0; tdays = f[5] + 0; b = num(f[6])
@@ -935,12 +1078,16 @@ function check1(   i, f, name, is_old, has_ttl, tdays, b, rows, od, dcol, pexpr,
                 if (drop_limit > 0 && b > 0.95 * drop_limit) big = big drop_block("TRUNCATE", "system." name, b)
                 else small = small "TRUNCATE TABLE system." name ";\n"
             }
+            # the same logs for the YAML of the ClickHouse operator (logs_yaml)
+            tn++; tname[tn] = name; tcol[tn] = dcol; teng[tn] = ""
             if (name == "opentelemetry_span_log") {
                 xml = xml "    <" name ">\n"
                 xml = xml "        <!-- the default config sets an engine for this log, so its TTL goes inside the engine -->\n"
                 xml = xml "        <engine>ENGINE = MergeTree"
-                if (pexpr != "") xml = xml " PARTITION BY " pexpr
+                teng[tn] = "ENGINE = MergeTree"
+                if (pexpr != "") { xml = xml " PARTITION BY " pexpr; teng[tn] = teng[tn] " PARTITION BY " pexpr }
                 xml = xml " ORDER BY (" sexpr ") TTL " dcol " + INTERVAL " ttl_days " DAY DELETE</engine>\n"
+                teng[tn] = teng[tn] " ORDER BY (" sexpr ") TTL " dcol " + INTERVAL " ttl_days " DAY DELETE"
                 xml = xml "    </" name ">\n"
             } else {
                 xml = xml "    <" name ">\n        <ttl>" dcol " + INTERVAL " ttl_days " DAY DELETE</ttl>\n    </" name ">\n"
@@ -974,16 +1121,12 @@ function check1(   i, f, name, is_old, has_ttl, tdays, b, rows, od, dcol, pexpr,
         }
     }
     if (xml != "" && kt) {
-        # Kubernetes: the config goes in through the chart, and the pod restarts
+        # Kubernetes: the config goes in through the chart (or the operator's
+        # resource), one variant per chart, and the pod restarts
         fixb_printed = 1
         s = s "\n**Fix B: stop it coming back.** Safe; the ClickHouse pod restarts (about a minute; with several replicas, one at a time). Keeps " ttl_days " days of each log (change with --ttl-days).\n"
-        s = s "Save as `clickhouse-ttl.xml` (only logs without TTL are listed):\n"
-        s = s "```xml\n<clickhouse>\n    <!-- " name_ver ": TTL for system logs that had none -->\n" xml "</clickhouse>\n```\n"
-        s = s "Put it into the pod's config through your chart, never by copying it into the running pod (it is gone after the next restart):\n"
-        s = s "- trigger.dev chart 4.5.10 and later: values `clickhouse.configdFiles`, key `clickhouse-ttl.xml`;\n"
-        s = s "- Sentry chart up to 28 (bundled ClickHouse): `clickhouse.clickhouse.configmap.configOverride`; the sentry-kubernetes clickhouse chart on its own: `clickhouse.configmap.configOverride`;\n"
-        s = s "- other charts: a ConfigMap of your own, mounted with subPath at `/etc/clickhouse-server/conf.d/clickhouse-ttl.xml` (conf.d, because many charts mount config.d as one ConfigMap).\n\n"
-        s = s "Then run your usual `helm upgrade`: `helm list -n " kns hctx "` shows the release, and if you don't have your values file,"
+        s = s fixb_text("<clickhouse>\n    <!-- " name_ver ": TTL for system logs that had none -->\n" xml "</clickhouse>\n")
+        s = s "\nThen run your usual `helm upgrade`: `helm list -n " kns hctx "` shows the release, and if you don't have your values file,"
         s = s " `helm get values RELEASE -n " kns hctx " -o yaml > values.yaml` saves the values in use. The chart or the operator restarts the pod."
         s = s " If the pod has not restarted within 5 minutes (the AGE column of `" kget " get pod -n " kns " " kpod "`), restart it yourself:"
         s = s " `" kget " delete pod -n " kns " " kpod "` (its StatefulSet recreates it with the same volume; about a minute of downtime).\n\n"
@@ -1042,7 +1185,23 @@ function check2(   i, f, s, total, free, parts, inact, det, used, inparts, notin
         }
     }
     if (n["not_in_parts"] == 1) s = one; else s = tbl
-    if (kt && RANK[st[2]] >= RANK["WARN"]) {
+    if (kt && RANK[st[2]] >= RANK["WARN"] && kflavor == "official") {
+        # the ClickHouse operator puts the server log files on the data volume
+        s = s "\nMost likely: ClickHouse's own server log files. With the ClickHouse operator they are on this volume (/var/log/clickhouse-server),"
+        s = s " and operator releases up to 0.0.7 write them at trace level, up to 50 files of 1000 MB each. See their size (read-only):\n"
+        s = s "```sh\n" kp " du -sh /var/log/clickhouse-server\n```\n"
+        s = s "\n**Fix: free space now.** Irreversible, safe for your data, no restart: it deletes only rotated server log files; the current ones stay.\n"
+        s = s "```sh\n" kp " sh -c 'rm -f /var/log/clickhouse-server/*.log.*'\n```\n"
+        s = s "\n**Fix: keep them small.** "
+        if (fixb_printed)
+            s = s "The logger lines in check 1's Fix B do this (level information, 10 files of 100 MB); they apply with the same helm upgrade.\n"
+        else if (product == "langfuse")
+            s = s "Set the logger in your values and run your usual helm upgrade (the pod restarts):\n```yaml\nclickhouse:\n  cluster:\n" logger_yaml(4) "```\n"
+        else if (product == "clickstack")
+            s = s "Set the logger in your values and run your usual helm upgrade (the pod restarts):\n```yaml\nclickhouse:\n  cluster:\n    spec:\n      settings:\n" logger_yaml(8) "```\n"
+        else
+            s = s "Set the logger in your values and run your usual helm upgrade (the pod restarts). It is `spec.settings.logger` of " grp_text("ClickHouseCluster", "clickhousecluster") ":\n```yaml\nspec:\n  settings:\n" logger_yaml(4) "```\n"
+    } else if (kt && RANK[st[2]] >= RANK["WARN"]) {
         # Kubernetes: no Docker logs here, the kubelet rotates container logs
         s = s "\nSee what takes the space (read-only, inside the pod):\n"
         s = s "```sh\n" kp " sh -c 'du -xk -d 2 " dd_path " 2>/dev/null | sort -n | tail -15; du -sk /var/log/clickhouse-server 2>/dev/null; df -k " dd_path " /var/log/clickhouse-server 2>/dev/null'\n```\n"
@@ -1112,7 +1271,7 @@ function check3(   i, f, src, hdisk, hspan, hgrow, total, free, used, up, rs, fc
     if (note != "") s = s "\n" note "\n"
     s = s "\nA real forecast needs hourly history: one run of this script sees only one moment.\n"
     if (RANK[st[3]] >= RANK["WARN"]) {
-        if (kt) s = s "\nWhere to get space back fastest: check 1 (system logs), check 2 (files outside table parts), check 7 (deleted rows).\n"
+        if (kt) s = s "\nWhere to get space back fastest: check 1 (system logs), check 2 (files outside table parts), check 7 (deleted rows).\n" pvc_text()
         else s = s "\nWhere to get space back fastest: check 1 (system logs), check 2 (Docker logs), check 7 (deleted rows).\n"
     }
     body[3] = s
