@@ -1,0 +1,32 @@
+# The kind cluster of the "kubernetes" job (.github/workflows/ci.yml), for
+# tests/k8s.sh: one node, with the API server's audit log turned on
+# (tests/k8s/audit-policy.yaml). The log is at
+# /var/log/kubernetes/kube-apiserver-audit.log inside the node container
+# (diskvet-control-plane), where tests/k8s.sh reads it with docker exec.
+# hostPath is relative to the directory kind runs in: the repository root.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            audit-log-path: /var/log/kubernetes/kube-apiserver-audit.log
+            audit-policy-file: /etc/kubernetes/policies/audit-policy.yaml
+          extraVolumes:
+            - name: audit-policies
+              hostPath: /etc/kubernetes/policies
+              mountPath: /etc/kubernetes/policies
+              readOnly: true
+              pathType: DirectoryOrCreate
+            - name: audit-logs
+              hostPath: /var/log/kubernetes
+              mountPath: /var/log/kubernetes
+              readOnly: false
+              pathType: DirectoryOrCreate
+    extraMounts:
+      - hostPath: tests/k8s/audit-policy.yaml
+        containerPath: /etc/kubernetes/policies/audit-policy.yaml
+        readOnly: true

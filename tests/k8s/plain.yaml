@@ -1,0 +1,82 @@
+# (a) dv-plain for tests/k8s.sh: ClickHouse as a plain StatefulSet, the way a
+# hand-written manifest (or trigger.dev, Laminar) runs it.
+#   - the official image, as uid 101;
+#   - the login in the pod's env from a Secret (CLICKHOUSE_USER and
+#     CLICKHOUSE_PASSWORD; tests/k8s.sh creates dv-plain-login with a random
+#     password);
+#   - a busybox sidecar listed first: --k8s must pick the ClickHouse container;
+#   - a 2Gi PVC from the cluster's default StorageClass (local-path on kind);
+#   - tests/fixtures/ch-test.xml by subPath (ConfigMap dv-plain-test-config):
+#     a 10 MiB drop limit, so the report prints the force_drop_table flag line.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dv-plain
+  namespace: dv-plain
+spec:
+  clusterIP: None
+  selector:
+    app: dv-plain
+  ports:
+    - name: native
+      port: 9000
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dv-plain
+  namespace: dv-plain
+spec:
+  serviceName: dv-plain
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dv-plain
+  template:
+    metadata:
+      labels:
+        app: dv-plain
+    spec:
+      securityContext:
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: busybox
+          image: busybox:1.37
+          command: ["sh", "-c", "trap 'exit 0' TERM; while :; do sleep 3600 & wait; done"]
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:25.12
+          envFrom:
+            - secretRef:
+                name: dv-plain-login
+          ports:
+            - name: native
+              containerPort: 9000
+            - name: http
+              containerPort: 8123
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 8123
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/clickhouse
+            - name: test-config
+              mountPath: /etc/clickhouse-server/config.d/zz-diskvet-test.xml
+              subPath: zz-diskvet-test.xml
+              readOnly: true
+      volumes:
+        - name: test-config
+          configMap:
+            name: dv-plain-test-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

@@ -1,0 +1,29 @@
+# (c) dv-bn8 for tests/k8s.sh: the Bitnami ClickHouse chart 8.0.5 (what
+# Langfuse chart 1.x uses), release bn8. tests/k8s.sh adds auth.password
+# (random) in a values file of its own.
+image:
+  # Bitnami's free images moved to bitnamilegacy; the tag is the chart's own
+  repository: bitnamilegacy/clickhouse
+global:
+  security:
+    # the chart refuses an image repository it does not know without this
+    allowInsecureImages: true
+shards: 1
+replicaCount: 2
+zookeeper:
+  enabled: false
+keeper:
+  enabled: false
+persistence:
+  size: 2Gi
+# small requests, so every pod of the test fits on the runner
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 2Gi
+# tests/fixtures/ch-test.xml (a 10 MiB drop limit) as the Secret bn8-test-config,
+# which tests/k8s.sh creates: mounted into conf.d next to extraOverrides, which
+# stays free for the report's Fix B
+extraOverridesSecret: bn8-test-config

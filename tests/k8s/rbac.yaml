@@ -1,0 +1,74 @@
+# ServiceAccounts for the permission checks of tests/k8s.sh, in dv-plain.
+# tests/k8s.sh applies the Role of the README (Permissions) itself, straight
+# from README.md, and binds it to dv-sa-full with the README's
+# "kubectl create rolebinding" command. The two others:
+#   dv-sa-get:    get on pods (no list) and pods/exec: enough for a named pod;
+#   dv-sa-noexec: get and list on pods, no pods/exec: diskvet stops with exit 3.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dv-sa-full
+  namespace: dv-plain
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dv-sa-get
+  namespace: dv-plain
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dv-sa-noexec
+  namespace: dv-plain
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dv-get
+  namespace: dv-plain
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dv-get
+  namespace: dv-plain
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dv-get
+subjects:
+  - kind: ServiceAccount
+    name: dv-sa-get
+    namespace: dv-plain
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dv-noexec
+  namespace: dv-plain
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dv-noexec
+  namespace: dv-plain
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dv-noexec
+subjects:
+  - kind: ServiceAccount
+    name: dv-sa-noexec
+    namespace: dv-plain

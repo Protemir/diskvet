@@ -1,0 +1,46 @@
+# (b) dv-op for tests/k8s.sh: values for the Langfuse chart 2.1.2, of which
+# only the ClickHouse templates are rendered (helm template --show-only
+# templates/clickhouse/{cluster,keeper,secret}.yaml) and applied for the
+# ClickHouse operator. tests/k8s.sh adds clickhouse.auth.password (random) in
+# a values file of its own.
+# The Langfuse app is not deployed; these only satisfy the chart's checks:
+langfuse:
+  salt:
+    value: dv-test-salt-not-deployed
+  nextauth:
+    secret:
+      value: dv-test-secret-not-deployed
+postgresql:
+  auth:
+    password: dv-test-postgres-not-deployed
+redis:
+  auth:
+    password: dv-test-redis-not-deployed
+clickhouse:
+  # no API server during helm template: skip the chart's CRD check
+  crdCheck: false
+  cluster:
+    replicas: 1
+    storage:
+      size: 2Gi
+    # small requests, so every pod of the test fits on the runner
+    resources:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        memory: 3Gi
+    settings:
+      # 10 MiB instead of 50 GB (as tests/fixtures/ch-test.xml): the report
+      # then prints the force_drop_table flag line for the seeded log
+      max_table_size_to_drop: 10485760
+  keeper:
+    replicas: 1
+    storage:
+      size: 1Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 1Gi
