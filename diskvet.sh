@@ -748,10 +748,6 @@ BEGIN {
     T[5] = "Too many parts"
     T[6] = "Inactive and detached parts"
     T[7] = "Deleted rows and stuck mutations"
-    # Bitnami chart 9.x gets its own Fix B (a 00- file in configdFiles) only once
-    # the kind job (tests/k8s.sh, phase 2) proves that a 00- file loads before the
-    # chart's 08-sampling.xml; until then it gets the plain Fix B.
-    bitnami9_proven = 0
 }
 { sub(/\r$/, "") }
 /^@@\t/ {
@@ -956,7 +952,6 @@ function grp_name() { return (kgroup != "") ? kgroup : "<name>" }
 # YAML block scalar. The common ending is in check1.
 function fixb_text(lx,   v, s) {
     v = kflavor
-    if (v == "bitnami9" && !bitnami9_proven) v = "plain"
     if (v == "official") {
         if (product == "langfuse") {
             # clickhouse.cluster.settings is the operator's extraConfig in every
@@ -997,6 +992,8 @@ function fixb_text(lx,   v, s) {
         return s "\n```yaml\nclickhouse:\n  extraOverrides: |\n" ind(lx, spaces(4)) "```\n"
     }
     if (v == "bitnami9") {
+        # the kind job (tests/k8s.sh, phase 2) shows that the 00- file loads
+        # before the chart's 08-sampling.xml, and a zz- file after it
         s = "This pod comes from Bitnami ClickHouse chart 9.x. Add this to your values (when the chart is a subchart, as in trigger.dev up to 4.5.9, put it under `clickhouse:`)."
         s = s " The name starts with 00- so it loads before the chart's 08-sampling.xml: logs the chart turned off stay off."
         s = s " Chart 9.1 and later turns most system logs off, but their old tables stay on disk and never shrink: see which ones are no longer written with"

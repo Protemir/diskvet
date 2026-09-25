@@ -689,7 +689,7 @@ section "Fix B through the chart: (b) helm template | kubectl apply, (c) helm up
 B_FIXED=0 C_FIXED=0
 if up B; then
     yaml_of "$F-b.md" >"$F-b-fixb.yaml"
-    sed -n '/^      logger:$/d; s/^      \([a-z_]*\):$/\1/p' "$F-b-fixb.yaml" >"$F-b-fixb.logs"
+    sed -n '/^      logger:$/d; s/^      \([a-z0-9_]*\):$/\1/p' "$F-b-fixb.yaml" >"$F-b-fixb.logs"
     if [ "$(sed -n 1p "$F-b-fixb.yaml")" = "clickhouse:" ] && [ -s "$F-b-fixb.logs" ]; then ok "b: Fix B YAML for the logs $(tr '\n' ' ' <"$F-b-fixb.logs")"; else fail "b: Fix B YAML: $(head -5 "$F-b-fixb.yaml" | oneline)"; fi
     b_uid=$(uid_of "$B_NS" "$B_POD")
     if render_b -f "$F-b-fixb.yaml" >"$W/b2.yaml" 2>"$W/b2.err" && kubectl apply -n "$B_NS" -f "$W/b2.yaml" >"$F-b-apply.txt" 2>&1; then
@@ -709,7 +709,7 @@ if up C; then
         fail "c: Fix B YAML does not start with clickhouse: $(head -3 "$F-c-fixb-values.yaml" | oneline)"
         cp "$F-c-fixb-values.yaml" "$F-c-fixb.yaml"
     fi
-    sed -n 's/^      <\([a-z_]*\)>$/\1/p' "$F-c-fixb.yaml" >"$F-c-fixb.logs"
+    sed -n 's/^      <\([a-z0-9_]*\)>$/\1/p' "$F-c-fixb.yaml" >"$F-c-fixb.logs"
     if [ -s "$F-c-fixb.logs" ]; then ok "c: Fix B extraOverrides for the logs $(tr '\n' ' ' <"$F-c-fixb.logs")"; else fail "c: no logs in the Fix B XML: $(head -8 "$F-c-fixb.yaml" | oneline)"; fi
     c_uid=$(uid_of "$C_NS" "$C_POD")
     if timeout 300 helm upgrade bn8 "$W"/bn8/clickhouse-*.tgz -n "$C_NS" --reuse-values -f "$F-c-fixb.yaml" >"$F-c-upgrade.txt" 2>&1; then
@@ -719,14 +719,20 @@ if up C; then
         fail "c: helm upgrade: $(tail -4 "$F-c-upgrade.txt" | oneline)"
     fi
 fi
-# restart_wait T NAME OLD_UID: the chart or the operator restarts the pod; if
-# not within 5 minutes, the report's own "restart it yourself" line
+# restart_wait T NAME OLD_UID [manual]: the chart or the operator restarts the
+# pod; if not within 5 minutes, the report's own "restart it yourself" line.
+# "manual": an operator that does not restart for a config file (then the
+# report's line is the way, not a failure).
 restart_wait() {
     tgt "$1"
     if wait_new "$_n" "$_p" "$3" 300; then
         ok "$1: the pod restarted by itself after Fix B"
     else
-        fail "$1: the pod did not restart within 5 minutes of Fix B"
+        if [ "${4:-}" = manual ]; then
+            note "$1: the pod did not restart within 5 minutes of Fix B; its config.d then: $(kxp "$1" ls /etc/clickhouse-server/config.d 2>&1 | tr '\n' ' ')"
+        else
+            fail "$1: the pod did not restart within 5 minutes of Fix B"
+        fi
         x=$(sed -n 's/.*restart it yourself: `\([^`]*\)`.*/\1/p' "$F-$2.md")
         note "$1: running the report's line: $x"
         sh -c "$x" </dev/null >>"$F-$2-restart.txt" 2>&1
@@ -827,18 +833,19 @@ else
         x=$(chq D "SELECT count() FROM system.tables WHERE database = 'system' AND name = 'query_log'")
         if [ "$x" = 0 ]; then ok "d: no system.query_log: the chart's 08-sampling.xml turns it off"; else fail "d: system.query_log before Fix B: '$x'"; fi
         # the bitnami9 Fix B: a 00- file in configdFiles, as the report prints it
-        # once the order is proven; until then built from the plain Fix B's XML
-        # the same way (ind 4 under the key)
+        # (else built from the plain Fix B's XML the same way, ind 4 under the key)
         if grep -q '^  00-diskvet-ttl.xml: |$' "$F-d.md"; then
+            ok "d: the report prints the Fix B of chart 9.x: configdFiles, 00-diskvet-ttl.xml"
             yaml_of "$F-d.md" >"$W/d-fixb.yaml"
         else
+            fail "d: no configdFiles 00-diskvet-ttl.xml in the report"
             awk '/^## [0-9]\. / { sec = substr($2, 1, 1) + 0 }
                 sec == 1 && /^\*\*Fix B/ { b = 1 }
                 b && /^```xml$/ { x = 1; next }
                 x && /^```$/ { exit }
                 x { print "    " $0 }' "$F-d.md" | { printf 'configdFiles:\n  00-diskvet-ttl.xml: |\n'; cat; } >"$W/d-fixb.yaml"
         fi
-        sed -n 's/^        <\([a-z_]*\)>$/\1/p' "$W/d-fixb.yaml" >"$F-d-fixb.logs"
+        sed -n 's/^        <\([a-z0-9_]*\)>$/\1/p' "$W/d-fixb.yaml" >"$F-d-fixb.logs"
         # plus a log the chart turns off: with the file loading before 08-sampling.xml it stays off
         awk '$0 == "    </clickhouse>" { print "        <query_log>"; print "            <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>"; print "        </query_log>" } { print }' "$W/d-fixb.yaml" >"$F-d-fixb.yaml"
         if [ -s "$F-d-fixb.logs" ] && grep -q '^        <query_log>$' "$F-d-fixb.yaml"; then ok "d: configdFiles 00-diskvet-ttl.xml for $(tr '\n' ' ' <"$F-d-fixb.logs")and query_log"; else fail "d: Fix B for 9.x: $(head -6 "$F-d-fixb.yaml" | oneline)"; fi
@@ -875,14 +882,15 @@ else
         has "$F-e.md" "This pod is run by the Altinity operator (ClickHouseInstallation dv-alt in namespace $E_NS)." "e: the Fix B of an Altinity installation"
         payload payload-e E --k8s "$E_NS/$E_POD"
         yaml_of "$F-e.md" >"$F-e-fixb.yaml"
-        sed -n 's/^              <\([a-z_]*\)>$/\1/p' "$F-e-fixb.yaml" >"$F-e-fixb.logs"
+        sed -n 's/^              <\([a-z0-9_]*\)>$/\1/p' "$F-e-fixb.yaml" >"$F-e-fixb.logs"
         if [ "$(sed -n 1p "$F-e-fixb.yaml")" = "spec:" ] && [ -s "$F-e-fixb.logs" ]; then ok "e: Fix B spec.configuration.files for the logs $(tr '\n' ' ' <"$F-e-fixb.logs")"; else fail "e: Fix B YAML: $(head -6 "$F-e-fixb.yaml" | oneline)"; fi
         e_uid=$(uid_of "$E_NS" "$E_POD")
         # the printed block, merged into the resource's manifest, applied
         if kubectl patch --local -f tests/k8s/altinity.yaml --type merge --patch-file "$F-e-fixb.yaml" -o yaml >"$W/e2.yaml" 2>"$F-e-apply.txt" \
             && kubectl apply -f "$W/e2.yaml" >>"$F-e-apply.txt" 2>&1; then
             ok "e: the printed block applied to the ClickHouseInstallation: $(oneline <"$F-e-apply.txt")"
-            if restart_wait E e "$e_uid"; then after_fixb E e default; fi
+            # the Altinity operator 0.27.4 did not restart the pod for a changed file
+            if restart_wait E e "$e_uid" manual; then after_fixb E e default; fi
         else
             fail "e: applying Fix B: $(oneline <"$F-e-apply.txt")"
         fi

@@ -17,6 +17,9 @@
 #   none                 kube-system and local-path-storage of kind: no ClickHouse at all
 #   keeper-only, operator-only: the recorded Keeper, operator and cert-manager lines, with
 #                        hand-written ones for other charts
+#   kind-bitnami9        the Bitnami chart 9.4.4 on its own (dv-bn9, phase 2 of the job)
+#   kind-altinity        the Altinity operator 0.27.4 and a ClickHouseInstallation whose
+#                        clickhouse-backup sidecar is listed first (dv-alt, phase 2)
 # Hand-written, for installs the kind job does not have:
 #   one-bitnami9         trigger.dev up to 4.5.9 (Bitnami chart 9.4.7)
 #   many-bitnami         Langfuse 1.x: 3 ClickHouse replicas
@@ -197,9 +200,11 @@ one-official|default|dv-op/lf-langfuse-clickhouse-0-0-0|$official_target
 one-official|dv-op|pod/lf-langfuse-clickhouse-0-0-0|$official_target
 one-bitnami8|default|auto|dv-bn8|bn8-clickhouse-shard0-0|clickhouse|bitnami8|data-bn8-clickhouse-shard0-0|
 one-bitnami9|default|auto|trigger|trigger-clickhouse-shard0-0|clickhouse|bitnami9|data-trigger-clickhouse-shard0-0|
+kind-bitnami9|default|auto|dv-bn9|bn9-clickhouse-shard0-0|clickhouse|bitnami9|data-bn9-clickhouse-shard0-0|
 many-bitnami|default|langfuse/langfuse-clickhouse-shard0-1|langfuse|langfuse-clickhouse-shard0-1|clickhouse|bitnami8|data-langfuse-clickhouse-shard0-1|
 altinity-sidecars|default|auto|signoz|chi-signoz-clickhouse-cluster-0-0-0|clickhouse|altinity|data-volumeclaim-template-chi-signoz-clickhouse-cluster-0-0-0|signoz-clickhouse
 altinity-sidecars|default|auto -n signoz|signoz|chi-signoz-clickhouse-cluster-0-0-0|clickhouse|altinity|data-volumeclaim-template-chi-signoz-clickhouse-cluster-0-0-0|signoz-clickhouse
+kind-altinity|default|auto|dv-alt|chi-dv-alt-c1-0-0-0|clickhouse|altinity|data-chi-dv-alt-c1-0-0-0|dv-alt
 plain-sidecar-first|default|auto|dv-plain|dv-plain-0|clickhouse|plain|data-dv-plain-0|
 plain-digest|default|auto|dv-plain|ch-0|clickhouse|plain|data-ch-0,logs-ch-0|
 custom-image|default|dv-custom/analytics-db-0 --container db|dv-custom|analytics-db-0|db|plain|data-analytics-db-0|
@@ -869,21 +874,20 @@ f=$W/f.bitnami.md
 yamlok "$f" "bitnami (chart unknown)"
 has "$f" "If you installed the Bitnami chart on its own, leave out the \`clickhouse:\` level. Bitnami chart 9.x uses \`configdFiles\` instead: see the Kubernetes page linked above." "bitnami: the 9.x sentence"
 
-# bitnami9: the plain Fix B until the kind job proves the 00- file order
+# bitnami9: the 00- file in configdFiles (the kind job shows it loads before the
+# chart's 08-sampling.xml)
 flavor bitnami9 bitnami9 other
 f=$W/f.bitnami9.md
-hasnt "$f" "00-diskvet-ttl.xml" "bitnami9: no 00-diskvet-ttl.xml yet (not proven in kind)"
-has "$f" "- trigger.dev chart 4.5.10 and later: values \`clickhouse.configdFiles\`, key \`clickhouse-ttl.xml\`;" "bitnami9: the plain Fix B"
+yamlok "$f" "bitnami9"
+lines "$f" "bitnami9: 00-diskvet-ttl.xml under configdFiles" '```yaml' 'configdFiles:' '  00-diskvet-ttl.xml: |' '    <clickhouse>'
+has "$f" "The name starts with 00- so it loads before the chart's 08-sampling.xml: logs the chart turned off stay off." "bitnami9: the text"
+has "$f" "\`SELECT table, max(modification_time) AS last_write FROM system.parts WHERE database = 'system' AND active GROUP BY table ORDER BY last_write;\`" "bitnami9: the SELECT for logs no longer written"
+hasnt "$f" "- trigger.dev chart 4.5.10 and later: values" "bitnami9: not the plain Fix B"
 has "$f" "kubectl patch pvc -n trigger data-trigger-clickhouse-shard0-0 -p " "bitnami9: the patch pvc line"
-sed 's/^    bitnami9_proven = 0$/    bitnami9_proven = 1/' diskvet.sh >"$W/dv9.sh"
-sh "$W/dv9.sh" report --replay "$W/f.bitnami9.tsv" </dev/null >"$W/f.bitnami9p.md" 2>/dev/null
-f=$W/f.bitnami9p.md
-if grep -q '^    bitnami9_proven = 1$' "$W/dv9.sh"; then ok "bitnami9: a copy of diskvet.sh with bitnami9_proven = 1"; else fail "bitnami9: no bitnami9_proven = 0 line in diskvet.sh"; fi
-yamlok "$f" "bitnami9 (proven)"
-lines "$f" "bitnami9 (proven): 00-diskvet-ttl.xml under configdFiles" '```yaml' 'configdFiles:' '  00-diskvet-ttl.xml: |' '    <clickhouse>'
-has "$f" "The name starts with 00- so it loads before the chart's 08-sampling.xml: logs the chart turned off stay off." "bitnami9 (proven): the text"
-has "$f" "\`SELECT table, max(modification_time) AS last_write FROM system.parts WHERE database = 'system' AND active GROUP BY table ORDER BY last_write;\`" "bitnami9 (proven): the SELECT for logs no longer written"
-nodocker "$f" "bitnami9 (proven): no docker"
+nodocker "$f" "bitnami9: no docker"
+flavor bitnami9-clickstack bitnami9 clickstack
+hasnt "$W/f.bitnami9-clickstack.md" "ClickStack chart 1.x" "bitnami9 with ClickStack tables: the Bitnami 9.x text, not the ClickStack 1.x one"
+has "$W/f.bitnami9-clickstack.md" "  00-diskvet-ttl.xml: |" "bitnami9 with ClickStack tables: the 00- file"
 
 flavor plain plain other
 f=$W/f.plain.md
