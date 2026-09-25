@@ -25,6 +25,7 @@ practice (see [Known gotchas](#known-gotchas)).
 Prefer to fix it by hand? Read the guide:
 **[Why ClickHouse® fills the disk in self-hosted Langfuse and SigNoz, and how to fix it](docs/guide.md)**
 — every command in it was run on ClickHouse 24.8, 25.12 and 26.9.
+По-русски: [Почему ClickHouse® забивает диск в Langfuse и SigNoz на своём сервере](docs/ru/guide.md).
 
 Two files, both short enough to read before you run them:
 

@@ -1,5 +1,7 @@
 # Why ClickHouse® fills the disk in self-hosted Langfuse and SigNoz, and how to fix it
 
+*Also in [Russian](ru/guide.md).*
+
 Your Langfuse or SigNoz server is running out of disk, but your traces are
 small. In most public reports the space goes to ClickHouse® itself: to its own
 log tables, such as `system.trace_log` and `system.text_log`, which have no
