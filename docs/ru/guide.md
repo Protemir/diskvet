@@ -1,6 +1,6 @@
 # Почему ClickHouse® забивает диск в Langfuse и SigNoz на своём сервере и как это исправить
 
-*[English version](../guide.md) · [Español](../es/guide.md) · [Português](../pt/guide.md) · [日本語](../ja/guide.md) · [中文](../zh/guide.md). Если версии расходятся, ориентируйтесь на английскую.*
+*[English version](../guide.md) · [Español](../es/guide.md) · [Português](../pt/guide.md) · [日本語](../ja/guide.md) · [한국어](../ko/guide.md) · [中文](../zh/guide.md). Если версии расходятся, ориентируйтесь на английскую.*
 
 На сервере с Langfuse или SigNoz кончается место, хотя трейсов у вас немного.
 В большинстве известных случаев место съедает сам ClickHouse®: его собственные

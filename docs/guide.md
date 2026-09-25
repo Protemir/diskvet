@@ -1,6 +1,6 @@
 # Why ClickHouse® fills the disk in self-hosted Langfuse and SigNoz, and how to fix it
 
-*Also in [Spanish](es/guide.md), [Portuguese](pt/guide.md), [Russian](ru/guide.md), [Japanese](ja/guide.md) and [Chinese](zh/guide.md).*
+*Also in [Spanish](es/guide.md), [Portuguese](pt/guide.md), [Russian](ru/guide.md), [Japanese](ja/guide.md), [Korean](ko/guide.md) and [Chinese](zh/guide.md).*
 
 Your Langfuse or SigNoz server is running out of disk, but your traces are
 small. In most public reports the space goes to ClickHouse® itself: to its own

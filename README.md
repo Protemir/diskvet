@@ -29,6 +29,7 @@ En español: [Por qué ClickHouse® llena el disco en Langfuse y SigNoz autoaloj
 Em português: [Por que o disco do ClickHouse® fica cheio no Langfuse e no SigNoz auto-hospedados](docs/pt/guide.md).
 По-русски: [Почему ClickHouse® забивает диск в Langfuse и SigNoz на своём сервере](docs/ru/guide.md).
 日本語：[セルフホストの Langfuse・SigNoz で ClickHouse® のディスクがいっぱいになる原因と対処法](docs/ja/guide.md)。
+한국어: [셀프 호스팅 Langfuse와 SigNoz에서 ClickHouse® 디스크가 가득 차는 이유와 해결 방법](docs/ko/guide.md).
 中文：[自托管 Langfuse 和 SigNoz：ClickHouse® 磁盘被占满的原因与解决方法](docs/zh/guide.md)。
 
 Two files, both short enough to read before you run them:

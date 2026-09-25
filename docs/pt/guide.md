@@ -1,6 +1,6 @@
 # Por que o disco do ClickHouse® fica cheio no Langfuse e no SigNoz auto-hospedados e como resolver
 
-*[English](../guide.md) · [Español](../es/guide.md) · [Русский](../ru/guide.md) · [日本語](../ja/guide.md) · [中文](../zh/guide.md). Se as versões divergirem, vale a versão em inglês.*
+*[English](../guide.md) · [Español](../es/guide.md) · [Русский](../ru/guide.md) · [日本語](../ja/guide.md) · [한국어](../ko/guide.md) · [中文](../zh/guide.md). Se as versões divergirem, vale a versão em inglês.*
 
 Seu servidor do Langfuse ou do SigNoz está ficando sem espaço em disco, mas os
 seus traces são pequenos. Na maioria dos relatos públicos, quem ocupa o espaço é

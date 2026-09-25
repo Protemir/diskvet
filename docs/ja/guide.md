@@ -1,6 +1,6 @@
 # セルフホストの Langfuse・SigNoz で ClickHouse® のディスクがいっぱいになる原因と対処法
 
-*[English](../guide.md) · [Español](../es/guide.md) · [Português](../pt/guide.md) · [Русский](../ru/guide.md) · [中文](../zh/guide.md)。内容に違いがある場合は英語版が正となります。*
+*[English](../guide.md) · [Español](../es/guide.md) · [Português](../pt/guide.md) · [Русский](../ru/guide.md) · [한국어](../ko/guide.md) · [中文](../zh/guide.md)。内容に違いがある場合は英語版が正となります。*
 
 Langfuse や SigNoz のサーバーでディスクの空きがなくなってきたのに、トレースのデータ自体は小さい、ということがあります。公開されている報告の多くでは、容量を使っているのは ClickHouse® 自身です。具体的には、`system.trace_log` や `system.text_log` といった ClickHouse 自身のシステムログテーブル（system log tables）で、これらのテーブルにはデフォルトでサイズの上限がありません。ClickStack にも同じ問題があります。
 
