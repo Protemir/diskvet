@@ -362,7 +362,7 @@ C_PVCS=$(pvcs_of "$C_NS" "$C_POD")
 B_GROUP=$(kubectl get pod "$B_POD" -n "$B_NS" -o 'jsonpath={.metadata.labels.clickhouse\.com/cluster}' 2>/dev/null)
 note "pods: $A_NS/$A_POD ($A_PVCS), $B_NS/$B_POD ($B_PVCS, clickhouse.com/cluster=$B_GROUP), $C_NS/$C_POD ($C_PVCS)"
 # every name diskvet must keep out of a payload
-FORBID="$A_NS $B_NS $C_NS $A_POD ${B_POD:-dv-no-pod} bn8-clickhouse bn8-clickhouse-shard0-1 $NODE $CTX $A_PVCS $B_PVCS $C_PVCS lf-langfuse dv-sa-full dv-sa-get dv-sa-noexec customer_acme payments_eu"
+FORBID="$A_NS $B_NS $C_NS $A_POD ${B_POD:-dv-no-pod} bn8-clickhouse bn8-clickhouse-shard0-1 $NODE $CTX $A_PVCS $B_PVCS $C_PVCS lf-langfuse dv-sa-full dv-sa-get dv-sa-noexec dv-sa-create customer_acme payments_eu"
 
 # ---------------------------------------------------------------- 2. seed and record
 section "test-only seed data"
@@ -471,7 +471,17 @@ if up B; then
     has "$F-b.md" "This pod is run by the ClickHouse operator (Langfuse chart 2.x)." "b: the Fix B of the Langfuse chart 2.x"
     has "$F-b.md" "\`kubectl exec -it -n $B_NS $B_POD -c $B_CTR -- clickhouse-client\`. Inside the pod it logs in as \`default\` with the login the operator set up" "b: the operator's client command"
     has "$F-b.md" "max_table_size_to_drop = 10.0 MiB" "b: the test drop limit (clickhouse.cluster.settings) is read"
-    if [ -n "$B_GROUP" ] && kubectl get clickhousecluster "$B_GROUP" -n "$B_NS" >/dev/null 2>&1; then ok "b: the pod's clickhouse.com/cluster label ($B_GROUP) names its ClickHouseCluster"; else fail "b: no ClickHouseCluster '$B_GROUP' in $B_NS: $(kubectl get clickhouseclusters -n "$B_NS" -o name 2>&1 | oneline)"; fi
+    note "b: labels of the operator's pod: $(kubectl get pod "$B_POD" -n "$B_NS" -o 'jsonpath={.metadata.labels}' 2>&1)"
+    if [ -z "$B_GROUP" ]; then
+        # operator 0.0.7 sets no clickhouse.com/cluster label (its main branch does):
+        # the report then says how to find the resource
+        x=$(kubectl get clickhousecluster -n "$B_NS" -o name 2>&1)
+        if [ "$x" = clickhousecluster.clickhouse.com/lf-langfuse ]; then ok "b: no clickhouse.com/cluster label (operator 0.0.7); the report's fallback, kubectl get clickhousecluster -n $B_NS, finds lf-langfuse"; else fail "b: kubectl get clickhousecluster -n $B_NS: $x"; fi
+    elif kubectl get clickhousecluster "$B_GROUP" -n "$B_NS" >/dev/null 2>&1; then
+        ok "b: the pod's clickhouse.com/cluster label ($B_GROUP) names its ClickHouseCluster"
+    else
+        fail "b: no ClickHouseCluster '$B_GROUP' in $B_NS: $(kubectl get clickhouseclusters -n "$B_NS" -o name 2>&1 | oneline)"
+    fi
     x=$(sed -n 's/.*List them with `\([^`]*\)`.*/\1/p' "$F-b.md")
     if [ -n "$x" ]; then
         if sh -c "$x" </dev/null 2>&1 | grep -q "^$B_POD "; then ok "b: the printed list command finds the pod: $x"; else fail "b: '$x' does not list $B_POD"; fi
@@ -536,7 +546,7 @@ if up A; then
         fail "RBAC setup: $(oneline <"$W/rbac.txt")"
     fi
     kubectl config view --minify --raw -o 'jsonpath={.clusters[0].cluster.certificate-authority-data}' | base64 -d >"$W/ca.crt"
-    for sa in dv-sa-full dv-sa-get dv-sa-noexec; do
+    for sa in dv-sa-full dv-sa-get dv-sa-noexec dv-sa-create; do
         mk_kubeconfig "$sa" "$W/kc-$sa" || fail "kubeconfig for $sa"
     done
     KUBECONFIG=$W/kc-dv-sa-full sh diskvet.sh report --k8s "$A_NS/$A_POD" >"$F-rbac-full.md" 2>"$F-rbac-full.err" </dev/null
@@ -562,6 +572,10 @@ if up A; then
     DV_KUBECONFIG=$W/kc-dv-sa-full
     payload payload-rbac A --k8s "$A_NS/$A_POD"
     DV_KUBECONFIG=""
+    # the README Role has get on pods/exec for API servers that authorize
+    # kubectl's WebSocket exec as a GET: what happens with create only
+    KUBECONFIG=$W/kc-dv-sa-create sh diskvet.sh report --k8s "$A_NS/$A_POD" >"$F-rbac-create.md" 2>"$F-rbac-create.err" </dev/null
+    note "pods/exec with create only (no get): exit $?: $(grep -m 1 -v '^diskvet: kubectl context' "$F-rbac-create.err" | cut -c1-240)"
 fi
 
 # ---------------------------------------------------------------- 8. secrets in the server logs
@@ -724,7 +738,8 @@ if [ "$B_FIXED" = 1 ] && restart_wait B b "$b_uid"; then
     after_fixb B b default
     # the logger lines of Fix B (in clickhouse.cluster.settings, the operator's extraConfig)
     kxp B cat /etc/clickhouse-server/config.d/99-extra-config.yaml >"$F-b-99-extra-config.yaml" 2>&1
-    has "$F-b-99-extra-config.yaml" "level: information" "b: the logger of Fix B is in config.d/99-extra-config.yaml"
+    # the operator writes the file as JSON (valid YAML) on one line
+    if grep -q '"logger":{[^}]*"level":"information"' "$F-b-99-extra-config.yaml"; then ok "b: the logger of Fix B is in config.d/99-extra-config.yaml: $(grep -o '"logger":{[^}]*}' "$F-b-99-extra-config.yaml")"; else fail "b: no logger in 99-extra-config.yaml: $(oneline <"$F-b-99-extra-config.yaml")"; fi
     chq B 'SYSTEM FLUSH LOGS' >/dev/null
     x=$(chq B "SELECT toString(countIf(level = 'Trace')) || ' ' || toString(count()) FROM system.text_log")
     case $x in "0 "[1-9]*) ok "b: after Fix B the server logs at level information: no Trace rows in the new text_log (${x#0 } rows)" ;; *) fail "b: Trace rows and rows in text_log after Fix B: '$x'" ;; esac
@@ -748,15 +763,20 @@ for ns in "$A_NS" "$B_NS" "$C_NS"; do
     if [ "$x" -gt 0 ]; then ok "audit log: diskvet's exec command lines in $ns ($x distinct), in the request URL as command= parameters"; else fail "audit log: no exec with --log_comment=diskvet in $ns"; fi
 done
 if grep -q 'command=--structure' "$F-audit-exec.txt"; then ok "audit log: the hashing exec (clickhouse local) is there, with its constant query"; else fail "audit log: no clickhouse local exec"; fi
-# every request of the test ServiceAccounts
+x=$(grep -E 'log_comment%3Ddiskvet|command=--structure' "$F-audit-exec.txt" | grep -c 'tty=true')
+if [ "$x" = 0 ]; then ok "audit log: no exec of diskvet asks for a TTY"; else fail "audit log: $x execs of diskvet with tty=true"; fi
+# every request of the test ServiceAccounts: account, verb, resource, response code
 grep '"username":"system:serviceaccount:dv-plain:dv-sa-' "$W/audit.log" | awk '{
-    v = ""; r = ""; s = ""
+    a = ""; v = ""; r = "-"; s = ""; c = ""
+    if (match($0, /"username":"system:serviceaccount:dv-plain:[a-z-]*"/)) a = substr($0, RSTART + 43, RLENGTH - 44)
     if (match($0, /"verb":"[a-z]*"/)) v = substr($0, RSTART + 8, RLENGTH - 9)
     if (match($0, /"objectRef":\{"resource":"[a-z]*"/)) r = substr($0, RSTART + 25, RLENGTH - 26)
     if (match($0, /"subresource":"[a-z]*"/)) s = "/" substr($0, RSTART + 15, RLENGTH - 16)
-    print v " " r s
+    i = index($0, "\"responseStatus\"")
+    if (i && match(substr($0, i), /"code":[0-9]+/)) c = substr(substr($0, i), RSTART + 7, RLENGTH - 7)
+    print a " " v " " r s " " c
 }' | sort | uniq -c >"$F-audit-sa.txt"
-if [ -s "$F-audit-sa.txt" ] && ! awk '{ print $2 " " $3 }' "$F-audit-sa.txt" | grep -Evq '^(get|list) pods$|^(create|get) pods/exec$|^get $'; then
+if [ -s "$F-audit-sa.txt" ] && ! awk '{ print $3 " " $4 }' "$F-audit-sa.txt" | grep -Evq '^(get|list) pods$|^(create|get) pods/exec$|^get -$'; then
     ok "audit log: the ServiceAccounts only got and listed pods and created exec: $(oneline <"$F-audit-sa.txt")"
 else
     fail "audit log, ServiceAccount requests: $(oneline <"$F-audit-sa.txt")"
