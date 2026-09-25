@@ -94,11 +94,19 @@ complete `kubectl` lines for that pod.
 
 - The TTL file goes into `clickhouse.files` of your values, as
   `config.d/zz-diskvet-ttl.xml`; logs that already have a TTL from the chart
-  are changed with `clickhouse.clickhouseOperator.<log>.ttl` instead (not
-  verified yet): [SigNoz on Kubernetes](kubernetes.md#signoz).
+  are changed with `clickhouse.clickhouseOperator.<logName>.ttl` instead, the
+  log name in camelCase, such as `queryLog` for `query_log` (read in the
+  SigNoz clickhouse chart's values and templates):
+  [SigNoz on Kubernetes](kubernetes.md#signoz).
 
-Not tested with the Altinity operator yet (the test suite's kind cluster runs
-the ClickHouse operator, Bitnami and a plain StatefulSet). The values keys, how the pod restarts, a
+SigNoz's own chart is not tested yet. The test suite's kind cluster runs the
+Altinity operator 0.27.4 with a ClickHouseInstallation of its own: diskvet
+logs in as the passwordless `default` user, the TTL file goes in through
+`config.d/`, and the operator does **not** restart the pod for a changed
+file. Once the file is in the pod, restart it with `kubectl delete pod`, as
+the report says. SigNoz ships the operator 0.21.2, and whether that release
+restarts the pod is not verified yet:
+[SigNoz on Kubernetes](kubernetes.md#signoz). The values keys, how the pod restarts, a
 full volume or node disk, and troubleshooting:
 [Kubernetes: ClickHouse chart by chart](kubernetes.md). What diskvet sends to
 the cluster, the permissions it needs and what the API server's audit log

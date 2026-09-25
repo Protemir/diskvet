@@ -51,7 +51,7 @@ pod ([README → One pod per run](../../README.md#one-pod-per-run)).
 | [Langfuse 1.x](#langfuse-chart-1x) (Bitnami ClickHouse 8.0.5) | `langfuse-clickhouse-shard0-0`, `-1`, `-2`: 3 pods | `clickhouse` | `CLICKHOUSE_ADMIN_USER` + `CLICKHOUSE_ADMIN_PASSWORD` | `clickhouse.extraOverrides`, one XML string (**tested** with the Bitnami chart on its own) | the same string, `<logger>` | StatefulSet, one pod at a time (**tested**, Bitnami 8.0.5) | one PVC per pod, 8Gi | yes: Langfuse 1.5.41 values; **tested**: Bitnami 8.0.5 on its own |
 | [ClickStack 2.x, 3.x](#clickstack-chart-2x-and-3x) (ClickHouse operator) | `clickstack-clickhouse-clickhouse-0-0-0` *(not verified yet)* | `clickhouse-server` | none passed: the operator's client config (`default`) | `clickhouse.cluster.spec.settings.extraConfig`, YAML; 3.4.0 sets 7 days on five logs | `clickhouse.cluster.spec.settings.logger`; 3.4.0: information, 10 files of 100M | the operator *(not verified yet)* | PVC, 10Gi (Keeper: 5Gi) | yes: chart 3.4.0 defaults |
 | [ClickStack 1.x](#clickstack-chart-1x), hdx-oss-v2 | `<fullname>-clickhouse-<hash>-<id>` (a Deployment) | `clickhouse` | none passed: `default` from localhost | no value: a Kustomize post-renderer | the same post-renderer | Deployment | *not verified yet* | no |
-| [SigNoz](#signoz) (Altinity operator) | `chi-signoz-clickhouse-cluster-0-0-0` | `clickhouse` (optional sidecar `logs-system-exporter`) | none passed: `default` from localhost *(not verified yet)* | `clickhouse.files`, key `config.d/zz-diskvet-ttl.xml` *(partly verified)*; logs the chart already limits: `clickhouse.clickhouseOperator.<log>.ttl` *(not verified yet)* | the same `files` key, `<logger>` | the operator *(not verified yet)* | PVC from `data-volumeclaim-template`; the log volume template is commented out | partly: SigNoz clickhouse chart templates |
+| [SigNoz](#signoz) (Altinity operator) | `chi-signoz-clickhouse-cluster-0-0-0` | `clickhouse` (optional sidecar `logs-system-exporter`) | none passed: `default` from localhost *(not verified yet)* | `clickhouse.files`, key `config.d/zz-diskvet-ttl.xml` *(partly verified)*; logs the chart already limits: `clickhouse.clickhouseOperator.<logName>.ttl`, the log name in camelCase (`queryLog`, `partLog`, `traceLog`, ...; **source**: SigNoz charts, main branch, 2026-09-26) | the same `files` key, `<logger>` | the operator: the chart ships operator 0.21.2 (**source**), whether it restarts the pod is *not verified yet*; 0.27.4 does **not** restart it for a changed file (**tested**) | PVC from `data-volumeclaim-template`; the log volume template is commented out | partly: SigNoz clickhouse chart templates |
 | [Opik](#opik) (Altinity operator) | `chi-<chi>-<cluster>-0-0-0` | `clickhouse` | none passed | `clickhouse.configuration.files`, names under `config.d/` | the same key, `<logger>` | the operator | *not verified yet* | no |
 | [PostHog](#posthog) (Altinity operator) | `chi-<chi>-<cluster>-0-0-0` | `clickhouse` | none passed | no files key: `clickhouse.settings`, `metric_log/ttl`; never `query_log` or `part_log` | *not verified yet* | the operator | *not verified yet* | no |
 | [Your own ClickHouseInstallation](#your-own-clickhouseinstallation) (Altinity operator) | `chi-<chi>-<cluster>-0-0-0` (**tested**) | `clickhouse`, also with a sidecar listed first (**tested**) | none passed: `default` from localhost (**tested**) | `spec.configuration.files`, key `config.d/zz-diskvet-ttl.xml` (**tested**) | the same key, `<logger>` | the operator 0.27.4 does **not** restart the pod for a changed file (**tested**): `kubectl delete pod` | your `volumeClaimTemplates` | **tested**: operator 0.27.4 |
@@ -331,10 +331,15 @@ user from localhost without a password) works, that `config.d/` files give
 the logs their TTL, and that the operator does not restart the pod for a
 changed file: after the `helm upgrade`, restart it with `kubectl delete pod`
 ([Your own ClickHouseInstallation](#your-own-clickhouseinstallation)). SigNoz's
-own chart is not tested. *Not verified yet*: that the login
-works with SigNoz's installation, the TTL files the chart already ships, the
-`clickhouse.clickhouseOperator.<log>.ttl` keys, the operator's
-`01-clickhouse-*` file names and the image version.
+own chart is not tested, and it ships the operator 0.21.2. **Source** (the
+SigNoz clickhouse chart, main branch, read on 2026-09-26): the chart's own
+TTL files `01-clickhouse-03-query_log.xml` to
+`01-clickhouse-16-processors_profile_log.xml`, which define each log with an
+`<engine>`, and their `clickhouse.clickhouseOperator.<logName>.ttl` keys, the
+log name in camelCase: `queryLog`, `partLog`, `traceLog`,
+`asynchronousMetricLog` and so on. *Not verified yet*: that the login works
+with SigNoz's installation, whether the operator 0.21.2 restarts the pod for
+a changed file, and the image version.
 
 Add to the values you deploy SigNoz with. The file name must sort after the
 operator's `01-clickhouse-*` files:
@@ -351,7 +356,8 @@ clickhouse:
 ```
 
 Logs that already have a TTL from the chart are changed with
-`clickhouse.clickhouseOperator.<log>.ttl` (days), never in that file: where
+`clickhouse.clickhouseOperator.<logName>.ttl` (days; the log name in
+camelCase, such as `queryLog` for `query_log`), never in that file: where
 the chart defines a log with an `<engine>`, a separate `<ttl>` for it stops
 ClickHouse from starting. The TTL of traces, logs and metrics themselves is
 set in the SigNoz UI ([SigNoz recipe](signoz.md#retention-of-signoz-data)).
@@ -420,7 +426,10 @@ Change it in the Helm values or manifest that creates the resource.
 `kubectl edit chi -n NAMESPACE NAME` works too, but the next `helm upgrade`
 overwrites it. The operator 0.27.4 does **not** restart the pod after the
 change (**tested**), and system logs change only on
-restart: after the change, restart the pod with
+restart: once
+`kubectl exec -n NAMESPACE POD -c clickhouse -- ls /etc/clickhouse-server/config.d`
+lists `zz-diskvet-ttl.xml` (**tested**: the operator puts it there without a
+restart), restart the pod with
 `kubectl delete pod -n NAMESPACE POD` (its StatefulSet recreates it with
 the same volume). List its pods with
 `kubectl get pods -n NAMESPACE -l clickhouse.altinity.com/chi=NAME`.
@@ -660,17 +669,26 @@ StatefulSet without an operator, `rollout restart` is fine, but step 3 works
 for every chart.
 
 **3. Last resort: delete the pod.** If the pod has not restarted within 5
-minutes:
+minutes (with the Altinity operator: once
+`kubectl exec -n NAMESPACE POD -c clickhouse -- ls /etc/clickhouse-server/config.d`
+lists the new file), and only if the pod keeps its data on a
+PersistentVolumeClaim:
 
 ```sh
 kubectl delete pod -n NAMESPACE POD
 ```
 
 Its StatefulSet (or the operator) recreates it with the same name and the
-same volume: about a minute of downtime; the data stays on the volume. (A
-Deployment's new pod gets a new name.) With several pods, delete one at a
-time, and go on only when `kubectl get pod -n NAMESPACE POD` shows it ready
-again.
+same volume: about a minute of downtime; the data stays on the volume. Not
+so for a pod that mounts no PersistentVolumeClaim (the report then says so
+under "Heads-up for Kubernetes" and calls Fix B not safe): its data is on an
+emptyDir or in the container and goes with the pod, unless it is on a
+hostPath volume. Turn persistence on first
+([Two kinds of "disk full"](#two-kinds-of-disk-full)). A pod that nothing
+controls is not recreated at all: `kubectl describe pod -n NAMESPACE POD`
+names its owner under `Controlled By`. (A Deployment's new pod gets a new
+name.) With several pods, delete one at a time, and go on only when
+`kubectl get pod -n NAMESPACE POD` shows it ready again.
 
 After the restart, ClickHouse renames each log whose TTL changed to
 `<name>_0` and starts a new table. Run the report again: check 1 lists those
@@ -780,7 +798,7 @@ For discovery, login and exec errors see also
   `kubectl logs -n NAMESPACE POD -c CONTAINER --previous`. With
   `TTL parameters should be specified directly inside 'engine'`, that log is
   already defined with `<engine>` elsewhere (SigNoz: use its
-  `clickhouseOperator.<log>.ttl` key): take it out of your values and
+  `clickhouseOperator.<logName>.ttl` key, such as `queryLog.ttl`): take it out of your values and
   upgrade again. With the ClickHouse operator, check that you pasted YAML,
   not XML.
 - **The pod did not restart after `helm upgrade`.** See
