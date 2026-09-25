@@ -31,7 +31,8 @@
 #   - ServiceAccount tokens: the README's Role (a named pod, and auto with its
 #     fallback note), get only, and no pods/exec (exit 3 with the hint);
 #   - no password and no salt in the audit log, query_log or text_log; the
-#     audit log has diskvet's exec command lines; the pods' specs unchanged;
+#     audit log has diskvet's exec command lines; the pods' specs unchanged
+#     over every diskvet run (also in phase 2, and after each Fix B);
 #   - the printed fixes, run as printed: Fix A through the printed
 #     clickhouse-client command, with the force_drop_table flag line (uid 101
 #     in a and b, 1001 in c); on the operator pod the server log files are on
@@ -49,7 +50,9 @@
 #   (e) dv-alt    the Altinity operator (chart 0.27.4) with a minimal
 #                 ClickHouseInstallation (tests/k8s/altinity.yaml): the
 #                 passwordless default user, a sidecar listed first, Fix B
-#                 through spec.configuration.files, then Fix C.
+#                 through spec.configuration.files; the operator does not
+#                 restart the pod, so the report's ls line waits for the
+#                 file and its delete line restarts the pod; then Fix C.
 # Results: tests/out/k8s-*; diagnostics: tests/out/k8s-diag.txt.
 set -u
 MSYS_NO_PATHCONV=1
@@ -433,8 +436,10 @@ done
 { kubectl version; helm version; docker exec "$NODE" crictl images; } >"$F-versions.txt" 2>&1
 if [ "$(awk 'NF != 11' "$OUT/pods.all" | wc -l)" = 0 ] && [ -s "$OUT/pods.all" ]; then ok "pods.all: 11 columns on every line ($(wc -l <"$OUT/pods.all" | tr -d ' ') pods)"; else fail "pods.all: lines without 11 columns: $(awk 'NF != 11' "$OUT/pods.all" | head -3 | oneline)"; fi
 
+# spec_sums T...: per pod of the installs T: a checksum of its UID and spec, its
+# ephemeral containers and restart counts
 spec_sums() {
-    for t in A B C; do
+    for t in "$@"; do
         up "$t" || continue
         tgt "$t"
         printf '%s/%s %s %s\n' "$_n" "$_p" \
@@ -442,7 +447,17 @@ spec_sums() {
             "$(kubectl get pod "$_p" -n "$_n" -o 'jsonpath=ephemeral=[{.spec.ephemeralContainers}] restarts={.status.containerStatuses[*].restartCount}')"
     done
 }
-spec_sums >"$F-spec-before.txt"
+# no_mutation WHAT FILE T...: the pods of T are as spec_sums wrote them into FILE
+no_mutation() {
+    _mw=$1 _mf=$2; shift 2
+    spec_sums "$@" >"$_mf.after"
+    if [ -s "$_mf" ] && cmp -s "$_mf" "$_mf.after"; then
+        ok "no mutation: $_mw: UID, spec, ephemeral containers and restart counts of each pod unchanged"
+    else
+        fail "no mutation: $_mw: $(diff "$_mf" "$_mf.after" | oneline)"
+    fi
+}
+spec_sums A B C >"$F-spec-before.txt"
 
 # ---------------------------------------------------------------- 3. discovery
 section "--k8s auto over all namespaces"
@@ -613,12 +628,7 @@ for T in A B C; do
     if [ "$n" -gt 10 ] && [ -z "$bad" ]; then ok "$T: no password and no salt in query_log and text_log ($n lines)"; else fail "$T: in the server logs ($n lines):$bad"; fi
 done
 
-spec_sums >"$F-spec-after.txt"
-if [ -s "$F-spec-before.txt" ] && cmp -s "$F-spec-before.txt" "$F-spec-after.txt"; then
-    ok "no mutation: every pod's UID, spec, ephemeral containers and restart counts are unchanged after the diskvet runs"
-else
-    fail "pods changed: $(diff "$F-spec-before.txt" "$F-spec-after.txt" | oneline)"
-fi
+no_mutation "a, b and c, over every diskvet run of sections 3 to 8" "$F-spec-before.txt" A B C
 
 # ---------------------------------------------------------------- 9. the operator's server log files
 section "(b) server log files on the data volume, and the printed rm line"
@@ -719,20 +729,14 @@ if up C; then
         fail "c: helm upgrade: $(tail -4 "$F-c-upgrade.txt" | oneline)"
     fi
 fi
-# restart_wait T NAME OLD_UID [manual]: the chart or the operator restarts the
-# pod; if not within 5 minutes, the report's own "restart it yourself" line.
-# "manual": an operator that does not restart for a config file (then the
-# report's line is the way, not a failure).
+# restart_wait T NAME OLD_UID: the chart or the operator restarts the pod; if
+# not within 5 minutes, a failure, then the report's own "restart it yourself" line
 restart_wait() {
     tgt "$1"
     if wait_new "$_n" "$_p" "$3" 300; then
         ok "$1: the pod restarted by itself after Fix B"
     else
-        if [ "${4:-}" = manual ]; then
-            note "$1: the pod did not restart within 5 minutes of Fix B; its config.d then: $(kxp "$1" ls /etc/clickhouse-server/config.d 2>&1 | tr '\n' ' ')"
-        else
-            fail "$1: the pod did not restart within 5 minutes of Fix B"
-        fi
+        fail "$1: the pod did not restart within 5 minutes of Fix B"
         x=$(sed -n 's/.*restart it yourself: `\([^`]*\)`.*/\1/p' "$F-$2.md")
         note "$1: running the report's line: $x"
         sh -c "$x" </dev/null >>"$F-$2-restart.txt" 2>&1
@@ -749,6 +753,7 @@ ttl_check() {
 }
 after_fixb() {  # T NAME USER
     tgt "$1"
+    spec_sums "$1" >"$F-spec-$2-fixb.txt"
     ttl_check "$1" "$F-$2-fixb.logs"
     report "$2-fixb" "$1" "$3" --k8s "$_n/$_p"
     fix_steps "$F-$2-fixb.md" 1 '**Fix C:' >"$W/fixc"
@@ -758,6 +763,32 @@ after_fixb() {  # T NAME USER
     if run_fix "$1" "$F-$2-fixb.md" 1 '**Fix C:'; then ok "$1: Fix C ran as printed"; else fail "$1: Fix C: $(tail -4 "$F-$2-fixb.md.fix.txt" | oneline)"; fi
     report "$2-fixc" "$1" "$3" --k8s "$_n/$_p"
     if grep -q '| old copy |' "$F-$2-fixc.md" || grep -q '^\*\*Fix C:' "$F-$2-fixc.md"; then fail "$1: old copies left after Fix C: $(grep '| old copy |' "$F-$2-fixc.md" | oneline)"; else ok "$1: no old copies left after Fix C"; fi
+    no_mutation "$2 after Fix B, over the reports $2-fixb and $2-fixc" "$F-spec-$2-fixb.txt" "$1"
+}
+# restart_after_file T NAME OLD_UID: the Altinity operator does not restart the
+# pod for a changed file. The report says: once its ls line lists
+# zz-diskvet-ttl.xml, restart the pod with its delete line; both run as printed.
+restart_after_file() {
+    tgt "$1"
+    _ls=$(sed -n 's/.* Once `\([^`]*\)` lists zz-diskvet-ttl\.xml and the pod has not restarted .*/\1/p' "$F-$2.md")
+    _del=$(sed -n 's/.*restart it yourself: `\([^`]*\)`.*/\1/p' "$F-$2.md")
+    if [ -z "$_ls" ] || [ -z "$_del" ]; then fail "$1: the report has no ls line or no delete line after Fix B: '$_ls' '$_del'"; return 1; fi
+    _t0=$(date +%s)
+    until sh -c "$_ls" </dev/null 2>/dev/null | grep -qx 'zz-diskvet-ttl\.xml'; do
+        if [ $(( $(date +%s) - _t0 )) -ge 300 ]; then fail "$1: '$_ls' does not list zz-diskvet-ttl.xml within 5 minutes of Fix B"; return 1; fi
+        sleep 5
+    done
+    if [ "$(uid_of "$_n" "$_p")" = "$3" ]; then
+        ok "$1: the report's ls line lists zz-diskvet-ttl.xml $(( $(date +%s) - _t0 )) s after Fix B, and the pod has not restarted (as the report says)"
+    else
+        note "$1: the pod was replaced before its config.d listed zz-diskvet-ttl.xml"
+    fi
+    note "$1: running the report's line: $_del"
+    sh -c "$_del" </dev/null >>"$F-$2-restart.txt" 2>&1
+    wait_new "$_n" "$_p" "$3" 300 || { fail "$1: no new pod after $_del"; return 1; }
+    ok "$1: the report's delete line restarted the pod"
+    wait_ch "$1" 180 || { fail "$1: ClickHouse does not answer after the restart"; return 1; }
+    chq "$1" 'SYSTEM FLUSH LOGS' >/dev/null
 }
 if [ "$B_FIXED" = 1 ] && restart_wait B b "$b_uid"; then
     after_fixb B b default
@@ -825,11 +856,13 @@ else
     if up D; then
         x=$(kxp D sh -c 'if [ -n "${CLICKHOUSE_ADMIN_PASSWORD_FILE:-}" ] && [ -r "$CLICKHOUSE_ADMIN_PASSWORD_FILE" ] && [ -z "${CLICKHOUSE_ADMIN_PASSWORD:-}" ]; then echo file; else echo other; fi' 2>&1)
         if [ "$x" = file ]; then ok "d: chart 9.x gives the pod only CLICKHOUSE_ADMIN_PASSWORD_FILE (usePasswordFiles)"; else fail "d: the pod's password variables: $x"; fi
+        spec_sums D >"$F-spec-d.txt"
         report d D default --k8s "$D_NS/$D_POD"
         awk -F '\t' '$1 == "_target"' "$F-d.raw" >"$F-d.target"
         x=$(awk -F '\t' '{ print $6 }' "$F-d.target")
         if [ "$x" = bitnami9 ]; then ok "d: flavor bitnami9 (helm.sh/chart $(kubectl get pod "$D_POD" -n "$D_NS" -o 'jsonpath={.metadata.labels.helm\.sh/chart}'))"; else fail "d: flavor '$x', want bitnami9"; fi
         payload payload-d D --k8s "$D_NS/$D_POD"
+        no_mutation "d, over its report and payload" "$F-spec-d.txt" D
         x=$(chq D "SELECT count() FROM system.tables WHERE database = 'system' AND name = 'query_log'")
         if [ "$x" = 0 ]; then ok "d: no system.query_log: the chart's 08-sampling.xml turns it off"; else fail "d: system.query_log before Fix B: '$x'"; fi
         # the bitnami9 Fix B: a 00- file in configdFiles, as the report prints it
@@ -874,6 +907,7 @@ else
     fi
 
     if up E; then
+        spec_sums E >"$F-spec-e.txt"
         report e E default -n "$E_NS" --k8s auto
         has "$F-e.err" "kubectl context $CTX · pod $E_NS/$E_POD · container $E_CTR" "e: -n $E_NS --k8s auto picks the clickhouse container, not the clickhouse-backup sidecar listed first"
         awk -F '\t' '$1 == "_target"' "$F-e.raw" >"$F-e.target"
@@ -881,6 +915,7 @@ else
         if [ "$x" = "altinity dv-alt" ]; then ok "e: flavor altinity, group dv-alt (clickhouse.altinity.com/chi)"; else fail "e: flavor and group '$x', want 'altinity dv-alt'"; fi
         has "$F-e.md" "This pod is run by the Altinity operator (ClickHouseInstallation dv-alt in namespace $E_NS)." "e: the Fix B of an Altinity installation"
         payload payload-e E --k8s "$E_NS/$E_POD"
+        no_mutation "e, over its report and payload" "$F-spec-e.txt" E
         yaml_of "$F-e.md" >"$F-e-fixb.yaml"
         sed -n 's/^              <\([a-z0-9_]*\)>$/\1/p' "$F-e-fixb.yaml" >"$F-e-fixb.logs"
         if [ "$(sed -n 1p "$F-e-fixb.yaml")" = "spec:" ] && [ -s "$F-e-fixb.logs" ]; then ok "e: Fix B spec.configuration.files for the logs $(tr '\n' ' ' <"$F-e-fixb.logs")"; else fail "e: Fix B YAML: $(head -6 "$F-e-fixb.yaml" | oneline)"; fi
@@ -889,8 +924,8 @@ else
         if kubectl patch --local -f tests/k8s/altinity.yaml --type merge --patch-file "$F-e-fixb.yaml" -o yaml >"$W/e2.yaml" 2>"$F-e-apply.txt" \
             && kubectl apply -f "$W/e2.yaml" >>"$F-e-apply.txt" 2>&1; then
             ok "e: the printed block applied to the ClickHouseInstallation: $(oneline <"$F-e-apply.txt")"
-            # the Altinity operator 0.27.4 did not restart the pod for a changed file
-            if restart_wait E e "$e_uid" manual; then after_fixb E e default; fi
+            # the Altinity operator 0.27.4 does not restart the pod for a changed file
+            if restart_after_file E e "$e_uid"; then after_fixb E e default; fi
         else
             fail "e: applying Fix B: $(oneline <"$F-e-apply.txt")"
         fi

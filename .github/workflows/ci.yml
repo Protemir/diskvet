@@ -24,8 +24,10 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Does this change need the kubernetes job?
-        # On main and on the weekly run always; otherwise when diskvet.sh,
-        # checks.sql, tests/k8s* or this workflow changed.
+        # On main and on the weekly run always; otherwise when a file that
+        # tests/k8s.sh runs or reads changed: diskvet.sh, checks.sql, README.md
+        # (the Role of Permissions), tests/k8s*, tests/seed.sql, the payload
+        # checker and its key list, two fixtures, or this workflow.
         id: changes
         env:
           EVENT: ${{ github.event_name }}
@@ -47,7 +49,7 @@ jobs:
             else
               files=$(git ls-files)
             fi
-            if printf '%s\n' "$files" | grep -Eq '^(diskvet\.sh|checks\.sql|tests/k8s.*|\.github/workflows/ci\.yml)$'; then run=true; fi
+            if printf '%s\n' "$files" | grep -Eq '^(diskvet\.sh|checks\.sql|README\.md|tests/k8s.*|tests/seed\.sql|tests/check_payload\.sh|tests/payload_keys\.txt|tests/fixtures/(test\.env|ch-test\.xml)|\.github/workflows/ci\.yml)$'; then run=true; fi
           fi
           echo "kubernetes=$run" >>"$GITHUB_OUTPUT"
           echo "kubernetes job: $run"
@@ -96,11 +98,12 @@ jobs:
 
   kubernetes:
     # A real cluster: kind, with the API server's audit log on. tests/k8s.sh
-    # installs ClickHouse three ways (a plain StatefulSet, the ClickHouse
-    # operator with the Langfuse chart's resources, the Bitnami chart), runs
+    # installs ClickHouse five ways (a plain StatefulSet, the ClickHouse
+    # operator with the Langfuse chart's resources, the Bitnami charts 8.x and
+    # 9.x, the Altinity operator with a ClickHouseInstallation), runs
     # --k8s against each, runs the fixes the reports print, and reads the
-    # audit log. On main, weekly, and when diskvet.sh, checks.sql or tests/k8s*
-    # change.
+    # audit log. On main, weekly, and when a file it runs or reads changes
+    # (the list is in the offline job's "changes" step).
     runs-on: ubuntu-latest
     needs: offline
     if: needs.offline.outputs.kubernetes == 'true'
