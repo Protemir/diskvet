@@ -1,2 +1,1 @@
-dv-plain   ch-0                  Running   busybox,clickhouse   busybox:1.36,docker.io/clickhouse/clickhouse-server@sha256:7c3f1a9e2b4d6f8a0c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f5a   data-ch-0,logs-ch-0   <none>   <none>   <none>   <none>   StatefulSet
-dv-plain   app-7f6d5c4b3-k9j8h   Running   app                  ghcr.io/example/app:2.4.1                                                                                                     <none>                <none>   <none>   <none>   <none>   ReplicaSet
+dv-plain   dv-plain-0   Running   busybox,clickhouse   busybox:1.37,clickhouse/clickhouse-server:25.12   data-dv-plain-0   <none>   <none>   <none>   <none>   StatefulSet

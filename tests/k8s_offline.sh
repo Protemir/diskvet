@@ -6,15 +6,23 @@
 # Called at the end of tests/replay.sh; also on its own:
 #   sh tests/k8s_offline.sh
 #   busybox sh tests/k8s_offline.sh
-# The pod fixtures (hand-written in kubectl's custom-columns layout; they get
-# re-recorded from kind):
-#   one-official         Langfuse 2.x (ClickHouse operator), with keeper, version-probe, web and operator pods
-#   one-bitnami8         the Bitnami chart 8.0.5 on its own, one replica, with ZooKeeper
+# The pod fixtures, in kubectl's custom-columns layout. Recorded on kind by
+# tests/k8s.sh (tests/out/pods.*: Kubernetes 1.37, kubectl 1.37):
+#   one-official         Langfuse chart 2.1.2 with the ClickHouse operator 0.0.7 (dv-op): the
+#                        server, its Keeper, the finished version-probe Job pod, and the operator
+#                        (0.0.7 sets no clickhouse.com/cluster label, so the group is empty)
+#   one-bitnami8         the Bitnami chart 8.0.5 on its own (dv-bn8): the line of its first replica
+#   plain-sidecar-first  a plain StatefulSet (dv-plain) with a busybox sidecar listed first
+#   version-probe        the operator's version-probe pod: Succeeded, no role label
+#   none                 kube-system and local-path-storage of kind: no ClickHouse at all
+#   keeper-only, operator-only: the recorded Keeper, operator and cert-manager lines, with
+#                        hand-written ones for other charts
+# Hand-written, for installs the kind job does not have:
 #   one-bitnami9         trigger.dev up to 4.5.9 (Bitnami chart 9.4.7)
 #   many-bitnami         Langfuse 1.x: 3 ClickHouse replicas
 #   altinity-sidecars    SigNoz (Altinity operator): clickhouse-log and clickhouse-backup listed first
-#   plain-sidecar-first  a busybox sidecar first, the image by digest, two PVCs
-#   keeper-only, operator-only, version-probe, backup-job, none: no ClickHouse server to pick
+#   plain-digest         a busybox sidecar first, the image by digest, two PVCs
+#   backup-job           backup Job pods that run the server image: no ClickHouse server to pick
 #   pending              a ClickHouse pod that is not Running
 #   custom-image         no ClickHouse image: needs --container
 #   nopvc                Sentry's bundled ClickHouse without persistence
@@ -102,7 +110,7 @@ unreachable() {  # FILE DESC: FILE is exactly one ch_unreachable line that passe
 nodocker() {  # FILE DESC: no Docker or host advice in a Kubernetes report
     if grep -nE 'docker|daemon\.json|systemctl|sudo|json-file' "$1" >"$W/nodocker"; then fail "$2: $(sed -n '1p' "$W/nodocker" | cut -c1-160)"; else ok "$2"; fi
 }
-official_target="lf|langfuse-clickhouse-0-0-0|clickhouse-server|official|clickhouse-storage-volume-langfuse-clickhouse-0-0-0|langfuse-clickhouse"
+official_target="dv-op|lf-langfuse-clickhouse-0-0-0|clickhouse-server|official|clickhouse-storage-volume-lf-langfuse-clickhouse-0-0-0|"
 
 echo "== diskvet.sh runs kubectl only through kc() and kx()"
 # The shell part of diskvet.sh as code only: no comments, no quoted strings, no
@@ -184,15 +192,16 @@ echo "== discovery: the right namespace, pod and container (also with CR LF from
 # uses that container whatever its image.
 cat >"$W/found" <<EOF
 one-official|default|auto|$official_target
-one-official|default|auto -n lf|$official_target
-one-official|default|lf/langfuse-clickhouse-0-0-0|$official_target
-one-official|lf|pod/langfuse-clickhouse-0-0-0|$official_target
-one-bitnami8|default|auto|analytics|ch-clickhouse-shard0-0|clickhouse|bitnami8|data-ch-clickhouse-shard0-0|
+one-official|default|auto -n dv-op|$official_target
+one-official|default|dv-op/lf-langfuse-clickhouse-0-0-0|$official_target
+one-official|dv-op|pod/lf-langfuse-clickhouse-0-0-0|$official_target
+one-bitnami8|default|auto|dv-bn8|bn8-clickhouse-shard0-0|clickhouse|bitnami8|data-bn8-clickhouse-shard0-0|
 one-bitnami9|default|auto|trigger|trigger-clickhouse-shard0-0|clickhouse|bitnami9|data-trigger-clickhouse-shard0-0|
 many-bitnami|default|langfuse/langfuse-clickhouse-shard0-1|langfuse|langfuse-clickhouse-shard0-1|clickhouse|bitnami8|data-langfuse-clickhouse-shard0-1|
 altinity-sidecars|default|auto|signoz|chi-signoz-clickhouse-cluster-0-0-0|clickhouse|altinity|data-volumeclaim-template-chi-signoz-clickhouse-cluster-0-0-0|signoz-clickhouse
 altinity-sidecars|default|auto -n signoz|signoz|chi-signoz-clickhouse-cluster-0-0-0|clickhouse|altinity|data-volumeclaim-template-chi-signoz-clickhouse-cluster-0-0-0|signoz-clickhouse
-plain-sidecar-first|default|auto|dv-plain|ch-0|clickhouse|plain|data-ch-0,logs-ch-0|
+plain-sidecar-first|default|auto|dv-plain|dv-plain-0|clickhouse|plain|data-dv-plain-0|
+plain-digest|default|auto|dv-plain|ch-0|clickhouse|plain|data-ch-0,logs-ch-0|
 custom-image|default|dv-custom/analytics-db-0 --container db|dv-custom|analytics-db-0|db|plain|data-analytics-db-0|
 nopvc|default|auto|sentry|sentry-clickhouse-0|sentry-clickhouse|plain||
 backup-job|default|ops/ch-backup-29310420-7xk2p|ops|ch-backup-29310420-7xk2p|clickhouse|plain||
@@ -244,7 +253,7 @@ refused "KFAKE=one-official KFAKE_FORBID_ALL=1" "no running ClickHouse pod found
 refused "KFAKE=pending" "pod dv-plain/ch-0 is Pending, not Running" --k8s dv-plain/ch-0
 refused "KFAKE=custom-image" "pod dv-custom/analytics-db-0 has containers metrics db, and not exactly one with a ClickHouse image; pass --container NAME" --k8s dv-custom/analytics-db-0
 refused "KFAKE=custom-image" "pod dv-custom/analytics-db-0 has no container 'nope' (it has: metrics db)" --k8s dv-custom/analytics-db-0 --container nope
-refused "KFAKE=version-probe" "pod lf/langfuse-clickhouse-version-probe-9p2xq is not a ClickHouse server: its clickhouse.com/role is version-probe" --k8s lf/langfuse-clickhouse-version-probe-9p2xq
+refused "KFAKE=version-probe" "pod dv-op/lf-langfuse-clickhouse-version-probe-270acf95-wls47 is Succeeded, not Running" --k8s dv-op/lf-langfuse-clickhouse-version-probe-270acf95-wls47
 refused "KFAKE=keeper-only" "pod lf/langfuse-keeper-1-0-0 is not a ClickHouse server: its clickhouse.com/role is clickhouse-keeper" --k8s lf/langfuse-keeper-1-0-0
 refused "KFAKE=one-official" 'cannot find pod lf/nope: Error from server (NotFound): pods "nope" not found' --k8s lf/nope
 refused "KFAKE=badcols" "cannot read kubectl's output (unexpected columns); please report this with kubectl version" --k8s auto
@@ -293,7 +302,7 @@ else
     fail "many-bitnami: the pasted command '$line' (a space in the path): exit $rc"
 fi
 
-dv "KFAKE=one-official KFAKE_FORBID_ALL=1 KFAKE_NS=lf" report --k8s auto --save-raw "$W/raw" >"$W/r.md" 2>"$W/r.err"; rc=$?
+dv "KFAKE=one-official KFAKE_FORBID_ALL=1 KFAKE_NS=dv-op" report --k8s auto --save-raw "$W/raw" >"$W/r.md" 2>"$W/r.err"; rc=$?
 if [ "$rc" = 0 ] && [ "$(tgt "$W/raw")" = "$official_target|" ] \
     && grep -qF "not allowed to list pods in all namespaces; looking in your current namespace only (pass -n NAMESPACE to choose)" "$W/r.err"; then
     ok "Forbidden -A: the note, then the current namespace, then the run"
@@ -307,7 +316,7 @@ else
 fi
 
 dv "KFAKE=one-official KFAKE_CTX=none" report --k8s auto >"$W/r.md" 2>"$W/r.err"; rc=$?
-if [ "$rc" = 0 ] && grep -qF "kubectl context (none) · pod lf/langfuse-clickhouse-0-0-0 · container clickhouse-server" "$W/r.err" \
+if [ "$rc" = 0 ] && grep -qF "kubectl context (none) · pod dv-op/lf-langfuse-clickhouse-0-0-0 · container clickhouse-server" "$W/r.err" \
     && ! grep -qF '[--context]' "$KLOG"; then
     ok "no current context (in-cluster): nothing is pinned, and the note says (none)"
 else
@@ -363,7 +372,7 @@ argerr() {  # MESSAGE ARGS...
         fail "${ae:+$ae }$*: exit $_rc, $(grep -c . "$KLOG") kubectl calls: $(cat "$W/r.err")"
     fi
 }
-argerr "--password is not accepted with --k8s: kubectl puts the command line into the exec request URL, and the API server can keep it in its audit log." --password x --k8s lf/langfuse-clickhouse-0-0-0
+argerr "--password is not accepted with --k8s: kubectl puts the command line into the exec request URL, and the API server can keep it in its audit log." --password x --k8s dv-op/lf-langfuse-clickhouse-0-0-0
 argerr "--password is not accepted with --k8s" --password= --k8s auto
 argerr "use either --docker or --k8s, not both" --k8s a --docker b
 argerr "-n/--namespace, --container and --context only work with --k8s" -n x
@@ -394,7 +403,7 @@ if [ "$(sed -n '1p' "$KLOG")" = "[config] [current-context] " ] && sed '1d' "$KL
 else
     fail "context pinning: $(cut -c1-120 "$KLOG")"
 fi
-pinned "[--context] [fake-ctx] [exec] [-i] [-n] [lf] [langfuse-clickhouse-0-0-0] [-c] [clickhouse-server] [--] [sh] [-c] " "every exec starts with [--context] [fake-ctx] [exec] [-i] [-n] [NS] [POD] [-c] [CTR] [--] [sh] [-c]"
+pinned "[--context] [fake-ctx] [exec] [-i] [-n] [dv-op] [lf-langfuse-clickhouse-0-0-0] [-c] [clickhouse-server] [--] [sh] [-c] " "every exec starts with [--context] [fake-ctx] [exec] [-i] [-n] [NS] [POD] [-c] [CTR] [--] [sh] [-c]"
 if awk 'index($0, "[--readonly=2] [--max_execution_time=30] [--max_result_rows=10000] [--result_overflow_mode=break] [--max_threads=2] [--max_memory_usage=500000000] [--log_comment=diskvet] [--format=TSV]") == 0 { bad = 1 } END { exit bad || NR == 0 }' "$CLOG"; then
     ok "every query in the pod ran with --readonly=2 and the limits ($(grep -c . "$CLOG") calls)"
 else
@@ -403,7 +412,7 @@ fi
 hasnt "$W/untyped.md" "fake-ctx" "a context the user did not type is not in the report"
 hasnt "$W/raw.untyped" "fake-ctx" "... nor in the --save-raw file"
 has "$W/untyped.md" "complete kubectl lines for your current kubectl context (check it with \`kubectl config current-context\` before you paste)." "the report says which context its commands use"
-dv "KFAKE=one-official" report --k8s lf/langfuse-clickhouse-0-0-0 --context prod-ctx --save-raw "$W/raw.typed" >"$W/typed.md" 2>"$W/r.err"; rc_is $? 0 "--context prod-ctx: exit 0"
+dv "KFAKE=one-official" report --k8s dv-op/lf-langfuse-clickhouse-0-0-0 --context prod-ctx --save-raw "$W/raw.typed" >"$W/typed.md" 2>"$W/r.err"; rc_is $? 0 "--context prod-ctx: exit 0"
 if awk 'index($0, "[--context] [prod-ctx] ") != 1 { bad = 1 } END { exit bad || NR == 0 }' "$KLOG"; then
     ok "--context prod-ctx: no current-context call, prod-ctx on every call"
 else
@@ -416,7 +425,7 @@ else
     fail "--context prod-ctx: $(tr '\n' ' ' <"$W/kwords")"
 fi
 has "$W/typed.md" "Shell commands below are complete kubectl lines for context prod-ctx." "--context prod-ctx: named in how to run the fixes"
-has "$W/typed.md" 'helm list -n lf --kube-context prod-ctx' "--context prod-ctx: helm gets --kube-context"
+has "$W/typed.md" 'helm list -n dv-op --kube-context prod-ctx' "--context prod-ctx: helm gets --kube-context"
 hasnt "$W/typed.md" "fake-ctx" "--context prod-ctx: the current context is not in the report"
 # Git Bash: KUBECONFIG=/c/... reaches kubectl.exe unconverted under MSYS_NO_PATHCONV,
 # so diskvet converts it with cygpath. A fake cygpath, and a kubectl in front of
@@ -459,7 +468,7 @@ execerr() {  # "VAR=value ..." HINT DESC
     dv "KFAKE=one-official $1" --print-payload --k8s auto >"$W/p.json" 2>/dev/null; _rc=$?
     if [ "$_rc" = 3 ]; then unreachable "$W/p.json" "$3: --print-payload prints one ch_unreachable line"; else fail "$3: --print-payload exit $_rc"; fi
 }
-execerr "KFAKE_EXEC=forbidden" "(kubectl exec needs the create verb on pods/exec in namespace lf: README, Kubernetes, Permissions. Without it, use kubectl port-forward and --host 127.0.0.1 with a read-only user.)" "pods/exec forbidden"
+execerr "KFAKE_EXEC=forbidden" "(kubectl exec needs the create verb on pods/exec in namespace dv-op: README, Kubernetes, Permissions. Without it, use kubectl port-forward and --host 127.0.0.1 with a read-only user.)" "pods/exec forbidden"
 execerr "KFAKE_EXEC=nosh" "(the container has no sh, for example a distroless image: use kubectl port-forward and --host 127.0.0.1 instead)" "no sh in the container"
 execerr "KFAKE_AUTH=1" "(diskvet used the pod's own login: its clickhouse-client config, CLICKHOUSE_USER or CLICKHOUSE_ADMIN_USER. ClickHouse refused it." "login refused (Code 516)"
 has "$W/execerr.err" "cannot run queries: Code: 516. default: Authentication failed" "login refused: ClickHouse's Code line wins over kubectl's own line"
@@ -579,8 +588,8 @@ has "$W/p.err" "cannot hash table names, so the payload has no tables: Code: 100
 has "$W/p.json" '"tables": [ ],' "... and the tables are dropped"
 has "$W/p.json" '"not_run": ["tables"]' "... and listed as not run"
 if grep '\[exec\]' "$KLOG" | grep -qF '[cd /tmp && exec clickhouse local "$@"] [sh] [--input-format] [TSV]'; then ok "the names were sent to clickhouse local inside the pod"; else fail "no clickhouse local exec"; fi
-if sh tests/check_payload.sh "$W/p.json" lf langfuse-clickhouse-0-0-0 clickhouse-server fake-ctx \
-        clickhouse-storage-volume-langfuse-clickhouse-0-0-0 langfuse-clickhouse customer_acme payments_eu "$salt" >"$W/p.txt" 2>&1; then
+if sh tests/check_payload.sh "$W/p.json" dv-op lf-langfuse-clickhouse-0-0-0 clickhouse-server fake-ctx \
+        clickhouse-storage-volume-lf-langfuse-clickhouse-0-0-0 lf-langfuse customer_acme payments_eu "$salt" >"$W/p.txt" 2>&1; then
     ok "check_payload.sh passes with the namespace, pod, container, context, PVC, group and salt forbidden"
 else
     fail "payload: $(cat "$W/p.txt")"
@@ -617,7 +626,7 @@ if [ "$rc" = 2 ] && grep -qF "its _target line is not what diskvet writes" "$W/r
 awk -F '\t' 'BEGIN { OFS = "\t" } $1 == "_target" { $5 = "clickhouse-ser\rver"; $9 = "prod\r/tmp/x" } 1' "$W/raw.untyped" >"$W/cr.tsv"
 sh diskvet.sh report --replay "$W/cr.tsv" </dev/null >"$W/rep.md" 2>"$W/r.err"; rc=$?
 cr=$(printf '\r')
-if [ "$rc" = 0 ] && ! grep -q "$cr" "$W/rep.md" && grep -qF "kubectl --context prod/tmp/x exec -n lf langfuse-clickhouse-0-0-0 -c clickhouse-server -- sh -c 'touch " "$W/rep.md"; then
+if [ "$rc" = 0 ] && ! grep -q "$cr" "$W/rep.md" && grep -qF "kubectl --context prod/tmp/x exec -n dv-op lf-langfuse-clickhouse-0-0-0 -c clickhouse-server -- sh -c 'touch " "$W/rep.md"; then
     ok "--replay with a CR inside the container and the context: no CR in the report"
 else
     fail "CR inside _target: exit $rc, $(grep -c "$cr" "$W/rep.md") lines with a CR: $(cat "$W/r.err")"
@@ -633,7 +642,7 @@ awk -F '\t' -v p="$qpath" 'BEGIN { OFS = "\t" } $1 == "disk_now" && $2 == "defau
 sh diskvet.sh report --replay "$W/quote.tsv" </dev/null >"$W/rep.md" 2>"$W/r.err"; rc=$?
 if [ "$rc" = 0 ] && grep -qF "/var/lib/clickhouse/\\'\$(id>/tmp/pwned)" "$W/quote.tsv"; then ok "a disk path with a quote: the replay file has it, exit 0"; else fail "quote path: exit $rc: $(grep '^disk_now' "$W/quote.tsv")"; fi
 hasnt "$W/rep.md" "pwned" "a disk path with a quote: not in any printed command"
-has "$W/rep.md" "kubectl exec -n lf langfuse-clickhouse-0-0-0 -c clickhouse-server -- sh -c 'touch <data path>/flags/force_drop_table && chmod 666 <data path>/flags/force_drop_table'" "... the flag line gets <data path>"
+has "$W/rep.md" "kubectl exec -n dv-op lf-langfuse-clickhouse-0-0-0 -c clickhouse-server -- sh -c 'touch <data path>/flags/force_drop_table && chmod 666 <data path>/flags/force_drop_table'" "... the flag line gets <data path>"
 # a pod without an operator gets the du line of check 2 and the volume line of check 3
 { cat tests/fixtures/k8s/target.plain; sed '1,2d' "$W/quote.tsv"; } >"$W/quote-plain.tsv"
 sh diskvet.sh report --replay "$W/quote-plain.tsv" </dev/null >"$W/rep.md" 2>"$W/r.err"; rc_is $? 0 "a disk path with a quote, plain pod: exit 0"
@@ -646,19 +655,19 @@ has "$W/rep.md" "kubectl --context ctx-x exec -n lf ch-0 -c ch -- sh -c 'touch /
 hasnt "$W/rep.md" "Heads-up for Kubernetes" "... its volumes are unknown: no volume heads-up"
 if [ -s "$KLOG" ]; then fail "--replay --k8s called kubectl: $(sed -n '1p' "$KLOG")"; else ok "... and no kubectl call"; fi
 sh diskvet.sh --print-payload --replay "$W/raw.untyped" </dev/null >"$W/p.json" 2>/dev/null
-if sh tests/check_payload.sh "$W/p.json" lf langfuse-clickhouse-0-0-0 clickhouse-server clickhouse-storage-volume-langfuse-clickhouse-0-0-0 langfuse-clickhouse >"$W/p.txt" 2>&1; then
+if sh tests/check_payload.sh "$W/p.json" dv-op lf-langfuse-clickhouse-0-0-0 clickhouse-server clickhouse-storage-volume-lf-langfuse-clickhouse-0-0-0 lf-langfuse >"$W/p.txt" 2>&1; then
     ok "the payload of a --k8s --save-raw file ignores the _target row"
 else
     fail "payload from raw: $(cat "$W/p.txt")"
 fi
 
 echo "== the report of a --k8s run"
-has "$W/untyped.md" "detected: Langfuse · pod lf/langfuse-clickhouse-0-0-0" "header: the pod"
+has "$W/untyped.md" "detected: Langfuse · pod dv-op/lf-langfuse-clickhouse-0-0-0" "header: the pod"
 awk -F '\t' 'BEGIN { OFS = "\t" } $1 == "passport" { $0 = $0 OFS "bn_admin" } 1' tests/fixtures/alex.tsv >"$W/ranas.tsv"
 dv "KFAKE=one-bitnami8 KFAKE_STREAM=$W/ranas.tsv" report --k8s auto >"$W/r.md" 2>/dev/null
-has "$W/r.md" "· pod analytics/ch-clickhouse-shard0-0 · user bn_admin" "header: the user the checks ran as (passport ran_as)"
-has "$W/r.md" "\`kubectl exec -it -n analytics ch-clickhouse-shard0-0 -c clickhouse -- sh -c 'exec clickhouse-client --user \"\$CLICKHOUSE_ADMIN_USER\" --password \"\${CLICKHOUSE_ADMIN_PASSWORD:-\$(cat \"\$CLICKHOUSE_ADMIN_PASSWORD_FILE\")}\"'\`" "Bitnami: the client command logs in from the pod's env"
-has "$W/untyped.md" "\`kubectl exec -it -n lf langfuse-clickhouse-0-0-0 -c clickhouse-server -- clickhouse-client\`. Inside the pod it logs in as \`default\`" "operator: the plain client command"
+has "$W/r.md" "· pod dv-bn8/bn8-clickhouse-shard0-0 · user bn_admin" "header: the user the checks ran as (passport ran_as)"
+has "$W/r.md" "\`kubectl exec -it -n dv-bn8 bn8-clickhouse-shard0-0 -c clickhouse -- sh -c 'exec clickhouse-client --user \"\$CLICKHOUSE_ADMIN_USER\" --password \"\${CLICKHOUSE_ADMIN_PASSWORD:-\$(cat \"\$CLICKHOUSE_ADMIN_PASSWORD_FILE\")}\"'\`" "Bitnami: the client command logs in from the pod's env"
+has "$W/untyped.md" "\`kubectl exec -it -n dv-op lf-langfuse-clickhouse-0-0-0 -c clickhouse-server -- clickhouse-client\`. Inside the pod it logs in as \`default\`" "operator: the plain client command"
 dv "KFAKE=nopvc" report --k8s auto >"$W/r.md" 2>/dev/null
 has "$W/r.md" "- This pod mounts no PersistentVolumeClaim: ClickHouse data is on the node's disk" "no PVC: the heads-up"
 has "$W/r.md" "sh -c 'exec clickhouse-client \${CLICKHOUSE_USER:+--user \"\$CLICKHOUSE_USER\"} \${CLICKHOUSE_PASSWORD:+--password \"\$CLICKHOUSE_PASSWORD\"}'" "plain: the client command uses the pod's env when set"
@@ -882,7 +891,7 @@ lines "$f" "plain: the XML" '```xml' '<clickhouse>' "    <!-- diskvet $(sed -n '
 has "$f" "- Sentry chart up to 28 (bundled ClickHouse): \`clickhouse.clickhouse.configmap.configOverride\`" "plain: the chart list"
 has "$f" "- other charts: a ConfigMap of your own, mounted with subPath at \`/etc/clickhouse-server/conf.d/clickhouse-ttl.xml\`" "plain: other charts"
 hasnt "$f" '```yaml' "plain: no YAML"
-has "$f" "Or give the volume more room: this pod mounts several volumes (data-ch-0, logs-ch-0); \`kubectl get pvc -n dv-plain\` shows them. Grow the one mounted at /var/lib/clickhouse/ with \`kubectl patch pvc -n dv-plain <pvc> -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"300Gi\"}}}}'\` if its StorageClass allows expansion. The patch can't be undone (a volume never shrinks)." "plain, two PVCs: the several-volumes line"
+has "$f" "Or give the volume more room: this pod mounts several volumes (data-dv-plain-0, logs-dv-plain-0); \`kubectl get pvc -n dv-plain\` shows them. Grow the one mounted at /var/lib/clickhouse/ with \`kubectl patch pvc -n dv-plain <pvc> -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"300Gi\"}}}}'\` if its StorageClass allows expansion. The patch can't be undone (a volume never shrinks)." "plain, two PVCs: the several-volumes line"
 has "$f" "See what takes the space (read-only, inside the pod)" "plain: the generic check 2 text"
 flavor plain-clickstack plain clickstack
 f=$W/f.plain-clickstack.md

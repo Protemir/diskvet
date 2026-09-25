@@ -1,2 +1,1 @@
-lf    langfuse-clickhouse-version-probe-9p2xq   Running   clickhouse-server   clickhouse/clickhouse-server:26.4   <none>   version-probe   langfuse-clickhouse   <none>   <none>           Job
-lf    langfuse-web-6f9c8d7b54-x2lqp             Running   langfuse-web        langfuse/langfuse:3.120.0           <none>   <none>          <none>                <none>   langfuse-2.1.2   ReplicaSet
+dv-op   lf-langfuse-clickhouse-version-probe-270acf95-wls47   Succeeded   version-probe       clickhouse/clickhouse-server:26.4   <none>                                                   <none>              <none>   <none>   <none>   Job

@@ -1,2 +1,2 @@
 @@	_target	ok
-_target	k8s	dv-plain	ch-0	clickhouse	plain	data-ch-0,logs-ch-0		
+_target	k8s	dv-plain	dv-plain-0	clickhouse	plain	data-dv-plain-0,logs-dv-plain-0		
