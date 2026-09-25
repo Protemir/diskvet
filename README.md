@@ -1,5 +1,7 @@
 # diskvet
 
+[![ci](https://github.com/Protemir/diskvet/actions/workflows/ci.yml/badge.svg)](https://github.com/Protemir/diskvet/actions/workflows/ci.yml)
+
 **A read-only disk check-up for ClickHouse®** — for the ClickHouse that runs
 **inside** your self-hosted Langfuse, SigNoz or ClickStack. It finds what eats
 the disk and prints the exact commands to fix it.
