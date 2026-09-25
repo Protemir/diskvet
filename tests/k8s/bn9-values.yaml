@@ -1,0 +1,22 @@
+# (d) dv-bn9 for tests/k8s.sh, phase 2: the Bitnami ClickHouse chart 9.x on
+# its own (9.4.4, the newest 9.x published as an OCI chart), release bn9.
+# Chart 9.x mounts the password as a file (usePasswordFiles, the default) and
+# turns most system logs off in its own config.d/08-sampling.xml.
+# tests/k8s.sh adds auth.password (random) in a values file of its own.
+image:
+  repository: bitnamilegacy/clickhouse
+global:
+  security:
+    allowInsecureImages: true
+shards: 1
+replicaCount: 1
+keeper:
+  enabled: false
+persistence:
+  size: 2Gi
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 2Gi

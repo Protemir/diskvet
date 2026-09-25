@@ -41,6 +41,15 @@
 #     lists, their <log>_0 copies in Fix C, and none left after Fix C;
 #   - the real "kubectl get pods -o custom-columns" output goes to
 #     tests/out/pods.* (the offline fixtures are recorded from it).
+# Phase 2, only when phase 1 passed, after deleting its namespaces:
+#   (d) dv-bn9    the Bitnami chart 9.4.4 (tests/k8s/bn9-values.yaml): the login
+#                 from CLICKHOUSE_ADMIN_PASSWORD_FILE, and a 00- file in
+#                 configdFiles loading before the chart's 08-sampling.xml (a log
+#                 the chart turns off stays off; a zz- file turns it back on);
+#   (e) dv-alt    the Altinity operator (chart 0.27.4) with a minimal
+#                 ClickHouseInstallation (tests/k8s/altinity.yaml): the
+#                 passwordless default user, a sidecar listed first, Fix B
+#                 through spec.configuration.files, then Fix C.
 # Results: tests/out/k8s-*; diagnostics: tests/out/k8s-diag.txt.
 set -u
 MSYS_NO_PATHCONV=1
@@ -84,19 +93,27 @@ rnd() { od -An -tx1 -N12 /dev/urandom | tr -d ' \n'; }
 PW_A=pa$(rnd)
 PW_B=pb$(rnd)
 PW_C=pc$(rnd)
+PW_D=pd$(rnd)
 K8S_COLS=$(sed -n "s/^K8S_COLS='\(.*\)'\$/\1/p" diskvet.sh)
 CERT_MANAGER=https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml
 LANGFUSE_REPO=https://langfuse.github.io/langfuse-k8s
-IMAGES="docker.io/clickhouse/clickhouse-server:25.12 docker.io/clickhouse/clickhouse-server:26.4 docker.io/clickhouse/clickhouse-keeper:26.4 docker.io/bitnamilegacy/clickhouse:25.2.1-debian-12-r0 docker.io/library/busybox:1.37"
+IMAGES="docker.io/clickhouse/clickhouse-server:25.12 docker.io/clickhouse/clickhouse-server:26.4 docker.io/clickhouse/clickhouse-keeper:26.4 docker.io/bitnamilegacy/clickhouse:25.2.1-debian-12-r0 docker.io/bitnamilegacy/clickhouse:25.7.5-debian-12-r0 docker.io/library/busybox:1.37"
 
-# the three installs: namespace, pod, container, and the pod's own login for
+# the installs: namespace, pod, container, and the pod's own login for
 # clickhouse-client (variable names only: the values never leave the pod)
 A_NS=dv-plain A_POD=dv-plain-0 A_CTR=clickhouse A_UID=101 A_UP=0
 B_NS=dv-op B_POD="" B_CTR=clickhouse-server B_UID=101 B_UP=0
 C_NS=dv-bn8 C_POD=bn8-clickhouse-shard0-0 C_CTR=clickhouse C_UID=1001 C_UP=0
+# phase 2
+D_NS=dv-bn9 D_POD=bn9-clickhouse-shard0-0 D_CTR=clickhouse D_UID=1001 D_UP=0
+E_NS=dv-alt E_POD=chi-dv-alt-c1-0-0-0 E_CTR=clickhouse E_UID=101 E_UP=0
 A_LOGIN='exec clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" "$@"'
 B_LOGIN='exec clickhouse-client "$@"'
 C_LOGIN='exec clickhouse-client --user "$CLICKHOUSE_ADMIN_USER" --password "$CLICKHOUSE_ADMIN_PASSWORD" "$@"'
+# Bitnami chart 9.x: the password only in a file
+D_LOGIN='exec clickhouse-client --user "$CLICKHOUSE_ADMIN_USER" --password "$(cat "$CLICKHOUSE_ADMIN_PASSWORD_FILE")" "$@"'
+# Altinity: the default user without a password, from inside the pod
+E_LOGIN='exec clickhouse-client "$@"'
 
 PASS=0
 FAIL=0
@@ -110,15 +127,17 @@ oneline() { tr '\n\t' '  ' | cut -c1-300; }
 summary() { sed -n '/^| # | Check | Status |$/,/^$/p' "$1"; }
 status_of() { sed -n "s/^| $2 | [^|]* | \([A-Z_]*\) |\$/\1/p" "$1"; }
 
-# tgt T: _n _p _c _l _u = namespace, pod, container, login, uid of install T (A, B or C)
+# tgt T: _n _p _c _l _u = namespace, pod, container, login, uid of install T (A to E)
 tgt() {
     case $1 in
         A) _n=$A_NS _p=$A_POD _c=$A_CTR _l=$A_LOGIN _u=$A_UID ;;
         B) _n=$B_NS _p=$B_POD _c=$B_CTR _l=$B_LOGIN _u=$B_UID ;;
         C) _n=$C_NS _p=$C_POD _c=$C_CTR _l=$C_LOGIN _u=$C_UID ;;
+        D) _n=$D_NS _p=$D_POD _c=$D_CTR _l=$D_LOGIN _u=$D_UID ;;
+        E) _n=$E_NS _p=$E_POD _c=$E_CTR _l=$E_LOGIN _u=$E_UID ;;
     esac
 }
-up() { case $1 in A) [ "$A_UP" = 1 ] ;; B) [ "$B_UP" = 1 ] ;; C) [ "$C_UP" = 1 ] ;; *) return 1 ;; esac; }
+up() { case $1 in A) [ "$A_UP" = 1 ] ;; B) [ "$B_UP" = 1 ] ;; C) [ "$C_UP" = 1 ] ;; D) [ "$D_UP" = 1 ] ;; E) [ "$E_UP" = 1 ] ;; *) return 1 ;; esac; }
 # kxp T CMD...: a command in the ClickHouse container of install T (test only; no stdin)
 kxp() { tgt "$1"; shift; kubectl exec -n "$_n" "$_p" -c "$_c" -- "$@" </dev/null; }
 # chx T [ARGS]: clickhouse-client in the pod of T with the pod's own login; the
@@ -269,14 +288,14 @@ diag() {
         echo "== kubectl get pods -A -o wide"; kubectl get pods -A -o wide
         echo "== kubectl get pvc -A"; kubectl get pvc -A
         echo "== events"; kubectl get events -A --sort-by=.lastTimestamp | tail -120
-        for ns in "$A_NS" "$B_NS" "$C_NS" clickhouse-operator-system cert-manager; do
+        for ns in "$A_NS" "$B_NS" "$C_NS" "$D_NS" "$E_NS" clickhouse-operator-system cert-manager; do
             echo "== describe pods -n $ns"; kubectl describe pods -n "$ns" | tail -150
         done
         echo "== ClickHouseCluster / KeeperCluster"; kubectl get clickhouseclusters,keeperclusters -n "$B_NS" -o yaml | head -300
         for d in $(kubectl get deployments -n clickhouse-operator-system -o name); do
             echo "== log $d"; kubectl logs -n clickhouse-operator-system "$d" --tail=150 --all-containers
         done
-        for t in A B C; do
+        for t in A B C D E; do
             tgt "$t"
             [ -n "$_p" ] || continue
             echo "== log $_n/$_p -c $_c"; kubectl logs -n "$_n" "$_p" -c "$_c" --tail=80
@@ -749,12 +768,133 @@ if [ "$C_FIXED" = 1 ]; then
     if restart_wait C c "$c_uid"; then after_fixb C c default; fi
 fi
 
+# ---------------------------------------------------------------- phase 2
+# (d) Bitnami chart 9.x: the login from CLICKHOUSE_ADMIN_PASSWORD_FILE, and
+#     whether a config file named 00- loads before the chart's
+#     08-sampling.xml, so that logs the chart turns off stay off (the bitnami9
+#     variant of Fix B depends on it);
+# (e) the Altinity operator: the passwordless default user, a sidecar listed
+#     first, and Fix B through spec.configuration.files of the resource.
+section "phase 2: the Bitnami chart 9.x and an Altinity ClickHouseInstallation"
+if [ "$FAIL" -ne 0 ]; then
+    note "phase 2 skipped: phase 1 has $FAIL failures"
+else
+    # the phase 1 installs make room (the operators stay)
+    kubectl delete namespace "$A_NS" "$B_NS" "$C_NS" --wait=false >/dev/null 2>&1
+    setup_d() {
+        kubectl create namespace "$D_NS" &&
+        mkdir -p "$W/bn9" &&
+        retry 3 timeout 300 helm pull oci://registry-1.docker.io/bitnamicharts/clickhouse --version 9.4.4 -d "$W/bn9" &&
+        printf 'auth:\n  password: %s\n' "$PW_D" >"$W/d-auth.yaml" &&
+        timeout 300 helm install bn9 "$W"/bn9/clickhouse-*.tgz -n "$D_NS" -f tests/k8s/bn9-values.yaml -f "$W/d-auth.yaml"
+    }
+    setup_e() {
+        kubectl create namespace "$E_NS" &&
+        mkdir -p "$W/alt" &&
+        retry 3 timeout 300 helm pull altinity-clickhouse-operator --repo https://docs.altinity.com/clickhouse-operator/ --version 0.27.4 -d "$W/alt" &&
+        timeout 300 helm install altinity-operator "$W"/alt/altinity-clickhouse-operator-*.tgz -n "$E_NS" &&
+        kubectl wait --for=condition=Available deployment --all -n "$E_NS" --timeout=300s &&
+        retry 12 kubectl apply -f tests/k8s/altinity.yaml
+    }
+    ( setup_d >"$F-setup-d.txt" 2>&1; echo $? >"$W/rc-d" ) &
+    setup_e >"$F-setup-e.txt" 2>&1
+    echo $? >"$W/rc-e"
+    wait
+    for t in d e; do
+        if [ "$(cat "$W/rc-$t" 2>/dev/null)" = 0 ]; then ok "setup ($t)"; else fail "setup ($t): $(tail -6 "$F-setup-$t.txt" | oneline)"; fi
+    done
+    if [ "$(cat "$W/rc-d")" = 0 ] && wait_pods "$D_NS" app.kubernetes.io/instance=bn9,app.kubernetes.io/name=clickhouse 1 600 && wait_ch D 120; then D_UP=1; ok "(d) $D_NS/$D_POD is ready"; else fail "(d) $D_NS/$D_POD is not ready"; fi
+    if [ "$(cat "$W/rc-e")" = 0 ] && wait_pods "$E_NS" clickhouse.altinity.com/chi=dv-alt 1 600 && wait_ch E 120; then E_UP=1; ok "(e) $E_NS/$E_POD is ready"; else fail "(e) $E_NS/$E_POD is not ready"; fi
+    [ "$D_UP$E_UP" = 11 ] || diag
+    for ns in "$D_NS" "$E_NS"; do
+        kubectl get pods -n "$ns" --no-headers -o "$K8S_COLS" >"$OUT/pods.$ns" 2>&1
+    done
+    FORBID="$FORBID $D_NS $E_NS bn9-clickhouse chi-dv-alt $(pvcs_of "$D_NS" "$D_POD") $(pvcs_of "$E_NS" "$E_POD")"
+    for t in D E; do
+        up "$t" || continue
+        if seed_small "$t" >"$F-seed-$t.txt" 2>&1; then ok "$t: Langfuse-like tables and customer_acme.payments_eu"; else fail "$t: seed: $(tail -3 "$F-seed-$t.txt" | oneline)"; fi
+        chq "$t" 'SYSTEM FLUSH LOGS' >/dev/null
+    done
+
+    if up D; then
+        x=$(kxp D sh -c 'if [ -n "${CLICKHOUSE_ADMIN_PASSWORD_FILE:-}" ] && [ -r "$CLICKHOUSE_ADMIN_PASSWORD_FILE" ] && [ -z "${CLICKHOUSE_ADMIN_PASSWORD:-}" ]; then echo file; else echo other; fi' 2>&1)
+        if [ "$x" = file ]; then ok "d: chart 9.x gives the pod only CLICKHOUSE_ADMIN_PASSWORD_FILE (usePasswordFiles)"; else fail "d: the pod's password variables: $x"; fi
+        report d D default --k8s "$D_NS/$D_POD"
+        awk -F '\t' '$1 == "_target"' "$F-d.raw" >"$F-d.target"
+        x=$(awk -F '\t' '{ print $6 }' "$F-d.target")
+        if [ "$x" = bitnami9 ]; then ok "d: flavor bitnami9 (helm.sh/chart $(kubectl get pod "$D_POD" -n "$D_NS" -o 'jsonpath={.metadata.labels.helm\.sh/chart}'))"; else fail "d: flavor '$x', want bitnami9"; fi
+        payload payload-d D --k8s "$D_NS/$D_POD"
+        x=$(chq D "SELECT count() FROM system.tables WHERE database = 'system' AND name = 'query_log'")
+        if [ "$x" = 0 ]; then ok "d: no system.query_log: the chart's 08-sampling.xml turns it off"; else fail "d: system.query_log before Fix B: '$x'"; fi
+        # the bitnami9 Fix B: a 00- file in configdFiles, as the report prints it
+        # once the order is proven; until then built from the plain Fix B's XML
+        # the same way (ind 4 under the key)
+        if grep -q '^  00-diskvet-ttl.xml: |$' "$F-d.md"; then
+            yaml_of "$F-d.md" >"$W/d-fixb.yaml"
+        else
+            awk '/^## [0-9]\. / { sec = substr($2, 1, 1) + 0 }
+                sec == 1 && /^\*\*Fix B/ { b = 1 }
+                b && /^```xml$/ { x = 1; next }
+                x && /^```$/ { exit }
+                x { print "    " $0 }' "$F-d.md" | { printf 'configdFiles:\n  00-diskvet-ttl.xml: |\n'; cat; } >"$W/d-fixb.yaml"
+        fi
+        sed -n 's/^        <\([a-z_]*\)>$/\1/p' "$W/d-fixb.yaml" >"$F-d-fixb.logs"
+        # plus a log the chart turns off: with the file loading before 08-sampling.xml it stays off
+        awk '$0 == "    </clickhouse>" { print "        <query_log>"; print "            <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>"; print "        </query_log>" } { print }' "$W/d-fixb.yaml" >"$F-d-fixb.yaml"
+        if [ -s "$F-d-fixb.logs" ] && grep -q '^        <query_log>$' "$F-d-fixb.yaml"; then ok "d: configdFiles 00-diskvet-ttl.xml for $(tr '\n' ' ' <"$F-d-fixb.logs")and query_log"; else fail "d: Fix B for 9.x: $(head -6 "$F-d-fixb.yaml" | oneline)"; fi
+        d_uid=$(uid_of "$D_NS" "$D_POD")
+        if timeout 300 helm upgrade bn9 "$W"/bn9/clickhouse-*.tgz -n "$D_NS" --reuse-values -f "$F-d-fixb.yaml" >"$F-d-upgrade.txt" 2>&1 \
+            && kubectl rollout status statefulset/bn9-clickhouse-shard0 -n "$D_NS" --timeout=480s >>"$F-d-upgrade.txt" 2>&1 \
+            && restart_wait D d "$d_uid"; then
+            ok "d: helm upgrade --reuse-values -f fixb.yaml restarted the pod"
+            ttl_check D "$F-d-fixb.logs"
+            x=$(chq D "SELECT count() FROM system.tables WHERE database = 'system' AND name = 'query_log'")
+            if [ "$x" = 0 ]; then ok "d: 00-diskvet-ttl.xml loads before the chart's 08-sampling.xml: query_log, which the chart turns off, stays off"; else fail "d: query_log is back after the 00- file: '$x'"; fi
+            # the control: the same log in a file named after 08-sampling.xml comes back
+            printf 'configdFiles:\n  zz-diskvet-probe.xml: |\n    <clickhouse>\n        <query_log/>\n    </clickhouse>\n' >"$F-d-probe.yaml"
+            d_uid=$(uid_of "$D_NS" "$D_POD")
+            if timeout 300 helm upgrade bn9 "$W"/bn9/clickhouse-*.tgz -n "$D_NS" --reuse-values -f "$F-d-probe.yaml" >>"$F-d-upgrade.txt" 2>&1 \
+                && kubectl rollout status statefulset/bn9-clickhouse-shard0 -n "$D_NS" --timeout=480s >>"$F-d-upgrade.txt" 2>&1 \
+                && restart_wait D d "$d_uid"; then
+                x=$(chq D "SELECT count() FROM system.tables WHERE database = 'system' AND name = 'query_log'")
+                if [ "$x" = 1 ]; then ok "d: the control: the same log in zz-diskvet-probe.xml, after 08-sampling.xml, turns query_log back on (the files load by name)"; else fail "d: the control: query_log '$x' with a zz- file"; fi
+            else
+                fail "d: the control upgrade: $(tail -4 "$F-d-upgrade.txt" | oneline)"
+            fi
+        else
+            fail "d: helm upgrade with Fix B: $(tail -4 "$F-d-upgrade.txt" | oneline)"
+        fi
+    fi
+
+    if up E; then
+        report e E default -n "$E_NS" --k8s auto
+        has "$F-e.err" "kubectl context $CTX · pod $E_NS/$E_POD · container $E_CTR" "e: -n $E_NS --k8s auto picks the clickhouse container, not the clickhouse-backup sidecar listed first"
+        awk -F '\t' '$1 == "_target"' "$F-e.raw" >"$F-e.target"
+        x=$(awk -F '\t' '{ print $6 " " $8 }' "$F-e.target")
+        if [ "$x" = "altinity dv-alt" ]; then ok "e: flavor altinity, group dv-alt (clickhouse.altinity.com/chi)"; else fail "e: flavor and group '$x', want 'altinity dv-alt'"; fi
+        has "$F-e.md" "This pod is run by the Altinity operator (ClickHouseInstallation dv-alt in namespace $E_NS)." "e: the Fix B of an Altinity installation"
+        payload payload-e E --k8s "$E_NS/$E_POD"
+        yaml_of "$F-e.md" >"$F-e-fixb.yaml"
+        sed -n 's/^              <\([a-z_]*\)>$/\1/p' "$F-e-fixb.yaml" >"$F-e-fixb.logs"
+        if [ "$(sed -n 1p "$F-e-fixb.yaml")" = "spec:" ] && [ -s "$F-e-fixb.logs" ]; then ok "e: Fix B spec.configuration.files for the logs $(tr '\n' ' ' <"$F-e-fixb.logs")"; else fail "e: Fix B YAML: $(head -6 "$F-e-fixb.yaml" | oneline)"; fi
+        e_uid=$(uid_of "$E_NS" "$E_POD")
+        # the printed block, merged into the resource's manifest, applied
+        if kubectl patch --local -f tests/k8s/altinity.yaml --type merge --patch-file "$F-e-fixb.yaml" -o yaml >"$W/e2.yaml" 2>"$F-e-apply.txt" \
+            && kubectl apply -f "$W/e2.yaml" >>"$F-e-apply.txt" 2>&1; then
+            ok "e: the printed block applied to the ClickHouseInstallation: $(oneline <"$F-e-apply.txt")"
+            if restart_wait E e "$e_uid"; then after_fixb E e default; fi
+        else
+            fail "e: applying Fix B: $(oneline <"$F-e-apply.txt")"
+        fi
+    fi
+fi
+
 # ---------------------------------------------------------------- 12. the audit log
 section "the API server's audit log"
 docker exec "$NODE" cat /var/log/kubernetes/kube-apiserver-audit.log >"$W/audit.log" 2>&1
 n=$(wc -l <"$W/audit.log" | tr -d ' ')
 if [ "$n" -gt 10 ] && grep -q '"kind":"Event"' "$W/audit.log"; then ok "audit log: $n entries"; else fail "audit log: $(head -3 "$W/audit.log" | oneline)"; fi
-for s in "password of (a):$PW_A" "password of (b):$PW_B" "password of (c):$PW_C" "salt:$SALT"; do
+for s in "password of (a):$PW_A" "password of (b):$PW_B" "password of (c):$PW_C" "password of (d):$PW_D" "salt:$SALT"; do
     if grep -qF -- "${s#*:}" "$W/audit.log"; then fail "audit log: the ${s%%:*} is in it"; else ok "audit log: no ${s%%:*}"; fi
 done
 grep '"subresource":"exec"' "$W/audit.log" | sed -n 's/.*"requestURI":"\([^"]*\)".*/\1/p' | sort -u >"$F-audit-exec.txt"
@@ -786,7 +926,7 @@ fi
 section "done"
 diag
 # nothing of the uploaded results may hold a password
-for s in "$PW_A" "$PW_B" "$PW_C"; do
+for s in "$PW_A" "$PW_B" "$PW_C" "$PW_D"; do
     x=$(grep -rlF -- "$s" "$OUT" 2>/dev/null)
     if [ -n "$x" ]; then
         fail "a password is in $(printf '%s\n' "$x" | oneline) (removed)"

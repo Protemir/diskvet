@@ -1,0 +1,44 @@
+# (e) dv-alt for tests/k8s.sh, phase 2: a minimal ClickHouseInstallation for
+# the Altinity operator (chart 0.27.4): one shard, one replica, a 2Gi data
+# volume, and a busybox sidecar named clickhouse-backup listed before the
+# ClickHouse container (as SigNoz and Opik pods have sidecars). The default
+# user has no password and works from inside the pod.
+apiVersion: clickhouse.altinity.com/v1
+kind: ClickHouseInstallation
+metadata:
+  name: dv-alt
+  namespace: dv-alt
+spec:
+  defaults:
+    templates:
+      podTemplate: with-sidecar
+      dataVolumeClaimTemplate: data
+  configuration:
+    clusters:
+      - name: c1
+        layout:
+          shardsCount: 1
+          replicasCount: 1
+  templates:
+    podTemplates:
+      - name: with-sidecar
+        spec:
+          containers:
+            - name: clickhouse-backup
+              image: busybox:1.37
+              command: ["sh", "-c", "trap 'exit 0' TERM; while :; do sleep 3600 & wait; done"]
+            - name: clickhouse
+              image: clickhouse/clickhouse-server:25.12
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 512Mi
+                limits:
+                  memory: 2Gi
+    volumeClaimTemplates:
+      - name: data
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 2Gi
