@@ -93,6 +93,7 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
       <p><code>--docker auto</code> は ClickHouse のコンテナを自動で見つけ、その中で <code>clickhouse-client</code> を実行します。そのため、ホストにクライアントを入れる必要も、ポートを開ける必要もありません。<code>--user</code> を指定しない場合はコンテナ自身の <code>CLICKHOUSE_USER</code> / <code>CLICKHOUSE_PASSWORD</code> を使うので、パスワードがコンテナの外に出ることはありません。</p>
       <p>ほかの接続方法：</p>
 <pre><code>sh diskvet.sh report --docker signoz-clickhouse                          # コンテナを名前で指定
+sh diskvet.sh report --k8s auto                                          # Kubernetes 上の ClickHouse の Pod（kubectl）
 sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # ローカルの clickhouse-client</code></pre>
       <p class="small muted">必要なのは POSIX <code>sh</code>、<code>awk</code>、<code>sed</code>、<code>od</code>、<code>date</code>、そして <code>docker</code> または <code>clickhouse-client</code> です。<code>jq</code> も Python も不要です。スクリプトが出力するレポートは英語です。最新リリースは <a href="https://github.com/Protemir/diskvet/releases/latest">GitHub Releases</a> にあります。</p>
     </section>
@@ -143,7 +144,7 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # ロー
         <li><strong>既存のユーザーを使う。</strong>クエリは <code>readonly=2</code> と各種制限（30 秒、10,000 行、2 スレッド、500 MB）付きで実行されます。サーバーがこのユーザーに読み取り専用モードを許可しない場合、スクリプトは何も実行せずに停止します。</li>
         <li><strong>専用ユーザーを使う。</strong>セキュリティレビューが必要な場合向けです。上記のシステムテーブルに限定した最小限の権限だけを与え、プロダクトのデータにはアクセスできないようにします。<a href="https://github.com/Protemir/diskvet#two-ways-to-run-it-safely">具体的な SQL は README に記載しています。</a></li>
       </ul>
-      <p class="small muted">公式の標準イメージ <code>clickhouse/clickhouse-server</code> の 24.1、24.8、25.12、26.9 で、Langfuse や SigNoz に近い構成を使ってテストしています。まだテストしていないもの：レプリケーション構成のクラスター、Kubernetes、オブジェクトストレージ上のディスク、macOS。</p>
+      <p class="small muted">公式の標準イメージ <code>clickhouse/clickhouse-server</code> の 24.1、24.8、25.12、26.9 で、Langfuse や SigNoz に近い構成を使ってテストしています。Kubernetes（kind）でも、ClickHouse オペレーター、Bitnami チャート、Altinity オペレーターの構成でテストしています。まだテストしていないもの：レプリケーション構成のクラスター、オブジェクトストレージ上のディスク、macOS。</p>
     </section>
 
     <section aria-labelledby="guide-title">

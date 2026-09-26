@@ -107,6 +107,7 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
         <code>CLICKHOUSE_PASSWORD</code> do próprio contêiner, e a senha nunca sai do contêiner.</p>
       <p>Outras formas de conectar:</p>
 <pre><code>sh diskvet.sh report --docker signoz-clickhouse                          # um contêiner pelo nome
+sh diskvet.sh report --k8s auto                                          # um pod do ClickHouse no Kubernetes (kubectl)
 sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # clickhouse-client local</code></pre>
       <p class="small muted">Requer <code>sh</code> POSIX, <code>awk</code>, <code>sed</code>,
         <code>od</code> e <code>date</code>, além de <code>docker</code> ou <code>clickhouse-client</code>.
@@ -174,8 +175,9 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # clickh
           <a href="https://github.com/Protemir/diskvet#two-ways-to-run-it-safely">O SQL exato está no README.</a></li>
       </ul>
       <p class="small muted">Testado nas imagens padrão <code>clickhouse/clickhouse-server</code> 24.1, 24.8,
-        25.12 e 26.9, em instalações parecidas com as do Langfuse e do SigNoz. Ainda não testado: clusters
-        replicados, Kubernetes, discos em armazenamento de objetos, macOS.</p>
+        25.12 e 26.9, em instalações parecidas com as do Langfuse e do SigNoz, e no Kubernetes (kind) com o
+        operador do ClickHouse, os charts da Bitnami e o operador da Altinity. Ainda não testado: clusters
+        replicados, discos em armazenamento de objetos, macOS.</p>
     </section>
 
     <section aria-labelledby="guide-title">

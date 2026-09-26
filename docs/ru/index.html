@@ -107,6 +107,7 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
         <code>CLICKHOUSE_PASSWORD</code> самого контейнера, и пароль не покидает контейнер.</p>
       <p>Другие способы подключиться:</p>
 <pre><code>sh diskvet.sh report --docker signoz-clickhouse                          # контейнер по имени
+sh diskvet.sh report --k8s auto                                          # под ClickHouse в Kubernetes (kubectl)
 sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # локальный clickhouse-client</code></pre>
       <p class="small muted">Нужны POSIX <code>sh</code>, <code>awk</code>, <code>sed</code>,
         <code>od</code>, <code>date</code>, а также <code>docker</code> или <code>clickhouse-client</code>.
@@ -174,8 +175,9 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # лок
           <a href="https://github.com/Protemir/diskvet#two-ways-to-run-it-safely">Точный SQL — в README.</a></li>
       </ul>
       <p class="small muted">Проверено на стандартных образах <code>clickhouse/clickhouse-server</code>
-        24.1, 24.8, 25.12 и 26.9, на установках, похожих на Langfuse и SigNoz. Пока не проверено:
-        реплицированные кластеры, Kubernetes, диски в объектном хранилище, macOS.</p>
+        24.1, 24.8, 25.12 и 26.9, на установках, похожих на Langfuse и SigNoz, и в Kubernetes (kind):
+        с оператором ClickHouse, чартами Bitnami и оператором Altinity. Пока не проверено:
+        реплицированные кластеры, диски в объектном хранилище, macOS.</p>
     </section>
 
     <section aria-labelledby="guide-title">

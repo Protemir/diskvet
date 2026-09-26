@@ -106,6 +106,7 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
         leaves the container.</p>
       <p>Other ways to connect:</p>
 <pre><code>sh diskvet.sh report --docker signoz-clickhouse                          # a container by name
+sh diskvet.sh report --k8s auto                                          # a ClickHouse pod in Kubernetes (kubectl)
 sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # local clickhouse-client</code></pre>
       <p class="small muted">Needs POSIX <code>sh</code>, <code>awk</code>, <code>sed</code>,
         <code>od</code>, <code>date</code>, and <code>docker</code> or <code>clickhouse-client</code>.
@@ -173,8 +174,9 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # local 
           <a href="https://github.com/Protemir/diskvet#two-ways-to-run-it-safely">The exact SQL is in the README.</a></li>
       </ul>
       <p class="small muted">Tested on stock <code>clickhouse/clickhouse-server</code> images 24.1, 24.8,
-        25.12 and 26.9, with Langfuse-like and SigNoz-like setups. Not tested yet: replicated clusters,
-        Kubernetes, disks on object storage, macOS.</p>
+        25.12 and 26.9, with Langfuse-like and SigNoz-like setups, and on Kubernetes (kind) with the ClickHouse
+        operator, the Bitnami charts and the Altinity operator. Not tested yet: replicated clusters, disks on
+        object storage, macOS.</p>
     </section>
 
     <section aria-labelledby="guide-title">

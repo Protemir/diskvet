@@ -93,6 +93,7 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
       <p><code>--docker auto</code>는 ClickHouse 컨테이너를 자동으로 찾아 그 안에서 <code>clickhouse-client</code>를 실행합니다. 따라서 호스트에 클라이언트를 설치할 필요도, 포트를 열 필요도 없습니다. <code>--user</code>를 지정하지 않으면 컨테이너 자체의 <code>CLICKHOUSE_USER</code> / <code>CLICKHOUSE_PASSWORD</code>를 사용하므로, 비밀번호가 컨테이너 밖으로 나가지 않습니다.</p>
       <p>그 밖의 연결 방법:</p>
 <pre><code>sh diskvet.sh report --docker signoz-clickhouse                          # 이름으로 컨테이너 지정
+sh diskvet.sh report --k8s auto                                          # Kubernetes의 ClickHouse 파드(kubectl)
 sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # 로컬 clickhouse-client</code></pre>
       <p class="small muted">POSIX <code>sh</code>, <code>awk</code>, <code>sed</code>, <code>od</code>, <code>date</code>와 함께 <code>docker</code> 또는 <code>clickhouse-client</code>가 필요합니다. <code>jq</code>나 Python은 필요 없습니다. 스크립트가 출력하는 보고서는 영어입니다. 최신 릴리스는 <a href="https://github.com/Protemir/diskvet/releases/latest">GitHub Releases</a>에서 받을 수 있습니다.</p>
     </section>
@@ -143,7 +144,7 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # 로컬
         <li><strong>기존 사용자로 실행.</strong> 쿼리는 <code>readonly=2</code>와 제한(30초, 10,000행, 스레드 2개, 500 MB)을 적용한 상태로 실행됩니다. 서버가 이 사용자에게 읽기 전용 모드를 허용하지 않으면, 스크립트는 아무것도 실행하지 않고 멈춥니다.</li>
         <li><strong>전용 사용자로 실행.</strong> 보안 검토가 필요한 경우에 적합합니다. 위의 시스템 테이블에만 최소한의 권한을 주고, 제품 데이터에는 접근할 수 없게 합니다. <a href="https://github.com/Protemir/diskvet#two-ways-to-run-it-safely">정확한 SQL은 README에 있습니다.</a></li>
       </ul>
-      <p class="small muted">공식 기본 이미지 <code>clickhouse/clickhouse-server</code> 24.1, 24.8, 25.12, 26.9에서 Langfuse 및 SigNoz와 비슷한 구성으로 테스트했습니다. 아직 테스트하지 않은 환경: 복제 클러스터, Kubernetes, 객체 스토리지 위의 디스크, macOS.</p>
+      <p class="small muted">공식 기본 이미지 <code>clickhouse/clickhouse-server</code> 24.1, 24.8, 25.12, 26.9에서 Langfuse 및 SigNoz와 비슷한 구성으로 테스트했습니다. Kubernetes(kind)에서도 ClickHouse 오퍼레이터, Bitnami 차트, Altinity 오퍼레이터 구성으로 테스트했습니다. 아직 테스트하지 않은 환경: 복제 클러스터, 객체 스토리지 위의 디스크, macOS.</p>
     </section>
 
     <section aria-labelledby="guide-title">

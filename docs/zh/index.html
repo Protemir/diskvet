@@ -99,6 +99,7 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
         <code>--user</code> 时，它使用容器自身的 <code>CLICKHOUSE_USER</code> / <code>CLICKHOUSE_PASSWORD</code>，密码不会离开容器。</p>
       <p>其他连接方式：</p>
 <pre><code>sh diskvet.sh report --docker signoz-clickhouse                          # 按名称指定容器
+sh diskvet.sh report --k8s auto                                          # Kubernetes 中的 ClickHouse Pod（kubectl）
 sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # 本机的 clickhouse-client</code></pre>
       <p class="small muted">需要 POSIX <code>sh</code>、<code>awk</code>、<code>sed</code>、<code>od</code>、<code>date</code>，以及
         <code>docker</code> 或 <code>clickhouse-client</code>。不需要 <code>jq</code>，也不需要
@@ -155,7 +156,7 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # 本机
         <li><strong>使用专用用户</strong>，适合需要通过安全审查的场景：只授予上述系统表的最小权限，无法访问业务数据。<a href="https://github.com/Protemir/diskvet#two-ways-to-run-it-safely">具体 SQL 见 README。</a></li>
       </ul>
       <p class="small muted">已在官方原版 <code>clickhouse/clickhouse-server</code> 镜像 24.1、24.8、25.12 和 26.9
-        上测试，测试环境模拟了 Langfuse 和 SigNoz 的部署。尚未测试：带副本的集群、Kubernetes、对象存储上的磁盘、macOS。</p>
+        上测试，测试环境模拟了 Langfuse 和 SigNoz 的部署；也在 Kubernetes（kind）上测试过 ClickHouse Operator、Bitnami Chart 和 Altinity Operator 的部署。尚未测试：带副本的集群、对象存储上的磁盘、macOS。</p>
     </section>
 
     <section aria-labelledby="guide-title">
