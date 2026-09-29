@@ -95,7 +95,7 @@ LIMIT 15;</code></pre>
 <p><strong>Langfuse(docker compose).</strong> Langfuse의 <code>docker-compose.yml</code>이 있는 폴더에서 실행합니다. Langfuse의 compose 파일은 컨테이너 안에 <code>CLICKHOUSE_USER</code>와 <code>CLICKHOUSE_PASSWORD</code>를 이미 설정해 둡니다.</p>
 <pre><code>docker compose exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' &lt; size.sql</code></pre>
-<p><strong>SigNoz(docker compose).</strong> 컨테이너 이름은 보통 <code>signoz-clickhouse</code>입니다(<code>docker ps</code>로 확인하십시오). SigNoz의 <code>users.xml</code>에는 <code>default</code> 사용자의 비밀번호가 설정되어 있지 않습니다.</p>
+<p><strong>SigNoz(Docker).</strong> SigNoz 저장소의 compose 파일(v0.129.0까지)로 설치했다면 컨테이너 이름은 <code>signoz-clickhouse</code>이고, v0.130.0부터 SigNoz의 Docker 설치 방식인 Foundry로 설치했다면 <code>signoz-telemetrystore-clickhouse-0-0</code>입니다(<code>docker ps</code>로 확인하십시오). 두 경우 모두 <code>default</code> 사용자에 비밀번호가 설정되어 있지 않습니다. 아래 명령은 <code>signoz-clickhouse</code>를 사용하므로, Foundry로 설치했다면 이 이름을 다른 이름으로 바꾸어 실행하십시오.</p>
 <pre><code>docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact &lt; size.sql</code></pre>
 <p><code>--readonly=1</code>을 지정하면 세션이 읽기 전용이 되어, ClickHouse가 모든 변경을 거부합니다.</p>
 <p><strong>결과 읽는 법.</strong> <code>system</code> 행을 사용자 데이터(Langfuse는 <code>default</code>, SigNoz는 <code>signoz_*</code>)와 비교합니다. <code>system.trace_log</code>나 <code>system.text_log</code>가 맨 위에 있다면 섹션 2로 넘어가십시오.</p>
@@ -103,7 +103,7 @@ LIMIT 15;</code></pre>
 <p>쓰기 권한이 있는 클라이언트를 엽니다.</p>
 <pre><code># Langfuse
 docker compose exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD"'
-# SigNoz
+# SigNoz (Foundry: signoz-telemetrystore-clickhouse-0-0)
 docker exec -it signoz-clickhouse clickhouse-client</code></pre>
 <p>큰 로그를 비웁니다.</p>
 <pre><code>TRUNCATE TABLE system.trace_log;
@@ -191,10 +191,11 @@ tail -n 20 clickhouse-server.err.log</code></pre>
 <h3 id="4단계-오래된-trace_log_0-사본-삭제">4단계: 오래된 trace_log_0 사본 삭제</h3>
 <p>재시작하고 나면 변경한 로그마다 <code>trace_log_0</code> 같은 사본이 생깁니다(이후 다시 변경하면 <code>_1</code>, <code>_2</code>). 사본에는 예전 행이 모두 남아 있고 TTL도 없습니다(ClickStack PR #275의 업그레이드 안내, <a href="https://github.com/getsentry/snuba/issues/7311">Sentry snuba #7311</a>).</p>
 <p>다음 쿼리는 <code>DROP</code> 문을 만들어 줍니다. 내용을 읽어 본 뒤 클라이언트에 붙여 넣으십시오.</p>
-<pre><code>SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
+<pre><code>SELECT 'DROP TABLE system.' || name || ' SYNC SETTINGS max_table_size_to_drop = 0;'
 FROM system.tables
 WHERE database = 'system' AND match(name, '_log_[0-9]+$');</code></pre>
 <p>ClickHouse는 이 테이블에 더 이상 기록하지 않습니다. <code>DROP</code>은 되돌릴 수 없습니다.</p>
+<p><code>SYNC</code>를 붙이면 공간이 바로 확보됩니다. 붙이지 않으면 <code>system</code> 데이터베이스(Atomic)가 데이터를 8분 동안 디스크에 남겨 둡니다(<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec"><code>database_atomic_delay_before_drop_table_sec</code></a> = 480초). <code>SYNC</code>는 <code>SETTINGS</code> 앞에 써야 합니다. 뒤에 쓰면 Code 62(<code>SYNTAX_ERROR</code>) 오류로 실패합니다.</p>
 <h3 id="5단계-결과-확인">5단계: 결과 확인</h3>
 <p>1단계의 쿼리를 다시 실행합니다. 큰 로그에는 모두 TTL이 표시되어야 하고, <code>_N</code> 형태의 이름은 남아 있지 않아야 합니다.</p>
 <p>ClickHouse는 만료된 행을 머지(merge) 과정에서 삭제하는데, 이 삭제는 기본적으로 4시간에 최대 한 번만 일어납니다(<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout"><code>merge_with_ttl_timeout</code></a>). 따라서 크기는 이후 몇 시간에 걸쳐 줄어듭니다.</p>
@@ -237,7 +238,7 @@ ORDER BY sum(bytes_on_disk) DESC;</code></pre>
 <p>그런 다음 파티션 하나씩 삭제 마스크를 적용합니다(<a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">APPLY DELETED MASK</a>).</p>
 <pre><code>ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';</code></pre>
 <p><strong>주의:</strong> 이 작업은 비용이 큰 뮤테이션(heavyweight mutation)입니다. 영향을 받는 파트를 다시 쓰기 때문에 새 사본이 들어갈 여유 공간이 필요하고, 디스크에 부하를 줍니다. 사용량이 적은 시간대에 실행하고, <code>SELECT * FROM system.mutations WHERE NOT is_done</code> 쿼리로 진행 상황을 지켜보십시오. #13969에서는 약 17분 만에 레플리카당 약 360 GiB가 확보되었습니다.</p>
-<p>v3.179.0부터는 Langfuse worker가 이 작업을 주기적으로 실행할 수 있습니다. <code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code>로 켭니다(기본값은 꺼져 있습니다. <code>.env.prod.example</code>과 <a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>를 참고하십시오).</p>
+<p>v3.179.0부터 Langfuse worker에는 클리너가 있으며, 기본값은 꺼져 있습니다. <code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code>로 켭니다(<a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>). 하지만 이 클리너는 <code>patch-</code> 파티션만 대상으로 삼으며(<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56"><code>helpers.ts</code></a>), <code>DELETE</code>가 이런 파티션을 만드는 것은 <code>_block_number</code> 컬럼이 있는 테이블에서 <code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update</code>를 설정했을 때뿐입니다. 기본 삭제 모드인 <code>alter_update</code>(<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137"><code>env.ts</code></a>)에서는, 그리고 이런 컬럼이 없는 v3의 테이블에서는 클리너가 아무것도 찾지 못합니다. <code>APPLY DELETED MASK</code>는 직접 실행하십시오.</p>
 <h3 id="오래된-파트가-디스크에-남아-있는가-비활성-파트와-분리된-파트">오래된 파트가 디스크에 남아 있는가? (비활성 파트와 분리된 파트)</h3>
 <pre><code>SELECT database, table, count() AS parts,
        formatReadableSize(sum(bytes_on_disk)) AS size,
@@ -274,7 +275,7 @@ GROUP BY database, table, partition_id;</code></pre>
 <pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
 sh diskvet.sh report --docker auto &gt; report.md</code></pre>
-<p>SigNoz에서는 <code>--docker signoz-clickhouse</code>를 사용합니다.</p>
+<p>SigNoz에서도 같은 명령을 실행합니다. <code>--docker auto</code>는 이미지(<code>clickhouse/clickhouse-server</code>)로 ClickHouse를 찾거나, SigNoz의 예전 <code>docker-compose.yaml</code>이 있는 폴더에서는 <code>clickhouse</code> 서비스로 찾습니다. 머신에 다른 ClickHouse 컨테이너도 있다면 <code>docker ps</code>에 나온 이름을 지정하십시오. Foundry라면 <code>--docker signoz-telemetrystore-clickhouse-0-0</code>, 예전 compose 파일이라면 <code>--docker signoz-clickhouse</code>입니다.</p>
 <p>Kubernetes에서 실행되는 ClickHouse도 점검할 수 있습니다. <code>kubectl exec</code>로 파드 안에서 실행합니다.</p>
 <pre><code>sh diskvet.sh report --k8s auto &gt; report.md</code></pre>
 <p><code>--k8s NAMESPACE/POD</code>로 파드를 지정할 수 있습니다. 비밀번호는 파드 밖으로 나가지 않으며, 필요한 권한은 파드에 대한 <code>get</code>, <code>list</code>와 <code>pods/exec</code>뿐입니다. Helm 차트별로 어떤 파드가 쓰이고 수정을 어디에 적용하는지는 <a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md">Kubernetes 레시피</a>(영어)를 참고하십시오.</p>
@@ -298,6 +299,8 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 <li>사용 후 플래그 삭제(<code>checkCanBeDropped</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp</a>
 </li>
 <li>TRUNCATE: <a href="https://clickhouse.com/docs/reference/statements/truncate">https://clickhouse.com/docs/reference/statements/truncate</a>
+</li>
+<li>DROP TABLE ... SYNC, <code>database_atomic_delay_before_drop_table_sec</code>(480초): <a href="https://clickhouse.com/docs/reference/statements/drop">https://clickhouse.com/docs/reference/statements/drop</a>, <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec</a>
 </li>
 <li>
 <code>opentelemetry_span_log</code>의 TTL 오류: <a href="https://github.com/ClickHouse/ClickHouse/issues/88366">https://github.com/ClickHouse/ClickHouse/issues/88366</a>
@@ -347,7 +350,7 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 </li>
 <li>Discussion #15024, 비활성 파트와 59 GiB text_log: <a href="https://github.com/orgs/langfuse/discussions/15024">https://github.com/orgs/langfuse/discussions/15024</a>
 </li>
-<li>PR #14035, 삭제 마스크 클리너(v3.179.0에서 릴리스): <a href="https://github.com/langfuse/langfuse/pull/14035">https://github.com/langfuse/langfuse/pull/14035</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.179.0">https://github.com/langfuse/langfuse/releases/tag/v3.179.0</a>
+<li>PR #14035, 삭제 마스크 클리너(v3.179.0에서 릴리스), 클리너의 쿼리와 삭제 모드 기본값: <a href="https://github.com/langfuse/langfuse/pull/14035">https://github.com/langfuse/langfuse/pull/14035</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.179.0">https://github.com/langfuse/langfuse/releases/tag/v3.179.0</a>, <a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56">https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56</a>, <a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137">https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137</a>
 </li>
 <li>#16858, ClickHouse 26.8+에서의 DateTime64: <a href="https://github.com/langfuse/langfuse/issues/16858">https://github.com/langfuse/langfuse/issues/16858</a>
 </li>
@@ -363,6 +366,10 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 <li>SigNoz v0.129.0의 ClickHouse <code>config.xml</code>과 <code>users.xml</code>: <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml</a>, <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml</a>
 </li>
 <li>SigNoz v0.129.0의 <code>docker-compose.yaml</code>(컨테이너 <code>signoz-clickhouse</code>, <code>max-size: 50m</code>, <code>max-file: "3"</code>): <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml</a>
+</li>
+<li>SigNoz Docker 설치, v0.130.0부터 Foundry 사용(<code>docker ps</code>에 <code>signoz-telemetrystore-clickhouse-0-0</code>으로 표시됨): <a href="https://signoz.io/docs/install/docker/">https://signoz.io/docs/install/docker/</a>, <a href="https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/README.md">https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/README.md</a>
+</li>
+<li>Foundry v0.3.0: 서비스와 컨테이너 이름 <code>&lt;name&gt;-telemetrystore-clickhouse-&lt;shard&gt;-&lt;replica&gt;</code>, 기본 이미지 <code>clickhouse/clickhouse-server:25.12.5</code>, <code>default</code> 사용자(<code>password: ""</code>): <a href="https://github.com/SigNoz/foundry/blob/v0.3.0/internal/casting/dockercomposecasting/templates/compose.yaml.gotmpl#L60-L61">https://github.com/SigNoz/foundry/blob/v0.3.0/internal/casting/dockercomposecasting/templates/compose.yaml.gotmpl#L60-L61</a>, <a href="https://github.com/SigNoz/foundry/blob/v0.3.0/api/v1alpha1/installation/telemetrystore.go#L43">https://github.com/SigNoz/foundry/blob/v0.3.0/api/v1alpha1/installation/telemetrystore.go#L43</a>, <a href="https://github.com/SigNoz/foundry/blob/v0.3.0/docs/examples/docker/compose/pours/deployment/telemetrystore/clickhouse/config-0-0.yaml#L80-L87">https://github.com/SigNoz/foundry/blob/v0.3.0/docs/examples/docker/compose/pours/deployment/telemetrystore/clickhouse/config-0-0.yaml#L80-L87</a>
 </li>
 <li>ClickStack Helm chart PR #275: <a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">https://github.com/ClickHouse/ClickStack-helm-charts/pull/275</a>
 </li>

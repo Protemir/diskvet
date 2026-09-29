@@ -39,7 +39,7 @@ docker compose exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' < size.sql
 ```
 
-**SigNoz（docker compose）**：コンテナ名は通常 `signoz-clickhouse` です（`docker ps` で確認してください）。SigNoz の `users.xml` では、`default` ユーザーにパスワードが設定されていません。
+**SigNoz（Docker）**：SigNoz リポジトリの compose ファイル（v0.129.0 まで）でインストールした場合、コンテナ名は `signoz-clickhouse` です。v0.130.0 以降の SigNoz は Foundry で Docker にインストールし、その場合のコンテナ名は `signoz-telemetrystore-clickhouse-0-0` です（`docker ps` で確認してください）。どちらも `default` ユーザーにパスワードが設定されていません。以下のコマンドでは `signoz-clickhouse` を使っています。Foundry の場合は、もう一方の名前に置き換えてください。
 
 ```sh
 docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact < size.sql
@@ -56,7 +56,7 @@ docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyC
 ```sh
 # Langfuse
 docker compose exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD"'
-# SigNoz
+# SigNoz (Foundry: signoz-telemetrystore-clickhouse-0-0)
 docker exec -it signoz-clickhouse clickhouse-client
 ```
 
@@ -191,12 +191,14 @@ tail -n 20 clickhouse-server.err.log
 次のクエリで `DROP` ステートメントを生成できます。内容を確認してから、クライアントに貼り付けて実行してください。
 
 ```sql
-SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
+SELECT 'DROP TABLE system.' || name || ' SYNC SETTINGS max_table_size_to_drop = 0;'
 FROM system.tables
 WHERE database = 'system' AND match(name, '_log_[0-9]+$');
 ```
 
 これらのテーブルに ClickHouse が書き込むことはもうありません。`DROP` は元に戻せません。
+
+`SYNC` を付けると、容量はすぐに戻ります。付けない場合、`system` データベース（Atomic）はデータを 8 分間ディスクに残します（[`database_atomic_delay_before_drop_table_sec`](https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec) = 480 秒）。`SYNC` は `SETTINGS` の前に書きます。後ろに書くと Code 62（`SYNTAX_ERROR`）で失敗します。
 
 ### ステップ 5：結果を確認する
 
@@ -275,7 +277,7 @@ ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
 
 **注意**：これはヘビーウェイトなミューテーション（mutation）です。対象のパーツを書き直すため、新しいコピーを書き込むための空き容量が必要になり、ディスクにも負荷がかかります。ピーク時間帯を避けて実行し、`SELECT * FROM system.mutations WHERE NOT is_done` で進行状況を確認してください。#13969 では、約 17 分でレプリカ 1 台あたり約 360 GiB が空きました。
 
-v3.179.0 以降の Langfuse worker では、これを定期的に自動実行できます。`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true` を設定してください（デフォルトは無効。`.env.prod.example` と [PR #14035](https://github.com/langfuse/langfuse/pull/14035) を参照）。
+v3.179.0 以降の Langfuse worker にはクリーナーがあり、`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true` で有効になります（デフォルトは無効。[PR #14035](https://github.com/langfuse/langfuse/pull/14035)）。ただし、クリーナーが対象にするのは名前が `patch-` で始まるパーティションだけです（[`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)）。`DELETE` がこうしたパーティションを書き込むのは、`CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update` を設定し、`_block_number` 列のあるテーブルから削除した場合に限られます。デフォルトの `alter_update`（[`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137)）のままの場合も、この列がない v3 のテーブルの場合も、クリーナーは何も見つけません。`APPLY DELETED MASK` は自分で実行してください。
 
 ### 古いパーツがディスクに残っていないか（非アクティブなパーツとデタッチされたパーツ）
 
@@ -330,7 +332,7 @@ curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.
 sh diskvet.sh report --docker auto > report.md
 ```
 
-SigNoz の場合は `--docker signoz-clickhouse` を指定します。
+SigNoz でも同じコマンドを実行します。`--docker auto` は、イメージ（`clickhouse/clickhouse-server`）から、または SigNoz の古い `docker-compose.yaml` があるディレクトリでは `clickhouse` サービスから、SigNoz の ClickHouse を見つけます。同じマシンにほかの ClickHouse コンテナもある場合は、`docker ps` で確認した名前を指定してください。Foundry なら `--docker signoz-telemetrystore-clickhouse-0-0`、古い compose ファイルなら `--docker signoz-clickhouse` です。
 
 Kubernetes 上の ClickHouse にも対応しています。`kubectl exec` で Pod の中からチェックします。
 
@@ -355,6 +357,7 @@ ClickHouse のドキュメントとソースコード：
 - 23.12 以降のクエリ単位での上書き：https://github.com/ClickHouse/ClickHouse/pull/57452
 - フラグファイルは使用後に削除される（`checkCanBeDropped`）：https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp
 - TRUNCATE：https://clickhouse.com/docs/reference/statements/truncate
+- DROP TABLE ... SYNC、`database_atomic_delay_before_drop_table_sec`（480 秒）：https://clickhouse.com/docs/reference/statements/drop, https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec
 - `opentelemetry_span_log` の TTL のエラー：https://github.com/ClickHouse/ClickHouse/issues/88366
 - MergeTree の設定：`merge_with_ttl_timeout`（14400 秒）https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout, `old_parts_lifetime`（480 秒）https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime, `max_bytes_to_merge_at_max_space_in_pool`（150 GiB）https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool
 - サーバーログのローテーション（`logger`：`level`、`size`、`count`）：https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger
@@ -381,7 +384,7 @@ Langfuse：
 - PR #16363、README の Docker ログローテーション（デーモンのデフォルト、外部ツールで切り詰めない）：https://github.com/langfuse/langfuse/pull/16363
 - ディスカッション #13969、論理削除された行：https://github.com/orgs/langfuse/discussions/13969
 - ディスカッション #15024、非アクティブなパーツと 59 GiB の text_log：https://github.com/orgs/langfuse/discussions/15024
-- PR #14035、削除マスクのクリーナー（v3.179.0 でリリース）：https://github.com/langfuse/langfuse/pull/14035, https://github.com/langfuse/langfuse/releases/tag/v3.179.0
+- PR #14035、削除マスクのクリーナー（v3.179.0 でリリース）、そのクエリと削除モードのデフォルト：https://github.com/langfuse/langfuse/pull/14035, https://github.com/langfuse/langfuse/releases/tag/v3.179.0, https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56, https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137
 - #16858、ClickHouse 26.8+ での DateTime64：https://github.com/langfuse/langfuse/issues/16858
 - PR #16892 と v3 へのバックポート PR #16957：https://github.com/langfuse/langfuse/pull/16892, https://github.com/langfuse/langfuse/pull/16957
 - 修正を含むリリース：https://github.com/langfuse/langfuse/releases/tag/v4.28.0, https://github.com/langfuse/langfuse/releases/tag/v3.225.7
@@ -391,6 +394,8 @@ SigNoz、ClickStack、その他：
 - SigNoz #12050、80 GB を超えるシステムログテーブル：https://github.com/SigNoz/signoz/issues/12050
 - SigNoz v0.129.0 の ClickHouse `config.xml` と `users.xml`：https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml, https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml
 - SigNoz v0.129.0 の `docker-compose.yaml`（コンテナ `signoz-clickhouse`、`max-size: 50m`、`max-file: "3"`）：https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml
+- SigNoz の Docker インストール、v0.130.0 以降は Foundry（`docker ps` には `signoz-telemetrystore-clickhouse-0-0` と表示される）：https://signoz.io/docs/install/docker/, https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/README.md
+- Foundry v0.3.0 のサービス名とコンテナ名（`<name>-telemetrystore-clickhouse-<shard>-<replica>`）、デフォルトのイメージ（`clickhouse/clickhouse-server:25.12.5`）、`password: ""` の `default` ユーザー：https://github.com/SigNoz/foundry/blob/v0.3.0/internal/casting/dockercomposecasting/templates/compose.yaml.gotmpl#L60-L61, https://github.com/SigNoz/foundry/blob/v0.3.0/api/v1alpha1/installation/telemetrystore.go#L43, https://github.com/SigNoz/foundry/blob/v0.3.0/docs/examples/docker/compose/pours/deployment/telemetrystore/clickhouse/config-0-0.yaml#L80-L87
 - ClickStack Helm chart PR #275：https://github.com/ClickHouse/ClickStack-helm-charts/pull/275
 - Sentry snuba #7311、TTL のない `*_log_N` のコピー：https://github.com/getsentry/snuba/issues/7311
 - trigger.dev #4343、config.d に書いたプロファイル設定が無視される：https://github.com/triggerdotdev/trigger.dev/issues/4343

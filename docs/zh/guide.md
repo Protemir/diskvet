@@ -39,7 +39,7 @@ docker compose exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' < size.sql
 ```
 
-**SigNoz（docker compose）**：容器名通常是 `signoz-clickhouse`（可以用 `docker ps` 确认）。SigNoz 的 `users.xml` 没有给 `default` 用户设置密码：
+**SigNoz（Docker）**：如果你是用 SigNoz 仓库里的 compose 文件安装的（v0.129.0 及之前的版本），容器名是 `signoz-clickhouse`；如果用的是 Foundry（SigNoz 从 v0.130.0 起的 Docker 安装器），容器名是 `signoz-telemetrystore-clickhouse-0-0`（可以用 `docker ps` 确认）。两种方式都没有给 `default` 用户设置密码。下面的命令使用 `signoz-clickhouse`；如果用的是 Foundry，请换成另一个名字：
 
 ```sh
 docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact < size.sql
@@ -56,7 +56,7 @@ docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyC
 ```sh
 # Langfuse
 docker compose exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD"'
-# SigNoz
+# SigNoz (Foundry: signoz-telemetrystore-clickhouse-0-0)
 docker exec -it signoz-clickhouse clickhouse-client
 ```
 
@@ -191,12 +191,14 @@ tail -n 20 clickhouse-server.err.log
 下面的查询会帮你生成 `DROP` 语句。先读一遍，再粘贴到客户端中执行：
 
 ```sql
-SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
+SELECT 'DROP TABLE system.' || name || ' SYNC SETTINGS max_table_size_to_drop = 0;'
 FROM system.tables
 WHERE database = 'system' AND match(name, '_log_[0-9]+$');
 ```
 
 ClickHouse 已经不再往这些表写入数据。`DROP` 无法撤销。
+
+加上 `SYNC`，空间会立即释放。不加的话，`system` 数据库（Atomic）会把数据在磁盘上再保留 8 分钟（[`database_atomic_delay_before_drop_table_sec`](https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec) = 480 秒）。`SYNC` 要写在 `SETTINGS` 之前；写在后面的话，语句会失败并报错 Code 62（`SYNTAX_ERROR`）。
 
 ### 第 5 步：检查结果
 
@@ -275,7 +277,7 @@ ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
 
 **注意**：这是一个重量级变更（mutation）。它会重写受影响的数据片段，所以需要有空闲空间来写入重写后的新数据片段，同时会加重磁盘负载。请在业务低峰期执行，并用 `SELECT * FROM system.mutations WHERE NOT is_done` 观察进度。在 #13969 中，这个操作在约 17 分钟内为每个副本（replica）释放了约 360 GiB。
 
-从 v3.179.0 开始，Langfuse worker 可以定时自动执行这个操作：`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`（默认关闭；见 `.env.prod.example`，[PR #14035](https://github.com/langfuse/langfuse/pull/14035)）。
+从 v3.179.0 开始，Langfuse worker 自带一个清理任务，默认关闭：`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`（[PR #14035](https://github.com/langfuse/langfuse/pull/14035)）。但它只处理 `patch-` 分区（[`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)），而 `DELETE` 只有在设置了 `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update`、并且表里有 `_block_number` 列时，才会写出这类分区。在默认的 `alter_update` 模式下（[`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137)），以及在没有这一列的 v3 表上，它什么也找不到：请自己执行 `APPLY DELETED MASK`。
 
 ### 旧的数据片段卡在磁盘上？（非活动和已分离的数据片段）
 
@@ -330,7 +332,7 @@ curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.
 sh diskvet.sh report --docker auto > report.md
 ```
 
-如果是 SigNoz，请使用 `--docker signoz-clickhouse`。
+如果是 SigNoz，运行同样的命令即可：`--docker auto` 会按镜像（`clickhouse/clickhouse-server`）找到它的 ClickHouse，或者在 SigNoz 旧版 `docker-compose.yaml` 所在的目录中按服务名 `clickhouse` 找到它。如果机器上还有其他 ClickHouse 容器，请传入 `docker ps` 显示的名字：`--docker signoz-telemetrystore-clickhouse-0-0`（Foundry）或 `--docker signoz-clickhouse`（旧版 compose 文件）。
 
 Kubernetes 中的 ClickHouse 同样可以检查，方法是通过 `kubectl exec` 进入它的 Pod：
 
@@ -355,6 +357,7 @@ ClickHouse 文档和源码：
 - 自 23.12 起支持在查询级别覆盖：https://github.com/ClickHouse/ClickHouse/pull/57452
 - 标志文件用过即删（`checkCanBeDropped`）：https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp
 - TRUNCATE：https://clickhouse.com/docs/reference/statements/truncate
+- DROP TABLE ... SYNC，`database_atomic_delay_before_drop_table_sec`（480 秒）：https://clickhouse.com/docs/reference/statements/drop, https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec
 - `opentelemetry_span_log` 的 TTL 报错：https://github.com/ClickHouse/ClickHouse/issues/88366
 - MergeTree 设置：`merge_with_ttl_timeout`（14400 秒）https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout, `old_parts_lifetime`（480 秒）https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime, `max_bytes_to_merge_at_max_space_in_pool`（150 GiB）https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool
 - 服务器日志轮转（`logger`：`level`、`size`、`count`）：https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger
@@ -381,7 +384,7 @@ Langfuse：
 - PR #16363，README 中的 Docker 日志轮转（守护进程默认值，不要用外部工具截断）：https://github.com/langfuse/langfuse/pull/16363
 - 讨论 #13969，经轻量级删除标记的行：https://github.com/orgs/langfuse/discussions/13969
 - 讨论 #15024，非活动数据片段和 59 GiB 的 text_log：https://github.com/orgs/langfuse/discussions/15024
-- PR #14035，删除掩码清理（随 v3.179.0 发布）：https://github.com/langfuse/langfuse/pull/14035, https://github.com/langfuse/langfuse/releases/tag/v3.179.0
+- PR #14035，删除掩码清理（随 v3.179.0 发布）、它的查询和删除模式的默认值：https://github.com/langfuse/langfuse/pull/14035, https://github.com/langfuse/langfuse/releases/tag/v3.179.0, https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56, https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137
 - #16858，ClickHouse 26.8+ 上的 DateTime64：https://github.com/langfuse/langfuse/issues/16858
 - PR #16892 及 v3 backport PR #16957：https://github.com/langfuse/langfuse/pull/16892, https://github.com/langfuse/langfuse/pull/16957
 - 包含修复的版本：https://github.com/langfuse/langfuse/releases/tag/v4.28.0, https://github.com/langfuse/langfuse/releases/tag/v3.225.7
@@ -391,6 +394,8 @@ SigNoz、ClickStack 及其他：
 - SigNoz #12050，80+ GB 系统日志：https://github.com/SigNoz/signoz/issues/12050
 - SigNoz v0.129.0 的 ClickHouse `config.xml` 和 `users.xml`：https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml, https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml
 - SigNoz v0.129.0 的 `docker-compose.yaml`（容器 `signoz-clickhouse`、`max-size: 50m`、`max-file: "3"`）：https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml
+- SigNoz 的 Docker 安装，自 v0.130.0 起使用 Foundry（`docker ps` 显示 `signoz-telemetrystore-clickhouse-0-0`）：https://signoz.io/docs/install/docker/, https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/README.md
+- Foundry v0.3.0（服务名和容器名 `<name>-telemetrystore-clickhouse-<shard>-<replica>`、默认镜像 `clickhouse/clickhouse-server:25.12.5`、`default` 用户的 `password: ""`）：https://github.com/SigNoz/foundry/blob/v0.3.0/internal/casting/dockercomposecasting/templates/compose.yaml.gotmpl#L60-L61, https://github.com/SigNoz/foundry/blob/v0.3.0/api/v1alpha1/installation/telemetrystore.go#L43, https://github.com/SigNoz/foundry/blob/v0.3.0/docs/examples/docker/compose/pours/deployment/telemetrystore/clickhouse/config-0-0.yaml#L80-L87
 - ClickStack Helm chart PR #275：https://github.com/ClickHouse/ClickStack-helm-charts/pull/275
 - Sentry snuba #7311，没有 TTL 的 `*_log_N` 旧表：https://github.com/getsentry/snuba/issues/7311
 - trigger.dev #4343，config.d 中的 profile 设置被忽略：https://github.com/triggerdotdev/trigger.dev/issues/4343

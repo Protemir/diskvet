@@ -39,7 +39,7 @@ docker compose exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' < size.sql
 ```
 
-**SigNoz(docker compose).** 컨테이너 이름은 보통 `signoz-clickhouse`입니다(`docker ps`로 확인하십시오). SigNoz의 `users.xml`에는 `default` 사용자의 비밀번호가 설정되어 있지 않습니다.
+**SigNoz(Docker).** SigNoz 저장소의 compose 파일(v0.129.0까지)로 설치했다면 컨테이너 이름은 `signoz-clickhouse`이고, v0.130.0부터 SigNoz의 Docker 설치 방식인 Foundry로 설치했다면 `signoz-telemetrystore-clickhouse-0-0`입니다(`docker ps`로 확인하십시오). 두 경우 모두 `default` 사용자에 비밀번호가 설정되어 있지 않습니다. 아래 명령은 `signoz-clickhouse`를 사용하므로, Foundry로 설치했다면 이 이름을 다른 이름으로 바꾸어 실행하십시오.
 
 ```sh
 docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact < size.sql
@@ -56,7 +56,7 @@ docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyC
 ```sh
 # Langfuse
 docker compose exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD"'
-# SigNoz
+# SigNoz (Foundry: signoz-telemetrystore-clickhouse-0-0)
 docker exec -it signoz-clickhouse clickhouse-client
 ```
 
@@ -191,12 +191,14 @@ tail -n 20 clickhouse-server.err.log
 다음 쿼리는 `DROP` 문을 만들어 줍니다. 내용을 읽어 본 뒤 클라이언트에 붙여 넣으십시오.
 
 ```sql
-SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
+SELECT 'DROP TABLE system.' || name || ' SYNC SETTINGS max_table_size_to_drop = 0;'
 FROM system.tables
 WHERE database = 'system' AND match(name, '_log_[0-9]+$');
 ```
 
 ClickHouse는 이 테이블에 더 이상 기록하지 않습니다. `DROP`은 되돌릴 수 없습니다.
+
+`SYNC`를 붙이면 공간이 바로 확보됩니다. 붙이지 않으면 `system` 데이터베이스(Atomic)가 데이터를 8분 동안 디스크에 남겨 둡니다([`database_atomic_delay_before_drop_table_sec`](https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec) = 480초). `SYNC`는 `SETTINGS` 앞에 써야 합니다. 뒤에 쓰면 Code 62(`SYNTAX_ERROR`) 오류로 실패합니다.
 
 ### 5단계: 결과 확인
 
@@ -275,7 +277,7 @@ ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
 
 **주의:** 이 작업은 비용이 큰 뮤테이션(heavyweight mutation)입니다. 영향을 받는 파트를 다시 쓰기 때문에 새 사본이 들어갈 여유 공간이 필요하고, 디스크에 부하를 줍니다. 사용량이 적은 시간대에 실행하고, `SELECT * FROM system.mutations WHERE NOT is_done` 쿼리로 진행 상황을 지켜보십시오. #13969에서는 약 17분 만에 레플리카당 약 360 GiB가 확보되었습니다.
 
-v3.179.0부터는 Langfuse worker가 이 작업을 주기적으로 실행할 수 있습니다. `LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`로 켭니다(기본값은 꺼져 있습니다. `.env.prod.example`과 [PR #14035](https://github.com/langfuse/langfuse/pull/14035)를 참고하십시오).
+v3.179.0부터 Langfuse worker에는 클리너가 있으며, 기본값은 꺼져 있습니다. `LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`로 켭니다([PR #14035](https://github.com/langfuse/langfuse/pull/14035)). 하지만 이 클리너는 `patch-` 파티션만 대상으로 삼으며([`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)), `DELETE`가 이런 파티션을 만드는 것은 `_block_number` 컬럼이 있는 테이블에서 `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update`를 설정했을 때뿐입니다. 기본 삭제 모드인 `alter_update`([`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137))에서는, 그리고 이런 컬럼이 없는 v3의 테이블에서는 클리너가 아무것도 찾지 못합니다. `APPLY DELETED MASK`는 직접 실행하십시오.
 
 ### 오래된 파트가 디스크에 남아 있는가? (비활성 파트와 분리된 파트)
 
@@ -330,7 +332,7 @@ curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.
 sh diskvet.sh report --docker auto > report.md
 ```
 
-SigNoz에서는 `--docker signoz-clickhouse`를 사용합니다.
+SigNoz에서도 같은 명령을 실행합니다. `--docker auto`는 이미지(`clickhouse/clickhouse-server`)로 ClickHouse를 찾거나, SigNoz의 예전 `docker-compose.yaml`이 있는 폴더에서는 `clickhouse` 서비스로 찾습니다. 머신에 다른 ClickHouse 컨테이너도 있다면 `docker ps`에 나온 이름을 지정하십시오. Foundry라면 `--docker signoz-telemetrystore-clickhouse-0-0`, 예전 compose 파일이라면 `--docker signoz-clickhouse`입니다.
 
 Kubernetes에서 실행되는 ClickHouse도 점검할 수 있습니다. `kubectl exec`로 파드 안에서 실행합니다.
 
@@ -355,6 +357,7 @@ ClickHouse 문서와 소스 코드:
 - 23.12부터 가능한 쿼리 단위 재정의: https://github.com/ClickHouse/ClickHouse/pull/57452
 - 사용 후 플래그 삭제(`checkCanBeDropped`): https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp
 - TRUNCATE: https://clickhouse.com/docs/reference/statements/truncate
+- DROP TABLE ... SYNC, `database_atomic_delay_before_drop_table_sec`(480초): https://clickhouse.com/docs/reference/statements/drop, https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec
 - `opentelemetry_span_log`의 TTL 오류: https://github.com/ClickHouse/ClickHouse/issues/88366
 - MergeTree 설정: `merge_with_ttl_timeout`(14400초) https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout, `old_parts_lifetime`(480초) https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime, `max_bytes_to_merge_at_max_space_in_pool`(150 GiB) https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool
 - 서버 로그 로테이션(`logger`: `level`, `size`, `count`): https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger
@@ -381,7 +384,7 @@ Langfuse:
 - PR #16363, README의 Docker 로그 로테이션(데몬 기본값, 외부 도구로 잘라 내지 않기): https://github.com/langfuse/langfuse/pull/16363
 - Discussion #13969, 경량 DELETE로 삭제된 행: https://github.com/orgs/langfuse/discussions/13969
 - Discussion #15024, 비활성 파트와 59 GiB text_log: https://github.com/orgs/langfuse/discussions/15024
-- PR #14035, 삭제 마스크 클리너(v3.179.0에서 릴리스): https://github.com/langfuse/langfuse/pull/14035, https://github.com/langfuse/langfuse/releases/tag/v3.179.0
+- PR #14035, 삭제 마스크 클리너(v3.179.0에서 릴리스), 클리너의 쿼리와 삭제 모드 기본값: https://github.com/langfuse/langfuse/pull/14035, https://github.com/langfuse/langfuse/releases/tag/v3.179.0, https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56, https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137
 - #16858, ClickHouse 26.8+에서의 DateTime64: https://github.com/langfuse/langfuse/issues/16858
 - PR #16892와 v3 백포트 PR #16957: https://github.com/langfuse/langfuse/pull/16892, https://github.com/langfuse/langfuse/pull/16957
 - 수정이 포함된 릴리스: https://github.com/langfuse/langfuse/releases/tag/v4.28.0, https://github.com/langfuse/langfuse/releases/tag/v3.225.7
@@ -391,6 +394,8 @@ SigNoz, ClickStack 및 기타:
 - SigNoz #12050, 80 GB가 넘는 시스템 로그: https://github.com/SigNoz/signoz/issues/12050
 - SigNoz v0.129.0의 ClickHouse `config.xml`과 `users.xml`: https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml, https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml
 - SigNoz v0.129.0의 `docker-compose.yaml`(컨테이너 `signoz-clickhouse`, `max-size: 50m`, `max-file: "3"`): https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml
+- SigNoz Docker 설치, v0.130.0부터 Foundry 사용(`docker ps`에 `signoz-telemetrystore-clickhouse-0-0`으로 표시됨): https://signoz.io/docs/install/docker/, https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/README.md
+- Foundry v0.3.0: 서비스와 컨테이너 이름 `<name>-telemetrystore-clickhouse-<shard>-<replica>`, 기본 이미지 `clickhouse/clickhouse-server:25.12.5`, `default` 사용자(`password: ""`): https://github.com/SigNoz/foundry/blob/v0.3.0/internal/casting/dockercomposecasting/templates/compose.yaml.gotmpl#L60-L61, https://github.com/SigNoz/foundry/blob/v0.3.0/api/v1alpha1/installation/telemetrystore.go#L43, https://github.com/SigNoz/foundry/blob/v0.3.0/docs/examples/docker/compose/pours/deployment/telemetrystore/clickhouse/config-0-0.yaml#L80-L87
 - ClickStack Helm chart PR #275: https://github.com/ClickHouse/ClickStack-helm-charts/pull/275
 - Sentry snuba #7311, TTL이 없는 `*_log_N` 사본: https://github.com/getsentry/snuba/issues/7311
 - trigger.dev #4343, config.d의 프로필 설정이 무시됨: https://github.com/triggerdotdev/trigger.dev/issues/4343

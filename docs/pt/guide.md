@@ -50,9 +50,12 @@ docker compose exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' < size.sql
 ```
 
-**SigNoz (docker compose).** O contêiner geralmente se chama
-`signoz-clickhouse` (confira com `docker ps`). O `users.xml` do SigNoz deixa o
-usuário `default` sem senha:
+**SigNoz (Docker).** O contêiner é `signoz-clickhouse` se você instalou com os
+arquivos compose do repositório do SigNoz (até a v0.129.0), e
+`signoz-telemetrystore-clickhouse-0-0` com o Foundry, a instalação do SigNoz
+via Docker desde a v0.130.0 (confira com `docker ps`). Nos dois casos, o
+usuário `default` fica sem senha. Os comandos abaixo usam `signoz-clickhouse`;
+com o Foundry, coloque o outro nome no lugar:
 
 ```sh
 docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact < size.sql
@@ -72,7 +75,7 @@ Abra um cliente com permissão de escrita:
 ```sh
 # Langfuse
 docker compose exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD"'
-# SigNoz
+# SigNoz (Foundry: signoz-telemetrystore-clickhouse-0-0)
 docker exec -it signoz-clickhouse clickhouse-client
 ```
 
@@ -239,12 +242,18 @@ Esta consulta gera os comandos `DROP` para você. Leia-os e depois cole-os no
 cliente:
 
 ```sql
-SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
+SELECT 'DROP TABLE system.' || name || ' SYNC SETTINGS max_table_size_to_drop = 0;'
 FROM system.tables
 WHERE database = 'system' AND match(name, '_log_[0-9]+$');
 ```
 
 O ClickHouse não grava mais nessas tabelas. `DROP` não pode ser desfeito.
+
+`SYNC` libera o espaço imediatamente. Sem ele, o banco de dados `system`
+(Atomic) mantém os dados no disco por 8 minutos
+([`database_atomic_delay_before_drop_table_sec`](https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec) = 480 s).
+`SYNC` vem antes de `SETTINGS`; se vier depois, o comando falha com Code 62
+(`SYNTAX_ERROR`).
 
 ### Passo 5: confira o resultado
 
@@ -359,9 +368,16 @@ disco. Execute-a fora do horário de pico e acompanhe com
 `SELECT * FROM system.mutations WHERE NOT is_done`. No #13969, ela liberou
 ~360 GiB por réplica em ~17 minutos.
 
-Desde a v3.179.0, o worker do Langfuse pode fazer isso de forma agendada:
-`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true` (desativado por padrão;
-veja `.env.prod.example`, [PR #14035](https://github.com/langfuse/langfuse/pull/14035)).
+Desde a v3.179.0, o worker do Langfuse tem uma rotina de limpeza, desativada por
+padrão: `LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`
+([PR #14035](https://github.com/langfuse/langfuse/pull/14035)). Mas ela pega só
+as partições `patch-`
+([`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)),
+e um `DELETE` só grava essas partições com `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update`
+em uma tabela com a coluna `_block_number`. Com o padrão `alter_update`
+([`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137)),
+e nas tabelas da v3, que não têm essa coluna, ela não encontra nada: execute o
+`APPLY DELETED MASK` você mesmo.
 
 ### Há partes antigas presas no disco? (partes inativas e desanexadas)
 
@@ -428,7 +444,12 @@ curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.
 sh diskvet.sh report --docker auto > report.md
 ```
 
-Para o SigNoz, use `--docker signoz-clickhouse`.
+Para o SigNoz, execute o mesmo comando: `--docker auto` encontra o ClickHouse
+dele pela imagem (`clickhouse/clickhouse-server`) ou pelo serviço `clickhouse`
+na pasta do antigo `docker-compose.yaml` do SigNoz. Se houver outros contêineres
+do ClickHouse na máquina, passe o nome que aparece no `docker ps`:
+`--docker signoz-telemetrystore-clickhouse-0-0` (Foundry) ou
+`--docker signoz-clickhouse` (arquivos compose antigos).
 
 Também funciona com o ClickHouse no Kubernetes, via `kubectl exec` no pod dele:
 
@@ -464,6 +485,7 @@ Documentação e código-fonte do ClickHouse:
 - Ajuste do limite no nível da consulta desde a 23.12: https://github.com/ClickHouse/ClickHouse/pull/57452
 - A flag é removida após o uso (`checkCanBeDropped`): https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp
 - TRUNCATE: https://clickhouse.com/docs/reference/statements/truncate
+- DROP TABLE ... SYNC, `database_atomic_delay_before_drop_table_sec` (480 s): https://clickhouse.com/docs/reference/statements/drop, https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec
 - Erro de TTL no `opentelemetry_span_log`: https://github.com/ClickHouse/ClickHouse/issues/88366
 - Configurações do MergeTree: `merge_with_ttl_timeout` (14.400 s) https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout, `old_parts_lifetime` (480 s) https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime, `max_bytes_to_merge_at_max_space_in_pool` (150 GiB) https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool
 - Rotação do log do servidor (`logger`: `level`, `size`, `count`): https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger
@@ -490,7 +512,7 @@ Langfuse:
 - PR #16363, rotação de logs do Docker no README (padrões do daemon, sem truncamento externo): https://github.com/langfuse/langfuse/pull/16363
 - Discussão #13969, linhas com exclusão leve: https://github.com/orgs/langfuse/discussions/13969
 - Discussão #15024, partes inativas e text_log de 59 GiB: https://github.com/orgs/langfuse/discussions/15024
-- PR #14035, limpeza com a máscara de exclusão (lançada na v3.179.0): https://github.com/langfuse/langfuse/pull/14035, https://github.com/langfuse/langfuse/releases/tag/v3.179.0
+- PR #14035, limpeza com a máscara de exclusão (lançada na v3.179.0), a consulta dela e o padrão do modo de exclusão: https://github.com/langfuse/langfuse/pull/14035, https://github.com/langfuse/langfuse/releases/tag/v3.179.0, https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56, https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137
 - #16858, DateTime64 no ClickHouse 26.8+: https://github.com/langfuse/langfuse/issues/16858
 - PR #16892 e a versão portada para a v3, PR #16957: https://github.com/langfuse/langfuse/pull/16892, https://github.com/langfuse/langfuse/pull/16957
 - Versões com a correção: https://github.com/langfuse/langfuse/releases/tag/v4.28.0, https://github.com/langfuse/langfuse/releases/tag/v3.225.7
@@ -500,6 +522,8 @@ SigNoz, ClickStack e outros:
 - SigNoz #12050, mais de 80 GB de logs do sistema: https://github.com/SigNoz/signoz/issues/12050
 - `config.xml` e `users.xml` do ClickHouse no SigNoz v0.129.0: https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml, https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml
 - `docker-compose.yaml` do SigNoz v0.129.0 (contêiner `signoz-clickhouse`, `max-size: 50m`, `max-file: "3"`): https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml
+- Instalação do SigNoz via Docker, Foundry desde a v0.130.0 (o `docker ps` mostra `signoz-telemetrystore-clickhouse-0-0`): https://signoz.io/docs/install/docker/, https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/README.md
+- Foundry v0.3.0: serviço e contêiner `<name>-telemetrystore-clickhouse-<shard>-<replica>`, imagem padrão `clickhouse/clickhouse-server:25.12.5`, usuário `default` com `password: ""`: https://github.com/SigNoz/foundry/blob/v0.3.0/internal/casting/dockercomposecasting/templates/compose.yaml.gotmpl#L60-L61, https://github.com/SigNoz/foundry/blob/v0.3.0/api/v1alpha1/installation/telemetrystore.go#L43, https://github.com/SigNoz/foundry/blob/v0.3.0/docs/examples/docker/compose/pours/deployment/telemetrystore/clickhouse/config-0-0.yaml#L80-L87
 - Chart do Helm do ClickStack, PR #275: https://github.com/ClickHouse/ClickStack-helm-charts/pull/275
 - Sentry snuba #7311, cópias `*_log_N` sem TTL: https://github.com/getsentry/snuba/issues/7311
 - trigger.dev #4343, configurações de perfil ignoradas em config.d: https://github.com/triggerdotdev/trigger.dev/issues/4343

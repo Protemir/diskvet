@@ -104,9 +104,12 @@ LIMIT 15;</code></pre>
 внутри контейнера:</p>
 <pre><code>docker compose exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' &lt; size.sql</code></pre>
-<p><strong>SigNoz (docker compose).</strong> Контейнер обычно называется <code>signoz-clickhouse</code>
-(проверьте через <code>docker ps</code>). В <code>users.xml</code> от SigNoz у пользователя
-<code>default</code> нет пароля:</p>
+<p><strong>SigNoz (Docker).</strong> Контейнер называется <code>signoz-clickhouse</code>, если вы
+установили SigNoz через compose-файлы из его репозитория (до v0.129.0), и
+<code>signoz-telemetrystore-clickhouse-0-0</code>, если через Foundry — установщик SigNoz
+для Docker начиная с v0.130.0 (проверьте через <code>docker ps</code>). В обоих случаях у
+пользователя <code>default</code> нет пароля. В командах ниже указан <code>signoz-clickhouse</code>;
+с Foundry подставьте вместо него второе имя:</p>
 <pre><code>docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact &lt; size.sql</code></pre>
 <p><code>--readonly=1</code> переводит сессию в режим только для чтения: ClickHouse отклонит
 любые изменения.</p>
@@ -117,7 +120,7 @@ LIMIT 15;</code></pre>
 <p>Откройте клиент с правом записи:</p>
 <pre><code># Langfuse
 docker compose exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD"'
-# SigNoz
+# SigNoz (Foundry: signoz-telemetrystore-clickhouse-0-0)
 docker exec -it signoz-clickhouse clickhouse-client</code></pre>
 <p>Очистите большие логи:</p>
 <pre><code>TRUNCATE TABLE system.trace_log;
@@ -237,10 +240,15 @@ tail -n 20 clickhouse-server.err.log</code></pre>
 <a href="https://github.com/getsentry/snuba/issues/7311">Sentry snuba #7311</a>).</p>
 <p>Этот запрос сам составит команды <code>DROP</code>. Прочитайте их, потом вставьте в
 клиент:</p>
-<pre><code>SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
+<pre><code>SELECT 'DROP TABLE system.' || name || ' SYNC SETTINGS max_table_size_to_drop = 0;'
 FROM system.tables
 WHERE database = 'system' AND match(name, '_log_[0-9]+$');</code></pre>
 <p>ClickHouse в эти таблицы больше не пишет. <code>DROP</code> нельзя отменить.</p>
+<p><code>SYNC</code> освобождает место сразу. Без него база <code>system</code> (Atomic) держит данные
+на диске ещё 8 минут
+(<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec"><code>database_atomic_delay_before_drop_table_sec</code></a> = 480 с).
+<code>SYNC</code> ставится перед <code>SETTINGS</code>; если поставить его после, запрос падает с
+Code 62 (<code>SYNTAX_ERROR</code>).</p>
 <h3 id="шаг-5-проверьте-результат">Шаг 5: проверьте результат</h3>
 <p>Снова выполните запрос из шага 1. У каждого большого лога должен быть TTL, а
 имён с <code>_N</code> не должно остаться.</p>
@@ -318,9 +326,17 @@ ORDER BY sum(bytes_on_disk) DESC;</code></pre>
 в часы низкой нагрузки и следите через
 <code>SELECT * FROM system.mutations WHERE NOT is_done</code>. В #13969 она освободила
 ~360 ГиБ на каждой реплике примерно за 17 минут.</p>
-<p>Начиная с v3.179.0 воркер Langfuse умеет делать это по расписанию:
-<code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code> (по умолчанию
-выключено; см. <code>.env.prod.example</code>, <a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>).</p>
+<p>Начиная с v3.179.0 в воркере Langfuse есть очистка по маске удаления, по
+умолчанию выключенная: <code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code>
+(<a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>). Но она берёт
+только партиции <code>patch-</code>
+(<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56"><code>helpers.ts</code></a>),
+а <code>DELETE</code> записывает такие партиции, только если задано
+<code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update</code> и у таблицы есть
+столбец <code>_block_number</code>. Со значением по умолчанию <code>alter_update</code>
+(<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137"><code>env.ts</code></a>),
+а также на таблицах v3, где такого столбца нет, она ничего не находит:
+выполните <code>APPLY DELETED MASK</code> сами.</p>
 <h3 id="старые-куски-застряли-на-диске-неактивные-и-отсоединённые-куски">Старые куски застряли на диске? (неактивные и отсоединённые куски)</h3>
 <pre><code>SELECT database, table, count() AS parts,
        formatReadableSize(sum(bytes_on_disk)) AS size,
@@ -368,7 +384,12 @@ GROUP BY database, table, partition_id;</code></pre>
 <pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
 sh diskvet.sh report --docker auto &gt; report.md</code></pre>
-<p>Для SigNoz используйте <code>--docker signoz-clickhouse</code>.</p>
+<p>Для SigNoz выполните ту же команду: <code>--docker auto</code> находит его ClickHouse по
+образу (<code>clickhouse/clickhouse-server</code>) или по сервису <code>clickhouse</code> в папке со
+старым <code>docker-compose.yaml</code> от SigNoz. Если на машине есть другие контейнеры
+ClickHouse, передайте имя из <code>docker ps</code>:
+<code>--docker signoz-telemetrystore-clickhouse-0-0</code> (Foundry) или
+<code>--docker signoz-clickhouse</code> (старые compose-файлы).</p>
 <p>ClickHouse в Kubernetes тоже можно проверить — через <code>kubectl exec</code> в его под:</p>
 <pre><code>sh diskvet.sh report --k8s auto &gt; report.md</code></pre>
 <p><code>--k8s NAMESPACE/POD</code> выбирает конкретный под. Пароль не покидает под, а
@@ -404,6 +425,8 @@ diskvet нужны только <code>get</code> и <code>list</code> для п�
 <li>Флаг удаляется после использования (<code>checkCanBeDropped</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp</a>
 </li>
 <li>TRUNCATE: <a href="https://clickhouse.com/docs/reference/statements/truncate">https://clickhouse.com/docs/reference/statements/truncate</a>
+</li>
+<li>DROP TABLE ... SYNC, <code>database_atomic_delay_before_drop_table_sec</code> (480 с): <a href="https://clickhouse.com/docs/reference/statements/drop">https://clickhouse.com/docs/reference/statements/drop</a>, <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec</a>
 </li>
 <li>Ошибка TTL у <code>opentelemetry_span_log</code>: <a href="https://github.com/ClickHouse/ClickHouse/issues/88366">https://github.com/ClickHouse/ClickHouse/issues/88366</a>
 </li>
@@ -452,7 +475,7 @@ diskvet нужны только <code>get</code> и <code>list</code> для п�
 </li>
 <li>Обсуждение #15024, неактивные куски и text_log на 59 ГиБ: <a href="https://github.com/orgs/langfuse/discussions/15024">https://github.com/orgs/langfuse/discussions/15024</a>
 </li>
-<li>PR #14035, очистка по маске удаления (вышла в v3.179.0): <a href="https://github.com/langfuse/langfuse/pull/14035">https://github.com/langfuse/langfuse/pull/14035</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.179.0">https://github.com/langfuse/langfuse/releases/tag/v3.179.0</a>
+<li>PR #14035, очистка по маске удаления (вышла в v3.179.0), её запрос и режим удаления по умолчанию: <a href="https://github.com/langfuse/langfuse/pull/14035">https://github.com/langfuse/langfuse/pull/14035</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.179.0">https://github.com/langfuse/langfuse/releases/tag/v3.179.0</a>, <a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56">https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56</a>, <a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137">https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137</a>
 </li>
 <li>#16858, DateTime64 на ClickHouse 26.8+: <a href="https://github.com/langfuse/langfuse/issues/16858">https://github.com/langfuse/langfuse/issues/16858</a>
 </li>
@@ -470,6 +493,10 @@ diskvet нужны только <code>get</code> и <code>list</code> для п�
 </li>
 <li>
 <code>docker-compose.yaml</code> в SigNoz v0.129.0 (контейнер <code>signoz-clickhouse</code>, <code>max-size: 50m</code>, <code>max-file: "3"</code>): <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml</a>
+</li>
+<li>Установка SigNoz в Docker, Foundry начиная с v0.130.0 (<code>docker ps</code> показывает <code>signoz-telemetrystore-clickhouse-0-0</code>): <a href="https://signoz.io/docs/install/docker/">https://signoz.io/docs/install/docker/</a>, <a href="https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/README.md">https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/README.md</a>
+</li>
+<li>Foundry v0.3.0: сервис и контейнер <code>&lt;name&gt;-telemetrystore-clickhouse-&lt;shard&gt;-&lt;replica&gt;</code>, образ по умолчанию <code>clickhouse/clickhouse-server:25.12.5</code>, пользователь <code>default</code> с <code>password: ""</code>: <a href="https://github.com/SigNoz/foundry/blob/v0.3.0/internal/casting/dockercomposecasting/templates/compose.yaml.gotmpl#L60-L61">https://github.com/SigNoz/foundry/blob/v0.3.0/internal/casting/dockercomposecasting/templates/compose.yaml.gotmpl#L60-L61</a>, <a href="https://github.com/SigNoz/foundry/blob/v0.3.0/api/v1alpha1/installation/telemetrystore.go#L43">https://github.com/SigNoz/foundry/blob/v0.3.0/api/v1alpha1/installation/telemetrystore.go#L43</a>, <a href="https://github.com/SigNoz/foundry/blob/v0.3.0/docs/examples/docker/compose/pours/deployment/telemetrystore/clickhouse/config-0-0.yaml#L80-L87">https://github.com/SigNoz/foundry/blob/v0.3.0/docs/examples/docker/compose/pours/deployment/telemetrystore/clickhouse/config-0-0.yaml#L80-L87</a>
 </li>
 <li>Helm-чарт ClickStack, PR #275: <a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">https://github.com/ClickHouse/ClickStack-helm-charts/pull/275</a>
 </li>
