@@ -374,11 +374,13 @@ EOF
     done
     wait_mutations customer_acme payments_eu
     wait_mutations default observations
+    # ledger_eu too: the first APPLY DELETED MASK turns the patches into a mask
+    # on the parts (has_lightweight_delete), the second removes the rows
+    if [ "$PATCH" = 1 ]; then wait_mutations customer_acme ledger_eu; fi
     # patch parts can stay a few minutes after the rows are gone: not counted here
     lwd=$(chq "SELECT count() FROM system.parts WHERE active AND has_lightweight_delete AND NOT startsWith(partition_id, 'patch-') AND database IN ('customer_acme', 'default')")
     if [ "$lwd" = 0 ]; then ok "APPLY DELETED MASK cleared has_lightweight_delete"; else fail "$lwd parts still have lightweight deletes"; fi
     if [ "$PATCH" = 1 ]; then
-        wait_mutations customer_acme ledger_eu
         x=$(chq "SELECT sum(rows) FROM system.parts WHERE active AND database = 'customer_acme' AND table = 'ledger_eu' AND NOT startsWith(partition_id, 'patch-')")
         if [ "$x" = 20000 ]; then ok "APPLY DELETED MASK twice removed the rows of the patch parts (200000 -> 20000)"; else fail "ledger_eu parts hold $x rows after the fix, want 20000"; fi
     fi
