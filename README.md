@@ -90,7 +90,7 @@ sends to the cluster and which permissions it needs.
 | 4 | Growth per day | `system.part_log` (new parts in 24 h) | one table wrote ≥ 5% of the free space | ≥ 15% |
 | 5 | Too many parts | `system.parts`, `system.merge_tree_settings`, `system.events` | ≥ 300 parts in a partition, or rejected inserts | ≥ the table's `parts_to_delay_insert` |
 | 6 | Inactive and detached parts | `system.parts`, `system.detached_parts` | inactive parts stuck > 1 h; detached ≥ 1 GiB | stuck ≥ 10 GiB |
-| 7 | Deleted rows and stuck mutations | `system.parts` (`has_lightweight_delete`), `system.mutations` | ≥ 10% of a table in parts with deleted rows; a mutation older than 60 min | ≥ 30% and ≥ 10 GiB; a failing mutation or one older than a day |
+| 7 | Deleted rows and stuck mutations | `system.parts` (`has_lightweight_delete`; for a `lightweight_update` DELETE, the parts its `patch-` parts apply to), `system.mutations` | ≥ 10% of a table in parts with deleted rows; a mutation older than 60 min | ≥ 30% and ≥ 10 GiB; a failing mutation or one older than a day |
 
 System logs without TTL between 100 MiB and 1 GiB are marked INFO. A check whose
 query fails (old version, missing grant, no `part_log`) shows `NOT_RUN` with the
@@ -613,6 +613,15 @@ These are the traps the report handles for you. Each was checked on ClickHouse
   PARTITION ID '...'` for the exact partitions (only locally). The script can't
   count deleted rows without reading your data, so it shows the share of the
   table in affected parts, an upper bound.
+- **`DELETE` with `lightweight_delete_mode = 'lightweight_update'`** (tried on 25.8,
+  25.12 and 26.9) leaves the parts with `has_lightweight_delete = 0` and writes the
+  mask to small patch parts, in partitions `patch-<hash>-<partition id>`. Check 7
+  counts the parts a patch applies to (an older `data_version` in the same
+  partition). `APPLY DELETED MASK` with the full `patch-` id ran without an error
+  and removed nothing; with the plain id the first run only wrote the mask into
+  the parts and the second removed the rows, so the report prints it twice. The
+  patch parts can stay a few minutes after that. Langfuse's deleted-mask cleaner
+  looks only at such partitions.
 - **Langfuse + ClickHouse 26.8+: update Langfuse first.** Older Langfuse sends
   DateTime64 values as JSON numbers; ClickHouse 26.8+ reads them differently and
   stores `9999-12-31 23:59:59`

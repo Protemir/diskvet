@@ -167,7 +167,7 @@ Parts that still hold rows removed with DELETE FROM (lightweight delete). The sc
 ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202608';
 ```
 Heavier alternative: `OPTIMIZE TABLE <table> PARTITION ID '<id>' FINAL` rewrites and merges the whole partition. Avoid it on big partitions in busy hours.
-Newer Langfuse workers can do this themselves: `LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true` (off by default; check your version's .env.prod.example).
+Langfuse's own cleaner (`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED`) looks only at patch parts, so it won't clear these.
 
 No unfinished mutations.
 

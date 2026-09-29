@@ -165,6 +165,39 @@ if sh tests/check_payload.sh "$p" customer_acme mutation_42 202608_1_1_0 >"$out/
 has "$p" '"rejected_inserts": 17' "rejected inserts in payload"
 has "$p" '"mutations_failing": 1' "failing mutations in payload"
 
+echo "== check 7 with patch parts (DELETE with lightweight_delete_mode = 'lightweight_update')"
+# alex.tsv's deleted_rows row has the 7 columns of 0.3.1; worst.tsv's have the
+# two patch columns, 0. Here the rows are as 25.12 and 26.9 give them for
+# patch parts: the plain partition id (a tuple key's 202605-1 too), the parts
+# the patches apply to, then the patch parts themselves.
+awk -F '\t' 'BEGIN { OFS = "\t" }
+    $1 == "deleted_rows" {
+        print "deleted_rows", "default", "observations", "202608", 3, 1932735283, 4198330532, 2, 3040870
+        print "deleted_rows", "default", "observations", "202607", 1, 536870912, 4198330532, 0, 0
+        print "deleted_rows", "customer_acme", "payments_eu", "202605-1", 1, 402626, 1048576, 1, 9655
+        next
+    } 1' tests/fixtures/alex.tsv >"$out/patch.tsv"
+r=$out/patch.md
+sh diskvet.sh report --replay "$out/patch.tsv" >"$r" 2>/dev/null
+statuses "$r" "CRITICAL WARN WARN WARN OK OK WARN"
+has "$r" "| default.observations | 4 | 2.3 GiB | 59% | WARN |" "patch-covered and plain parts add up per table"
+has "$r" "| customer_acme.payments_eu | 1 | 393.2 KiB | 38% | WARN |" "tuple partition with patch parts"
+has "$r" "SETTINGS lightweight_delete_mode = 'lightweight_update'\`: 3 (2.9 MiB)." "patch parts counted and explained"
+n7=$(grep -cxF "ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202608';" "$r")
+if [ "$n7" = 2 ]; then ok "partition with patch parts: APPLY DELETED MASK twice, plain id"; else fail "APPLY DELETED MASK for 202608 printed $n7 times, want 2"; fi
+n7=$(grep -cxF "ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202607';" "$r")
+if [ "$n7" = 1 ]; then ok "partition without patch parts: APPLY DELETED MASK once"; else fail "APPLY DELETED MASK for 202607 printed $n7 times, want 1"; fi
+n7=$(grep -cxF "ALTER TABLE customer_acme.payments_eu APPLY DELETED MASK IN PARTITION ID '202605-1';" "$r")
+if [ "$n7" = 2 ]; then ok "tuple partition id kept whole (202605-1)"; else fail "APPLY DELETED MASK for 202605-1 printed $n7 times, want 2"; fi
+hasnt "$r" "IN PARTITION ID 'patch-" "no patch- partition id in a command"
+has "$r" "A partition with patch parts is there twice" "why twice"
+has "$r" "Newer Langfuse workers can do the partitions with patch parts themselves" "Langfuse's cleaner offered for observations 202608"
+has "$r" "looks only at patch parts, so it won't clear the others." "and not for observations 202607"
+p=$out/patch.json
+sh diskvet.sh --print-payload --replay "$out/patch.tsv" >"$p" 2>/dev/null
+if sh tests/check_payload.sh "$p" customer_acme payments_eu 202605-1 202608 >"$out/p4.txt" 2>&1; then ok "payload passes check_payload.sh"; else fail "payload: $(cat "$out/p4.txt")"; fi
+has "$p" '"lwd_parts": 4, "lwd_parts_bytes": 2469606195' "lightweight delete counters include the patch-covered parts"
+
 echo "== notrun.tsv: every query failed"
 r=$out/notrun.md
 sh diskvet.sh report --replay tests/fixtures/notrun.tsv >"$r" 2>/dev/null
@@ -180,8 +213,9 @@ echo "== golden files: docker and local renders are byte-identical to v0.2.2"
 # before the Kubernetes work: the reports without their date line, the payload
 # without sent_at. New report text must not reach docker or local reports, so
 # only the version number may differ. Never regenerate them to make this pass;
-# a line changed on purpose is changed by hand in each (so far only the last
-# one, the early-access line, reworded after 0.3.0).
+# a line changed on purpose is changed by hand in each (so far the last one,
+# the early-access line, reworded after 0.3.0, and check 7's Langfuse cleaner
+# line after 0.3.1: the cleaner looks only at patch parts).
 ver=$(sed -n 's/^VERSION=//p' diskvet.sh | sed 's/\./\\./g')
 same() {  # NAME FILE: FILE, minus the date line and sent_at, with this version written as 0.2.2, is golden/NAME
     g=tests/fixtures/golden/$1

@@ -1506,18 +1506,20 @@ function check6(   i, f, s, tbl, ip, ib, sp, sb, dp, db, rs, cmds, nm, k, j, nam
 }
 
 # ---------------------------------------------------------------- check 7
-function check7(   i, f, key, s, tbl, lt, tb, lp, pl, np, order, no, share, rs, fixes, mt, m, mrs, kills, anyok, partial, j) {
+function check7(   i, f, key, s, tbl, lt, tb, lp, pl, np, ppt, order, no, share, rs, fixes, cmd, twice, tpp, tpb, lfp, lfn, mt, m, mrs, kills, anyok, partial, j) {
     if (!ok("deleted_rows") && !ok("mutations")) {
         st[7] = "NOT_RUN"; body[7] = notrun("deleted_rows"); return
     }
-    st[7] = "OK"; s = ""; fixes = ""; kills = ""; no = 0; partial = ""
+    st[7] = "OK"; s = ""; fixes = ""; kills = ""; no = 0; partial = ""; twice = 0; tpp = 0; tpb = 0; lfp = 0; lfn = 0
     if (ok("deleted_rows")) {
         for (i = 1; i <= n["deleted_rows"]; i++) {
             split(row["deleted_rows", i], f, "\t")
             key = f[2] SUBSEP f[3]
             if (!(key in lt)) { order[++no] = key; lt[key] = 0; lp[key] = 0; np[key] = 0; tdb[key] = f[2]; ttb[key] = f[3] }
             lt[key] += num(f[6]); lp[key] += num(f[5]); tb[key] = num(f[7])
-            if (np[key] < 10) { np[key]++; pl[key, np[key]] = f[4] }
+            # f[8], f[9]: the partition's patch parts (lightweight_delete_mode = 'lightweight_update')
+            tpp += num(f[8]); tpb += num(f[9])
+            if (np[key] < 10) { np[key]++; pl[key, np[key]] = f[4]; ppt[key, np[key]] = (num(f[8]) > 0) }
         }
         if (no > 0) {
             tbl = "| Table | Parts with deleted rows | Their size | Share of table | Status |\n|---|---|---|---|---|\n"
@@ -1528,17 +1530,29 @@ function check7(   i, f, key, s, tbl, lt, tb, lp, pl, np, order, no, share, rs, 
                 st[7] = worse(st[7], rs)
                 if (i <= 15) tbl = tbl "| " cell(tdb[key] "." ttb[key]) " | " lp[key] " | " hs(lt[key]) " | " fpct(share) " | " rs " |\n"
                 if (rs != "OK")
-                    for (j = 1; j <= np[key]; j++)
-                        fixes = fixes "ALTER TABLE " fq(tdb[key], ttb[key]) " APPLY DELETED MASK IN PARTITION ID '" sq(pl[key, j]) "';\n"
+                    for (j = 1; j <= np[key]; j++) {
+                        cmd = "ALTER TABLE " fq(tdb[key], ttb[key]) " APPLY DELETED MASK IN PARTITION ID '" sq(pl[key, j]) "';\n"
+                        fixes = fixes cmd
+                        # with patch parts the first run only writes the mask into the parts
+                        if (ppt[key, j]) { fixes = fixes cmd; twice = 1 }
+                        # Langfuse's deleted-mask cleaner takes only the patch- partitions of these tables
+                        if (ttb[key] ~ /^(traces|observations|scores|events_full|events_core)$/) { if (ppt[key, j]) lfp = 1; else lfn = 1 }
+                    }
             }
             s = s "Parts that still hold rows removed with DELETE FROM (lightweight delete). The script can't count deleted rows without reading your data,"
             s = s " so \"share\" is the share of the table in such parts: the upper bound of what can come back.\n\n" tbl
+            if (tpp > 0)
+                s = s "\nPatch parts written by `DELETE ... SETTINGS lightweight_delete_mode = 'lightweight_update'`: " tpp " (" hs(tpb) "). The parts they apply to keep `has_lightweight_delete = 0`, so they are counted above under their own partition.\n"
             if (fixes != "") {
                 s = s "\n**Fix: apply the delete mask.** Rewrites these parts in the background (a mutation) and needs free space about the size of each partition. Safe for rows that were not deleted.\n"
                 s = s "```sql\n" fixes "```\n"
+                if (twice)
+                    s = s "A partition with patch parts is there twice: the first run only writes the mask into the parts, the second removes the rows. Paste both at once. The small patch parts can stay a few minutes after that.\n"
                 s = s "Heavier alternative: `OPTIMIZE TABLE <table> PARTITION ID '<id>' FINAL` rewrites and merges the whole partition. Avoid it on big partitions in busy hours.\n"
-                if (product == "langfuse")
-                    s = s "Newer Langfuse workers can do this themselves: `LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true` (off by default; check your version's .env.prod.example).\n"
+                if (product == "langfuse" && lfp)
+                    s = s "Newer Langfuse workers can do the partitions with patch parts themselves: `LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true` (off by default; check your version's .env.prod.example). It skips the current month.\n"
+                if (product == "langfuse" && lfn)
+                    s = s "Langfuse's own cleaner (`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED`) looks only at patch parts, so it won't clear " (lfp ? "the others" : "these") ".\n"
             }
         } else s = s "No parts with lightweight-deleted rows.\n"
     } else partial = partial "Deleted rows: " notrun("deleted_rows")

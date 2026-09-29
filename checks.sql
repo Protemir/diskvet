@@ -341,6 +341,12 @@ GROUP BY database, table;
 -- @query deleted_rows
 -- 7a. Active parts that still contain rows removed by lightweight DELETE,
 --     per partition, with the size of the whole table for comparison.
+--     With lightweight_delete_mode = 'lightweight_update', DELETE leaves the
+--     parts alone (has_lightweight_delete stays 0) and writes the mask to
+--     patch parts in a partition 'patch-<hash>-<partition_id>'. A patch
+--     applies to the parts of that partition with an older data_version, so
+--     those parts count here under their own partition_id; patch_parts and
+--     patch_bytes are the patch parts themselves.
 SELECT
     'deleted_rows'          AS check_id,
     l.database              AS db,
@@ -348,15 +354,31 @@ SELECT
     l.partition_id          AS partition_id,
     l.lwd_parts             AS lwd_parts,
     l.lwd_bytes             AS lwd_bytes,
-    t.table_bytes           AS table_bytes
+    t.table_bytes           AS table_bytes,
+    l.patch_parts           AS patch_parts,
+    l.patch_bytes           AS patch_bytes
 FROM
 (
-    SELECT database, table, partition_id,
-           count()               AS lwd_parts,
-           sum(bytes_on_disk)    AS lwd_bytes
-    FROM system.parts
-    WHERE active AND has_lightweight_delete
-    GROUP BY database, table, partition_id
+    SELECT p.database AS database, p.table AS table, p.partition_id AS partition_id,
+           countIf(p.has_lightweight_delete OR p.data_version < x.patch_version)                AS lwd_parts,
+           sumIf(p.bytes_on_disk, p.has_lightweight_delete OR p.data_version < x.patch_version) AS lwd_bytes,
+           any(x.patch_parts)    AS patch_parts,
+           any(x.patch_bytes)    AS patch_bytes
+    FROM system.parts AS p
+    LEFT JOIN
+    (
+        SELECT database, table,
+               replaceRegexpOne(partition_id, '^patch-[^-]*-', '') AS of_partition,
+               max(data_version)     AS patch_version,
+               count()               AS patch_parts,
+               sum(bytes_on_disk)    AS patch_bytes
+        FROM system.parts
+        WHERE active AND has_lightweight_delete AND startsWith(partition_id, 'patch-')
+        GROUP BY database, table, of_partition
+    ) AS x ON x.database = p.database AND x.table = p.table AND x.of_partition = p.partition_id
+    WHERE p.active AND NOT startsWith(p.partition_id, 'patch-')
+    GROUP BY p.database, p.table, p.partition_id
+    HAVING lwd_parts > 0
 ) AS l
 LEFT JOIN
 (

@@ -97,6 +97,30 @@ for V in $VERSIONS; do
     ch --multiquery <tests/seed.sql >"$F-seed.txt" 2>&1 || { fail "seed.sql: $(tail -3 "$F-seed.txt")"; }
     i=0; while [ $i -lt 310 ]; do echo "INSERT INTO customer_acme.events_eu (id) VALUES ($i);"; i=$((i + 1)); done | ch --multiquery
     i=0; while [ $i -lt 25 ]; do echo "INSERT INTO customer_acme.hot_eu VALUES ($i);"; i=$((i + 1)); done | ch --multiquery
+    # Check 7: a DELETE written as patch parts (lightweight_delete_mode =
+    # 'lightweight_update'; 25.8.5 did, 25.5 has the setting but wrote a plain
+    # delete). The parts keep has_lightweight_delete = 0, the mask goes to
+    # partitions patch-<hash>-<id>. A tuple partition key, so the ids have a -
+    # of their own (202605-0, 202605-1).
+    PATCH=0
+    case $VER in 25.[89].*|25.1[0-9].*|2[6-9].*|[3-9]?.*) PATCH=try ;; esac
+    if [ "$PATCH" = try ]; then
+        ch --multiquery >"$F-seed-patch.txt" 2>&1 <<'EOF'
+CREATE TABLE customer_acme.ledger_eu (id UInt64, ts DateTime, region UInt8, note String)
+ENGINE = MergeTree PARTITION BY (toYYYYMM(ts), region) ORDER BY id
+SETTINGS enable_block_number_column = 1, enable_block_offset_column = 1;
+INSERT INTO customer_acme.ledger_eu SELECT number, toDateTime('2026-05-10 00:00:00') + number, intDiv(number, 100000), repeat('x', 50) FROM numbers(200000);
+DELETE FROM customer_acme.ledger_eu WHERE id % 10 != 0 SETTINGS lightweight_delete_mode = 'lightweight_update';
+EOF
+        np=$(chq "SELECT count() FROM system.parts WHERE active AND database = 'customer_acme' AND table = 'ledger_eu' AND startsWith(partition_id, 'patch-')")
+        nl=$(chq "SELECT count() FROM system.parts WHERE active AND database = 'customer_acme' AND table = 'ledger_eu' AND NOT startsWith(partition_id, 'patch-') AND has_lightweight_delete")
+        if [ "$np" -gt 0 ] 2>/dev/null && [ "$nl" = 0 ]; then
+            PATCH=1
+        else
+            PATCH=0
+            fail "ledger_eu: want patch parts and no has_lightweight_delete on the parts, got $np and $nl: $(tail -2 "$F-seed-patch.txt")"
+        fi
+    fi
     # langfuse#16858: a DateTime64 sent as a JSON number of milliseconds
     echo '{"id":"t1","timestamp":1758650000000,"project_id":"p1"}' | ch -q "INSERT INTO default.traces FORMAT JSONEachRow"
     # real trace_log rows from the query profiler, then 1.2 GiB of synthetic ones
@@ -130,6 +154,18 @@ for V in $VERSIONS; do
     has "$R" "| customer_acme.hot_eu | all | 25 | 20 | 1000 | CRITICAL |" "table-level parts_to_delay_insert used"
     has "$R" "| customer_acme.payments_eu | 1 |" "lightweight delete seen in payments_eu (real name in the local report)"
     has "$R" "| default.observations | 1 |" "Langfuse-style DELETE FROM sets has_lightweight_delete"
+    if [ "$PATCH" = 1 ]; then
+        has "$R" "| customer_acme.ledger_eu | 2 | " "DELETE as patch parts: both parts the patches apply to counted"
+        for id in 202605-0 202605-1; do
+            n7=$(grep -cxF "ALTER TABLE customer_acme.ledger_eu APPLY DELETED MASK IN PARTITION ID '$id';" "$R")
+            if [ "$n7" = 2 ]; then ok "DELETE as patch parts: APPLY DELETED MASK twice with the plain id $id"; else fail "APPLY DELETED MASK for $id printed $n7 times, want 2"; fi
+        done
+        hasnt "$R" "IN PARTITION ID 'patch-" "no patch- partition id in a command"
+        hasnt "$R" "Newer Langfuse workers can do" "patch parts of a customer table don't offer Langfuse's cleaner"
+        has "$R" "looks only at patch parts, so it won't clear these." "Langfuse's cleaner won't clear observations (a plain DELETE)"
+    else
+        echo "  skip  DELETE as patch parts: not seeded before 25.8"
+    fi
     has "$R" "customer_acme.archive_eu | detached | 1 |" "detached partition seen"
     has "$R" "| customer_acme.broken_mut |" "failing mutation seen"
     has "$R" "95% full in ~" "rough forecast from fake history"
@@ -156,7 +192,7 @@ for V in $VERSIONS; do
     # ------------------------------------------------------------ payload
     P=$F-payload.json
     sh diskvet.sh --print-payload --docker "$C" --env tests/fixtures/test.env >"$P" 2>"$F-payload.err"
-    if sh tests/check_payload.sh "$P" customer_acme payments_eu events_eu hot_eu broken_mut archive_eu mutation_ 202609 example.com "$C" "$SALT" >"$F-payload-check.txt" 2>&1; then
+    if sh tests/check_payload.sh "$P" customer_acme payments_eu events_eu hot_eu broken_mut archive_eu ledger_eu mutation_ 202609 202605- example.com "$C" "$SALT" >"$F-payload-check.txt" 2>&1; then
         ok "payload passes check_payload.sh (keys, names, forbidden strings, the salt)"
     else
         fail "payload: $(cat "$F-payload-check.txt")"
@@ -335,8 +371,14 @@ EOF
     done
     wait_mutations customer_acme payments_eu
     wait_mutations default observations
-    lwd=$(chq "SELECT count() FROM system.parts WHERE active AND has_lightweight_delete AND database IN ('customer_acme', 'default')")
+    # patch parts can stay a few minutes after the rows are gone: not counted here
+    lwd=$(chq "SELECT count() FROM system.parts WHERE active AND has_lightweight_delete AND NOT startsWith(partition_id, 'patch-') AND database IN ('customer_acme', 'default')")
     if [ "$lwd" = 0 ]; then ok "APPLY DELETED MASK cleared has_lightweight_delete"; else fail "$lwd parts still have lightweight deletes"; fi
+    if [ "$PATCH" = 1 ]; then
+        wait_mutations customer_acme ledger_eu
+        x=$(chq "SELECT sum(rows) FROM system.parts WHERE active AND database = 'customer_acme' AND table = 'ledger_eu' AND NOT startsWith(partition_id, 'patch-')")
+        if [ "$x" = 20000 ]; then ok "APPLY DELETED MASK twice removed the rows of the patch parts (200000 -> 20000)"; else fail "ledger_eu parts hold $x rows after the fix, want 20000"; fi
+    fi
     det=$(chq "SELECT count() FROM system.detached_parts WHERE database = 'customer_acme'")
     if [ "$det" = 0 ]; then ok "DROP DETACHED PART removed the detached part"; else fail "$det detached parts left"; fi
     mut=$(chq "SELECT count() FROM system.mutations WHERE database = 'customer_acme' AND table = 'broken_mut' AND NOT is_done")

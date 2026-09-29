@@ -241,7 +241,7 @@ ClickStack installs.</em></p>
 <p>More on deleted rows in Langfuse: <a href="../../guide/#why-do-deleted-rows-still-take-space">the guide</a>.
 <a href="https://github.com/Protemir/diskvet">diskvet</a> is a free, open-source, read-only script. Its check 7
 lists partitions with deleted rows and unfinished mutations, and prints <code>APPLY DELETED MASK</code> where they are 10% of a table or more.
-Like check 3, it sees only the small <code>patch-</code> parts in <code>lightweight_update</code> mode.
+In <code>lightweight_update</code> mode it counts the parts the <code>patch-</code> parts apply to, and prints the command twice with the plain id.
 Read <code>checks.sql</code> before you run it (SigNoz: <code>--docker signoz-clickhouse</code>):</p>
 <pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
