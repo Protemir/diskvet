@@ -717,10 +717,12 @@ a compose service named `clickhouse` with `CLICKHOUSE_USER` /
 the script ran as that user and sent only `SELECT` queries.
 
 The site ([diskvet.dev](https://diskvet.dev/)) is `docs/`, served by GitHub
-Pages, in seven languages. The guide pages (`docs/guide/`, `docs/<xx>/guide/`)
-and `docs/sitemap.xml` are generated from the Markdown guides; after editing
-`docs/guide.md` or a translation, run `node tools/build-guides.mjs` (Node 18+
-and a logged-in `gh`, which renders the Markdown).
+Pages, in seven languages. The guide pages (`docs/guide/`, `docs/<xx>/guide/`),
+the English pages on single errors (`docs/fix/<slug>/` and their list
+`docs/fix/index.html`) and `docs/sitemap.xml` are generated from the Markdown
+files; after editing `docs/guide.md`, a translation or `docs/fix/*.md`, run
+`node tools/build-guides.mjs` (Node 18+ and a logged-in `gh`, which renders the
+Markdown).
 
 ## Early access
 
