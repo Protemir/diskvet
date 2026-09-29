@@ -106,7 +106,8 @@ shows when). <code>SYNC</code> skips the wait.</p>
 <h2 id="check">Check</h2>
 <p>How full is the disk? In the folder with Langfuse's <code>docker-compose.yml</code>:</p>
 <pre><code>docker compose exec clickhouse df -h /var/lib/clickhouse /var/log/clickhouse-server</code></pre>
-<p>SigNoz: <code>docker exec signoz-clickhouse df -h /var/lib/clickhouse</code>. On
+<p>SigNoz: <code>docker exec signoz-clickhouse df -h /var/lib/clickhouse</code> (Foundry:
+<code>signoz-telemetrystore-clickhouse-0-0</code>). On
 Kubernetes each ClickHouse pod has its own volume and its own system logs, so
 run the checks and the fix in the pod whose volume is full
 (<a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md#two-kinds-of-disk-full">two kinds of "disk full"</a>).</p>

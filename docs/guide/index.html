@@ -106,9 +106,12 @@ LIMIT 15;</code></pre>
 <code>CLICKHOUSE_PASSWORD</code> inside the container:</p>
 <pre><code>docker compose exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' &lt; size.sql</code></pre>
-<p><strong>SigNoz (docker compose).</strong> The container is usually called
-<code>signoz-clickhouse</code> (check with <code>docker ps</code>). SigNoz's <code>users.xml</code> leaves the
-<code>default</code> user without a password:</p>
+<p><strong>SigNoz (Docker).</strong> The container is <code>signoz-clickhouse</code> if you installed
+with the compose files from the SigNoz repo (up to v0.129.0), and
+<code>signoz-telemetrystore-clickhouse-0-0</code> with Foundry, SigNoz's Docker install
+since v0.130.0 (check with <code>docker ps</code>). Both leave the <code>default</code> user without
+a password. The commands below use <code>signoz-clickhouse</code>; with Foundry, put the
+other name in its place:</p>
 <pre><code>docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact &lt; size.sql</code></pre>
 <p><code>--readonly=1</code> makes the session read-only: ClickHouse refuses any change.</p>
 <p><strong>How to read it.</strong> Compare the <code>system</code> rows with your own data (<code>default</code>
@@ -118,7 +121,7 @@ for Langfuse, <code>signoz_*</code> for SigNoz). If <code>system.trace_log</code
 <p>Open a client with write access:</p>
 <pre><code># Langfuse
 docker compose exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD"'
-# SigNoz
+# SigNoz (Foundry: signoz-telemetrystore-clickhouse-0-0)
 docker exec -it signoz-clickhouse clickhouse-client</code></pre>
 <p>Empty the big logs:</p>
 <pre><code>TRUNCATE TABLE system.trace_log;
@@ -370,7 +373,12 @@ you run it):</p>
 <pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
 sh diskvet.sh report --docker auto &gt; report.md</code></pre>
-<p>For SigNoz, use <code>--docker signoz-clickhouse</code>.</p>
+<p>For SigNoz, run the same command: <code>--docker auto</code> finds its ClickHouse by the
+image (<code>clickhouse/clickhouse-server</code>), or by the service <code>clickhouse</code> in the
+folder of SigNoz's old <code>docker-compose.yaml</code>. With other ClickHouse containers
+on the machine, pass the name from <code>docker ps</code>:
+<code>--docker signoz-telemetrystore-clickhouse-0-0</code> (Foundry) or
+<code>--docker signoz-clickhouse</code> (old compose files).</p>
 <p>ClickHouse in Kubernetes works too, through <code>kubectl exec</code> into its pod:</p>
 <pre><code>sh diskvet.sh report --k8s auto &gt; report.md</code></pre>
 <p><code>--k8s NAMESPACE/POD</code> picks the pod. The password stays inside the pod, and
@@ -470,6 +478,10 @@ it gets built if enough people ask, and it will be free.</p>
 <li>SigNoz v0.129.0 ClickHouse <code>config.xml</code> and <code>users.xml</code>: <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml</a>, <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml</a>
 </li>
 <li>SigNoz v0.129.0 <code>docker-compose.yaml</code> (container <code>signoz-clickhouse</code>, <code>max-size: 50m</code>, <code>max-file: "3"</code>): <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml</a>
+</li>
+<li>SigNoz Docker install, Foundry since v0.130.0 (<code>docker ps</code> shows <code>signoz-telemetrystore-clickhouse-0-0</code>): <a href="https://signoz.io/docs/install/docker/">https://signoz.io/docs/install/docker/</a>, <a href="https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/README.md">https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/README.md</a>
+</li>
+<li>Foundry v0.3.0: service and container <code>&lt;name&gt;-telemetrystore-clickhouse-&lt;shard&gt;-&lt;replica&gt;</code>, default image <code>clickhouse/clickhouse-server:25.12.5</code>, <code>default</code> user with <code>password: ""</code>: <a href="https://github.com/SigNoz/foundry/blob/v0.3.0/internal/casting/dockercomposecasting/templates/compose.yaml.gotmpl#L60-L61">https://github.com/SigNoz/foundry/blob/v0.3.0/internal/casting/dockercomposecasting/templates/compose.yaml.gotmpl#L60-L61</a>, <a href="https://github.com/SigNoz/foundry/blob/v0.3.0/api/v1alpha1/installation/telemetrystore.go#L43">https://github.com/SigNoz/foundry/blob/v0.3.0/api/v1alpha1/installation/telemetrystore.go#L43</a>, <a href="https://github.com/SigNoz/foundry/blob/v0.3.0/docs/examples/docker/compose/pours/deployment/telemetrystore/clickhouse/config-0-0.yaml#L80-L87">https://github.com/SigNoz/foundry/blob/v0.3.0/docs/examples/docker/compose/pours/deployment/telemetrystore/clickhouse/config-0-0.yaml#L80-L87</a>
 </li>
 <li>ClickStack Helm chart PR #275: <a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">https://github.com/ClickHouse/ClickStack-helm-charts/pull/275</a>
 </li>

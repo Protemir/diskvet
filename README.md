@@ -658,7 +658,7 @@ These are the traps the report handles for you. Each was checked on ClickHouse
 | 25.12.11.4 | `clickhouse/clickhouse-server:25.12` | Git Bash, dash + mawk, busybox ash + busybox awk | full `tests/run.sh` |
 | 26.9.1.1629 | `clickhouse/clickhouse-server:latest` | Git Bash, dash + mawk, busybox ash + busybox awk | full `tests/run.sh` |
 | 24.8.14.39 | `clickhouse/clickhouse-server:24.8-alpine` | busybox ash + busybox awk | report and payload run, no seeded problems |
-| 24.1.2.5 | `clickhouse/clickhouse-server:24.1.2-alpine` (SigNoz's) | busybox ash + busybox awk | report and payload run; a fresh 24.1 has no `part_log` until the first flush, check 4 then falls back to `system.parts`. By hand: `TRUNCATE` / `DROP ... SYNC SETTINGS max_table_size_to_drop = 0` and `APPLY DELETED MASK IN PARTITION ID` work (24.3 too for the first) |
+| 24.1.2.5 | `clickhouse/clickhouse-server:24.1.2-alpine` (SigNoz's compose files up to v0.93.0) | busybox ash + busybox awk | report and payload run; a fresh 24.1 has no `part_log` until the first flush, check 4 then falls back to `system.parts`. By hand: `TRUNCATE` / `DROP ... SYNC SETTINGS max_table_size_to_drop = 0` and `APPLY DELETED MASK IN PARTITION ID` work (24.3 too for the first) |
 
 A clean server with nothing seeded (fresh container, default config) gets OK on
 all seven checks on 24.1, 24.8, 25.12 and 26.9.
@@ -674,7 +674,7 @@ all seven checks on 24.1, 24.8, 25.12 and 26.9.
 `--docker` is also tested offline by `tests/docker_offline.sh` (run by
 `tests/replay.sh`): a fake `docker` and `docker-compose`
 (`tests/fixtures/fake-docker/`) with hand-written containers (Langfuse's and
-SigNoz's compose services, Bitnami, lookalikes such as `clickhouse-keeper` and
+SigNoz's compose services and its Foundry install, Bitnami, lookalikes such as `clickhouse-keeper` and
 `clickhouse-backup`) that run every exec in the test's own shell. It covers
 `--docker auto` with Compose v2, v1 and by image, several containers,
 `docker inspect --type container`, the login from the container's env, no

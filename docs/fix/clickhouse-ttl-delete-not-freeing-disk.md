@@ -218,7 +218,7 @@ More on deleted rows in Langfuse: [the guide](../guide.md#why-do-deleted-rows-st
 [diskvet](https://github.com/Protemir/diskvet) is a free, open-source, read-only script. Its check 7
 lists partitions with deleted rows and unfinished mutations, and prints `APPLY DELETED MASK` where they are 10% of a table or more.
 In `lightweight_update` mode it counts the parts the `patch-` parts apply to, and prints the command twice with the plain id.
-Read `checks.sql` before you run it (SigNoz: `--docker signoz-clickhouse`):
+Read `checks.sql` before you run it (`--docker auto` finds SigNoz's ClickHouse too):
 
 ```sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh

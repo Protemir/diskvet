@@ -51,9 +51,12 @@ docker compose exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' < size.sql
 ```
 
-**SigNoz (docker compose).** The container is usually called
-`signoz-clickhouse` (check with `docker ps`). SigNoz's `users.xml` leaves the
-`default` user without a password:
+**SigNoz (Docker).** The container is `signoz-clickhouse` if you installed
+with the compose files from the SigNoz repo (up to v0.129.0), and
+`signoz-telemetrystore-clickhouse-0-0` with Foundry, SigNoz's Docker install
+since v0.130.0 (check with `docker ps`). Both leave the `default` user without
+a password. The commands below use `signoz-clickhouse`; with Foundry, put the
+other name in its place:
 
 ```sh
 docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact < size.sql
@@ -72,7 +75,7 @@ Open a client with write access:
 ```sh
 # Langfuse
 docker compose exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD"'
-# SigNoz
+# SigNoz (Foundry: signoz-telemetrystore-clickhouse-0-0)
 docker exec -it signoz-clickhouse clickhouse-client
 ```
 
@@ -428,7 +431,12 @@ curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.
 sh diskvet.sh report --docker auto > report.md
 ```
 
-For SigNoz, use `--docker signoz-clickhouse`.
+For SigNoz, run the same command: `--docker auto` finds its ClickHouse by the
+image (`clickhouse/clickhouse-server`), or by the service `clickhouse` in the
+folder of SigNoz's old `docker-compose.yaml`. With other ClickHouse containers
+on the machine, pass the name from `docker ps`:
+`--docker signoz-telemetrystore-clickhouse-0-0` (Foundry) or
+`--docker signoz-clickhouse` (old compose files).
 
 ClickHouse in Kubernetes works too, through `kubectl exec` into its pod:
 
@@ -499,6 +507,8 @@ SigNoz, ClickStack and others:
 - SigNoz #12050, 80+ GB of system logs: https://github.com/SigNoz/signoz/issues/12050
 - SigNoz v0.129.0 ClickHouse `config.xml` and `users.xml`: https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml, https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/users.xml
 - SigNoz v0.129.0 `docker-compose.yaml` (container `signoz-clickhouse`, `max-size: 50m`, `max-file: "3"`): https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml
+- SigNoz Docker install, Foundry since v0.130.0 (`docker ps` shows `signoz-telemetrystore-clickhouse-0-0`): https://signoz.io/docs/install/docker/, https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/README.md
+- Foundry v0.3.0: service and container `<name>-telemetrystore-clickhouse-<shard>-<replica>`, default image `clickhouse/clickhouse-server:25.12.5`, `default` user with `password: ""`: https://github.com/SigNoz/foundry/blob/v0.3.0/internal/casting/dockercomposecasting/templates/compose.yaml.gotmpl#L60-L61, https://github.com/SigNoz/foundry/blob/v0.3.0/api/v1alpha1/installation/telemetrystore.go#L43, https://github.com/SigNoz/foundry/blob/v0.3.0/docs/examples/docker/compose/pours/deployment/telemetrystore/clickhouse/config-0-0.yaml#L80-L87
 - ClickStack Helm chart PR #275: https://github.com/ClickHouse/ClickStack-helm-charts/pull/275
 - Sentry snuba #7311, `*_log_N` copies without TTL: https://github.com/getsentry/snuba/issues/7311
 - trigger.dev #4343, profile settings in config.d ignored: https://github.com/triggerdotdev/trigger.dev/issues/4343

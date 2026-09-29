@@ -242,7 +242,7 @@ ClickStack installs.</em></p>
 <a href="https://github.com/Protemir/diskvet">diskvet</a> is a free, open-source, read-only script. Its check 7
 lists partitions with deleted rows and unfinished mutations, and prints <code>APPLY DELETED MASK</code> where they are 10% of a table or more.
 In <code>lightweight_update</code> mode it counts the parts the <code>patch-</code> parts apply to, and prints the command twice with the plain id.
-Read <code>checks.sql</code> before you run it (SigNoz: <code>--docker signoz-clickhouse</code>):</p>
+Read <code>checks.sql</code> before you run it (<code>--docker auto</code> finds SigNoz's ClickHouse too):</p>
 <pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
 sh diskvet.sh report --docker auto &gt; report.md</code></pre>

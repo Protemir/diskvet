@@ -254,7 +254,7 @@ settings come from the issues and SigNoz's own files, not from a deploy.</p>
 read-only script. Its check 5 (<a href="https://github.com/Protemir/diskvet#what-it-checks">What it checks</a>)
 lists the partitions with the most parts next to each table's own limits: WARN
 from 300 parts, CRITICAL at the table's <code>parts_to_delay_insert</code>, plus delayed
-and rejected inserts. Read <code>checks.sql</code> first (SigNoz: <code>--docker signoz-clickhouse</code>;
+and rejected inserts. Read <code>checks.sql</code> first (<code>--docker auto</code> finds SigNoz's ClickHouse too;
 Kubernetes: <code>--k8s auto</code>):</p>
 <pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql

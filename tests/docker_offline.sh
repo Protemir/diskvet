@@ -61,6 +61,16 @@ EOF
 # SigNoz's compose next to Langfuse's: two ClickHouse servers
 { cat "$W/ps/langfuse"; printf '%s\n' "container 5f60718293a4 clickhouse/clickhouse-server:25.5.6 signoz-clickhouse running" \
     "container 60718293a4b5 signoz/zookeeper:3.7.1 signoz-zookeeper-1 running"; } >"$W/ps/two"
+# SigNoz's Foundry install (the containers of its example compose file, v0.3.0):
+# no service clickhouse; the Keeper and the exited one-shot jobs are not a server
+cat >"$W/ps/foundry" <<'EOF'
+container 718293a4b5c6 clickhouse/clickhouse-server:25.12.5 signoz-telemetrystore-clickhouse-0-0 running
+container 8293a4b5c6d9 clickhouse/clickhouse-keeper:25.12.5 signoz-telemetrykeeper-clickhousekeeper-0 running
+container 93a4b5c6d7ea clickhouse/clickhouse-server:25.12.5 signoz-telemetrystore-clickhouse-user-scripts exited
+container a4b5c6d7e8fb signoz/signoz-otel-collector:latest signoz-telemetrystore-migrator exited
+container b5c6d7e8f9a1 postgres:16 signoz-metastore-postgres-0 running
+container c6d7e8f9a0b2 signoz/signoz:latest signoz-signoz-0 running
+EOF
 # an image and a volume named clickhouse, but no container of that name
 { cat "$W/ps/langfuse"; printf '%s\n' "image clickhouse" "volume clickhouse"; } >"$W/ps/same-name"
 printf 'container %s clickhouse/clickhouse-server:25.12 langfuse-clickhouse-1 exited\n' "$lf" >"$W/ps/stopped"
@@ -207,6 +217,16 @@ refused "DFAKE_PS=two DFAKE_SERVICE=" 2 "diskvet: found 2 ClickHouse containers:
 # the compose service wins over the image search, even with two servers running
 dv "DFAKE_PS=two DFAKE_SERVICE=5f60718293a4" report --docker auto >"$W/r.md" 2>"$W/r.err"; rc=$?
 if [ "$rc" = 0 ] && [ ! -s "$W/r.err" ] && grep -qF " · container signoz-clickhouse" "$W/r.md"; then ok "two servers and a compose service: the compose one, no note"; else fail "two servers + compose: exit $rc: $(cat "$W/r.err")"; fi
+# Foundry: outside its folder (no compose file) and in pours/deployment (no service clickhouse)
+for e in "DFAKE_PS=foundry" "DFAKE_PS=foundry DFAKE_SERVICE="; do
+    dv "$e" report --docker auto >"$W/r.md" 2>"$W/r.err"; rc=$?
+    picked signoz-telemetrystore-clickhouse-0-0 clickhouse/clickhouse-server:25.12.5 >"$W/want"
+    if [ "$rc" = 0 ] && cmp -s "$W/want" "$W/r.err" && grep -qF " · container signoz-telemetrystore-clickhouse-0-0" "$W/r.md"; then
+        ok "SigNoz Foundry ($e): the server found by its image, with one note on stderr"
+    else
+        fail "SigNoz Foundry ($e): exit $rc: $(cat "$W/r.err")"
+    fi
+done
 
 echo "== the login inside the container (\$inner, as with --k8s)"
 bn=f9a0b1c2d3e4

@@ -43,7 +43,8 @@ How full is the disk? In the folder with Langfuse's `docker-compose.yml`:
 docker compose exec clickhouse df -h /var/lib/clickhouse /var/log/clickhouse-server
 ```
 
-SigNoz: `docker exec signoz-clickhouse df -h /var/lib/clickhouse`. On
+SigNoz: `docker exec signoz-clickhouse df -h /var/lib/clickhouse` (Foundry:
+`signoz-telemetrystore-clickhouse-0-0`). On
 Kubernetes each ClickHouse pod has its own volume and its own system logs, so
 run the checks and the fix in the pod whose volume is full
 ([two kinds of "disk full"](../recipes/kubernetes.md#two-kinds-of-disk-full)).

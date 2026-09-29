@@ -77,7 +77,7 @@ plus `--multiquery` (the 24.1 client needs it for a file with several queries):
 # Langfuse
 docker compose exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --multiquery --format PrettyCompact' < drop-limit.sql
-# SigNoz
+# SigNoz (Foundry: signoz-telemetrystore-clickhouse-0-0)
 docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --multiquery --format PrettyCompact < drop-limit.sql
 ```
 
@@ -233,7 +233,7 @@ read-only script. Its report prints the `TRUNCATE` and `DROP` commands for your
 big logs. For a table over or near the limit it adds the flag command, with the
 data path your server reports, and on 24.1 and newer the
 `SETTINGS max_table_size_to_drop = 0` form. Read `checks.sql` before you run it
-(SigNoz: `--docker signoz-clickhouse`):
+(`--docker auto` finds SigNoz's ClickHouse too):
 
 ```sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh

@@ -47,7 +47,7 @@ Run it read-only, like `size.sql` in the
 # Langfuse
 docker compose exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' < copies.sql
-# SigNoz
+# SigNoz (Foundry: signoz-telemetrystore-clickhouse-0-0)
 docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact < copies.sql
 ```
 
@@ -189,7 +189,7 @@ Not run: 23.12, 26.7, 26.8, a real SigNoz install, Kubernetes, a copy over
 [diskvet](https://github.com/Protemir/diskvet) is a free, open-source,
 read-only script. Its report lists the `_N` copies with their sizes and prints
 the `DROP` statements, with the flag for a copy over the drop limit. Read
-`checks.sql` before you run it (SigNoz: `--docker signoz-clickhouse`):
+`checks.sql` before you run it (`--docker auto` finds SigNoz's ClickHouse too):
 
 ```sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh

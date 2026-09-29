@@ -74,7 +74,8 @@ GROUP BY database, table
 ORDER BY sum(bytes_on_disk) DESC
 LIMIT 15;</code></pre>
 <p>Run it read-only. Langfuse: in the folder with its <code>docker-compose.yml</code>.
-SigNoz: the container is usually <code>signoz-clickhouse</code> (check with <code>docker ps</code>).</p>
+SigNoz: the container is <code>signoz-clickhouse</code> (old compose files) or
+<code>signoz-telemetrystore-clickhouse-0-0</code> (Foundry); check with <code>docker ps</code>.</p>
 <pre><code># Langfuse
 docker compose exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' &lt; size.sql
@@ -258,8 +259,8 @@ the two <code>curl</code> downloads (both URLs answer).</p>
 <p><a href="https://github.com/Protemir/diskvet">diskvet</a> is a free, open-source,
 read-only script. It runs the size and TTL checks and prints the <code>TRUNCATE</code>
 commands for the big logs, the TTL file and the <code>DROP</code> list for your tables.
-Read <code>checks.sql</code> before you run it (SigNoz:
-<code>--docker signoz-clickhouse</code>; Kubernetes: <code>--k8s auto</code>):</p>
+Read <code>checks.sql</code> before you run it (<code>--docker auto</code> finds SigNoz's
+ClickHouse too; Kubernetes: <code>--k8s auto</code>):</p>
 <pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
 sh diskvet.sh report --docker auto &gt; report.md</code></pre>

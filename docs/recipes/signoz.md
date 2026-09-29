@@ -1,4 +1,4 @@
-# SigNoz (self-hosted, docker compose)
+# SigNoz (self-hosted, Docker)
 
 SigNoz keeps traces, logs and metrics in ClickHouse databases `signoz_traces`,
 `signoz_logs`, `signoz_metrics` and a few more. The report treats these as
@@ -11,14 +11,20 @@ issue tracker and from tests on plain ClickHouse images.
 ## Run the check
 
 ```sh
-cd signoz/deploy/docker             # the folder with SigNoz's docker-compose.yaml
 sh diskvet.sh report --docker auto > report.md
 ```
 
-If `--docker auto` finds nothing or finds several containers, pass the name:
-`--docker signoz-clickhouse` (see `docker ps`). SigNoz images are Alpine-based
-(`clickhouse/clickhouse-server:<version>-alpine`); the script also works inside
-such a container with busybox `sh` and `awk`:
+`--docker auto` finds SigNoz's ClickHouse by its image
+(`clickhouse/clickhouse-server`), or by the service `clickhouse` when you run it
+in the folder of SigNoz's old `docker-compose.yaml` (`deploy/docker`, up to
+v0.129.0). If it finds nothing or several containers, pass the name from
+`docker ps`: `signoz-telemetrystore-clickhouse-0-0` with Foundry, SigNoz's
+Docker install since v0.130.0, or `signoz-clickhouse` with the old compose
+files. The commands below use `signoz-clickhouse`. The old compose files ran
+`clickhouse/clickhouse-server:24.1.2-alpine` up to v0.93.0 and `25.5.6` from
+v0.94.0; Foundry v0.3.0 runs `25.12.5`. The script also works inside the
+container with its own `sh` and `awk` (busybox in the `-alpine` image, dash and
+mawk in 25.12):
 
 ```sh
 docker cp diskvet.sh  signoz-clickhouse:/tmp/diskvet.sh
@@ -33,9 +39,14 @@ ClickHouse's own logs next to less than 500 MB of telemetry. Newer SigNoz
 installers set TTLs on system logs themselves, older installs don't: check 1
 tells you which case you have.
 
-SigNoz ships its **own** ClickHouse `config.xml` and mounts it into the
-container. Before you add the generated TTL file, look at how that config
-defines the system logs:
+This part is for the old compose files. Foundry writes its ClickHouse config
+as YAML (`pours/deployment/telemetrystore/clickhouse/config-0-0.yaml`), with a
+1-day TTL on the system logs in its example; how to change that file so the
+change stays with Foundry is not checked here.
+
+The old compose files ship SigNoz's **own** ClickHouse `config.xml` and mount
+it into the container. Before you add the generated TTL file, look at how that
+config defines the system logs:
 
 ```sh
 docker exec signoz-clickhouse sh -c 'grep -n -A3 "_log>" /etc/clickhouse-server/config.xml | grep -E "_log>|<engine>|<ttl>|<partition_by>"'

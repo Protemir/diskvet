@@ -27,7 +27,8 @@ LIMIT 15;
 ```
 
 Run it read-only. Langfuse: in the folder with its `docker-compose.yml`.
-SigNoz: the container is usually `signoz-clickhouse` (check with `docker ps`).
+SigNoz: the container is `signoz-clickhouse` (old compose files) or
+`signoz-telemetrystore-clickhouse-0-0` (Foundry); check with `docker ps`.
 
 ```sh
 # Langfuse
@@ -215,8 +216,8 @@ the two `curl` downloads (both URLs answer).
 [diskvet](https://github.com/Protemir/diskvet) is a free, open-source,
 read-only script. It runs the size and TTL checks and prints the `TRUNCATE`
 commands for the big logs, the TTL file and the `DROP` list for your tables.
-Read `checks.sql` before you run it (SigNoz:
-`--docker signoz-clickhouse`; Kubernetes: `--k8s auto`):
+Read `checks.sql` before you run it (`--docker auto` finds SigNoz's
+ClickHouse too; Kubernetes: `--k8s auto`):
 
 ```sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh

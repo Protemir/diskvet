@@ -89,7 +89,7 @@ ORDER BY total_bytes DESC;</code></pre>
 <pre><code># Langfuse
 docker compose exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' &lt; copies.sql
-# SigNoz
+# SigNoz (Foundry: signoz-telemetrystore-clickhouse-0-0)
 docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact &lt; copies.sql</code></pre>
 <p>No rows means no copies. An empty <code>ttl</code> means the copy keeps its rows forever.</p>
 <p>Right after a restart, some copies may not exist yet. By default a log makes
@@ -237,7 +237,7 @@ a gzipped old log file. The SigNoz commands ran on plain containers.</li>
 <p><a href="https://github.com/Protemir/diskvet">diskvet</a> is a free, open-source,
 read-only script. Its report lists the <code>_N</code> copies with their sizes and prints
 the <code>DROP</code> statements, with the flag for a copy over the drop limit. Read
-<code>checks.sql</code> before you run it (SigNoz: <code>--docker signoz-clickhouse</code>):</p>
+<code>checks.sql</code> before you run it (<code>--docker auto</code> finds SigNoz's ClickHouse too):</p>
 <pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
 sh diskvet.sh report --docker auto &gt; report.md</code></pre>
