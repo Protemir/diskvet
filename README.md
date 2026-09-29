@@ -59,8 +59,11 @@ sh diskvet.sh report --docker auto > report.md
 ```
 
 `--docker auto` finds the container itself: the compose service `clickhouse` in
-the current folder, otherwise the one running container whose image is
-`clickhouse-server`. It runs `clickhouse-client` inside that container with
+the current folder (Docker Compose v2, or `docker-compose` v1), otherwise the one
+running container whose image is `clickhouse-server`, `clickhouse` or
+`bitnami*/clickhouse` (from any registry). When it goes by the image, it says on
+stderr which container it picked; with several ClickHouse containers it runs
+nothing and lists their names: pass `--docker NAME`. It runs `clickhouse-client` inside that container with
 `docker exec -i`, so you need neither a ClickHouse client on the host nor an
 open port. When you don't pass `--user`, it uses the container's own
 `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` (Langfuse's compose sets them), and the
@@ -141,6 +144,14 @@ profile, or constraints on `max_threads` and the like), it runs with
 `--readonly=1` alone and the user's own limits apply. If the server refuses
 read-only mode for this user altogether, the script stops without running
 anything (exit code 3). The first lines of the report say which case it was.
+
+With `--docker`, every docker call (`exec`, `inspect`, `ps`, `compose ps`) has
+the same time limit as `kubectl exec`: 120 s, or `DISKVET_EXEC_TIMEOUT` seconds
+(5 or more). Exit codes: 2 when diskvet can't find the container (or docker is
+missing or not answering), 3 when it can't run the queries, 4 when the
+connection was lost partway: the report is still printed, and the checks after
+that show `NOT_RUN` ("skipped: …"). With `--print-payload`, codes 2 and 3 print
+one `"status": "ch_unreachable"` line.
 
 **B. With a dedicated user, for security reviews.** Only this guarantees that
 product data can't be read. Since ClickHouse ~24.1 reading `system.*` needs
@@ -290,8 +301,8 @@ context:
   temporary folder under `/tmp` with `--print-payload`, as with `--docker`.
 - Every call to the API server has a time limit: 30 s for `get`, 120 s for
   each `exec` (set `DISKVET_EXEC_TIMEOUT` to other seconds, 5 or more). After
-  one exec timed out, diskvet makes no more calls, and the checks left show
-  `NOT_RUN`.
+  one exec timed out, diskvet makes no more calls, the checks left show
+  `NOT_RUN`, and it exits with code 4.
 
 ### How diskvet logs in
 
@@ -432,7 +443,10 @@ named pod (`--k8s NS/POD`) needs only `get` on `pods`, plus `pods/exec`.
 
 diskvet stops with exit code 2 when it can't find or name the pod, and with 3
 when it can't run the queries; with `--print-payload`, stdout then holds one
-`"status": "ch_unreachable"` line.
+`"status": "ch_unreachable"` line. If the connection is lost partway (an exec
+timed out, or the pod or ClickHouse went away), the report or payload is still
+printed, the checks after that show `NOT_RUN` ("skipped: …"), and the exit code
+is 4.
 
 - **`Error from server (Forbidden)` ... `"pods/exec"`**: your kubectl user may
   not exec into pods in that namespace. Add the Role above, or use
@@ -641,16 +655,29 @@ all seven checks on 24.1, 24.8, 25.12 and 26.9.
 | `tests/k8s_offline.sh` (run by `tests/replay.sh`) | a fake `kubectl` (`tests/fixtures/fake-kubectl/`) that lists pods recorded on that kind cluster (the ClickHouse operator, Bitnami 8.x and 9.x, Altinity, plain, kube-system) and hand-written ones (SigNoz, Sentry, trigger.dev, Langfuse 1.x with 3 replicas, sidecars, jobs), and runs every exec, login script included, in the test's own shell; a fake clickhouse-client answers from the fixtures | dash + mawk, busybox ash + busybox awk | finding the pod and every refusal, argument checks, each login branch, the exact kubectl argv with the pinned context, timeouts, error hints, the Kubernetes report text of every chart, payload privacy, `--save-raw` and `--replay` |
 | `tests/k8s_shim.sh` (run by `tests/run.sh`) | the same fake `kubectl`, whose exec becomes `docker exec -u 101:101` into the test's ClickHouse container | Git Bash | a real ClickHouse 25.12: the same statuses as `--docker`, logins with `CLICKHOUSE_USER` and with Bitnami's admin variables (password in env and in a file), only read-only SELECTs in `query_log`, names hashed in the container, no salt or password in any kubectl command line, and the printed `kubectl exec` flag line works as uid 101 |
 
+`--docker` is also tested offline by `tests/docker_offline.sh` (run by
+`tests/replay.sh`): a fake `docker` and `docker-compose`
+(`tests/fixtures/fake-docker/`) with hand-written containers (Langfuse's and
+SigNoz's compose services, Bitnami, lookalikes such as `clickhouse-keeper` and
+`clickhouse-backup`) that run every exec in the test's own shell. It covers
+`--docker auto` with Compose v2, v1 and by image, several containers,
+`docker inspect --type container`, the login from the container's env, no
+docker, a stopped daemon, the time limit on every docker call, a lost
+connection (exit 4) and payload privacy, under dash + mawk, busybox ash +
+busybox awk, and macOS /bin/sh + BSD awk.
+
 Not tested yet: a real Langfuse, SigNoz or ClickStack install (the kind job
 runs the ClickHouse part of the Langfuse chart only, and its own Altinity
 installation), a pod without a PersistentVolumeClaim, managed clusters (EKS, GKE, AKS) and other kubectl
 versions, `kubectl.exe` on Windows, replicated clusters, disks on object
-storage (the script skips remote disks), macOS.
+storage (the script skips remote disks), and macOS beyond the offline tests
+(the `macos` CI job runs them with /bin/sh and the system's BSD awk, sed and
+date).
 
 ## Requirements
 
-- POSIX `sh` (dash, busybox ash, bash), `awk` (gawk, mawk, busybox awk), `sed`,
-  `od`, `date`. No `jq`, no Python.
+- POSIX `sh` (dash, busybox ash, bash, macOS /bin/sh), `awk` (gawk, mawk,
+  busybox awk, BSD awk), `sed`, `od`, `date`. No `jq`, no Python.
 - `docker` for `--docker`, `kubectl` for `--k8s` (with the
   [permissions](#permissions) above), or `clickhouse-client` /
   `clickhouse client` on the machine for `--host`.
@@ -662,8 +689,9 @@ storage (the script skips remote disks), macOS.
 ## Development
 
 ```sh
-sh tests/replay.sh              # offline: fixtures, SQL safety, payload privacy, --k8s
+sh tests/replay.sh              # offline: fixtures, SQL safety, payload privacy, --k8s, --docker
 sh tests/k8s_offline.sh         # offline: --k8s with the fake kubectl (replay.sh runs it too)
+sh tests/docker_offline.sh      # offline: --docker with the fake docker (replay.sh runs it too)
 sh tests/check_sql.sh           # checks.sql: SELECT from the allowed system tables only
 sh tests/run.sh                 # Docker: ClickHouse 24.8, 25.12, latest (~2 min each)
 sh tests/auto.sh                # Docker: --docker auto with a Langfuse-like compose file

@@ -22,6 +22,7 @@
 #                       refused_once=N (only the Nth exec)
 #   DFAKE_CTRPATH=P     PATH inside the container (default: this PATH)
 #   DFAKE_CRLF=1        docker's own output lines end in CR LF
+#   DFAKE_PODMAN=1      inspect as Podman's docker: the name without the /, its own error text
 set -u
 # (one printf for all the arguments: a process per argument is slow in Git Bash)
 if [ $# -gt 0 ]; then printf '[%s] ' "$@" | tr '\n' '~'; fi >>"${DLOG:?}"
@@ -67,10 +68,12 @@ inspect)
     line=$(ctr "$6")
     if [ -z "$line" ]; then
         echo | cr
-        printf 'Error response from daemon: No such container: %s\n' "$6" | cr >&2
+        if [ "${DFAKE_PODMAN:-0}" = 1 ]; then printf 'Error: no such container %s\n' "$6" | cr >&2
+        else printf 'Error response from daemon: No such container: %s\n' "$6" | cr >&2; fi
         exit 1
     fi
-    printf '/%s\n' "$(echo "$line" | awk '{ print $3 }')" | cr
+    if [ "${DFAKE_PODMAN:-0}" = 1 ]; then pre=""; else pre=/; fi
+    printf '%s%s\n' "$pre" "$(echo "$line" | awk '{ print $3 }')" | cr
     ;;
 exec)
     shift

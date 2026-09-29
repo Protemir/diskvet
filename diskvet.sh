@@ -20,7 +20,7 @@
 #   sh diskvet.sh --help
 
 NAME=diskvet
-VERSION=0.3.0
+VERSION=0.3.1
 BETA_URL='https://github.com/Protemir/diskvet#early-access'
 
 # Git Bash on Windows rewrites arguments that look like /paths before they
@@ -650,8 +650,9 @@ else
         if [ "$docker_arg" = auto ]; then find_container; else container=$docker_arg; fi
         # --type container: an image, volume or network of that name is not it
         if dk "$tmp/name" "$tmp/name.err" inspect --type container --format '{{.Name}}' "$container"; then
-            container_name=$(tr -d '\r' <"$tmp/name" | sed -n '1s|^/||p')
-        elif [ -n "$timed_out" ] || ! grep -q 'No such' "$tmp/name.err"; then
+            # Docker prints /name, Podman's docker prints name
+            container_name=$(tr -d '\r' <"$tmp/name" | sed -e '1!d' -e 's|^/||')
+        elif [ -n "$timed_out" ] || ! grep -qi 'no such' "$tmp/name.err"; then
             die_unreachable "cannot inspect container '$container': $(err_line "$tmp/name.err")"
         fi
         [ -n "$container_name" ] || die_unreachable "container '$container' not found (docker inspect failed)"

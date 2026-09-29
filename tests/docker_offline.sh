@@ -71,7 +71,7 @@ DLOG=$W/dlog
 CLOG=$W/clog
 KFAKE_STREAM=$PWD/tests/fixtures/alex.tsv
 export PATH DLOG CLOG KFAKE_STREAM
-unset DFAKE_PS DFAKE_COMPOSE DFAKE_SERVICE DFAKE_DAEMON DFAKE_HANG DFAKE_EXEC DFAKE_CTRPATH DFAKE_CRLF \
+unset DFAKE_PS DFAKE_COMPOSE DFAKE_SERVICE DFAKE_DAEMON DFAKE_HANG DFAKE_EXEC DFAKE_CTRPATH DFAKE_CRLF DFAKE_PODMAN \
     KFAKE_AUTH KFAKE_PROFILE_RO DISKVET_EXEC_TIMEOUT
 if [ "$(command -v docker)" != "$W/bin/docker" ] || [ "$(command -v docker-compose)" != "$W/bin/docker-compose" ]; then
     echo "docker_offline: the fake docker and docker-compose are not first on PATH ($(command -v docker), $(command -v docker-compose)); stopping"
@@ -254,6 +254,9 @@ dv "" report --docker "$lf" >"$W/r.md" 2>/dev/null; rc_is $? 0 "--docker ID: exi
 has "$W/r.md" " · container langfuse-clickhouse-1" "--docker ID: the report has the name"
 refused "DFAKE_PS=same-name" 2 "diskvet: container 'clickhouse' not found (docker inspect failed)" --docker clickhouse
 has "$DLOG" "[inspect] [--type] [container] [--format] [{{.Name}}] [clickhouse] " "... docker inspect --type container: the image and the volume named clickhouse don't count"
+dv "DFAKE_PODMAN=1" report --docker langfuse-clickhouse-1 >"$W/r.md" 2>/dev/null; rc_is $? 0 "Podman's docker (the name without /): exit 0"
+has "$W/r.md" " · container langfuse-clickhouse-1" "... and the report has the name"
+refused "DFAKE_PS=same-name DFAKE_PODMAN=1" 2 "diskvet: container 'clickhouse' not found (docker inspect failed)" --docker clickhouse
 refused "DFAKE_DAEMON=down" 2 "diskvet: cannot inspect container 'langfuse-clickhouse-1': Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" --docker langfuse-clickhouse-1
 refused "DFAKE_DAEMON=down" 2 "diskvet: cannot list containers: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" --docker auto
 dv "DFAKE_PS=stopped" report --docker langfuse-clickhouse-1 >"$W/r.md" 2>"$W/r.err"; rc=$?
