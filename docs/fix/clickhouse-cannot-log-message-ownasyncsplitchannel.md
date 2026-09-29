@@ -1,5 +1,5 @@
 # ClickHouse®: Cannot log message in OwnAsyncSplitChannel channel
-<!-- description: ClickHouse can't write its log file, floods stderr and Docker's json log, and burns CPU. Why it happens and how to stop it. -->
+<!-- description: ClickHouse® can't write its log file, floods stderr and Docker's json log, and burns CPU. Why it happens and how to stop it. -->
 
 `docker logs` shows this message again and again, each time with a stack trace
 (the file can also be `clickhouse-server.err.log`):

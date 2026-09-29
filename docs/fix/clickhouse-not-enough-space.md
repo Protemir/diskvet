@@ -1,5 +1,5 @@
 # ClickHouse® Code 243: Cannot reserve 1.00 MiB, not enough space
-<!-- description: ClickHouse says Cannot reserve 1.00 MiB, not enough space (NOT_ENOUGH_SPACE). At 100% even TRUNCATE fails. What still works and how to free space. -->
+<!-- description: ClickHouse® says Cannot reserve 1.00 MiB, not enough space (NOT_ENOUGH_SPACE). At 100% even TRUNCATE fails. What still works and how to free space. -->
 
 Every insert into ClickHouse® fails with this error:
 

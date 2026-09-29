@@ -1,5 +1,5 @@
 # ClickHouse® system.trace_log and text_log are huge: how to fix it
-<!-- description: Why system.trace_log and text_log fill the disk in self-hosted ClickHouse, how to empty them now and add a TTL so they stay small. -->
+<!-- description: Why system.trace_log and text_log fill the disk in self-hosted ClickHouse®, how to empty them now and add a TTL so they stay small. -->
 
 Your Langfuse, SigNoz or ClickStack disk keeps filling, but your own data is
 small. In the size list, `system.trace_log` or `system.text_log` is at the top.
@@ -99,10 +99,10 @@ restarts ClickHouse. The TTL takes effect only at a restart.
       - ./clickhouse-ttl.xml:/etc/clickhouse-server/config.d/clickhouse-ttl.xml:ro
 ```
 
-- **`opentelemetry_span_log` takes its TTL inside `<engine>`**, with the `ORDER BY` your server uses: `SELECT engine_full FROM system.tables WHERE database = 'system' AND name = 'opentelemetry_span_log'` shows it. The file above has the `ORDER BY` of the stock config in 25.5 and newer. On 24.8 and older, and with SigNoz's config, end it with `, trace_id)`. A plain `<ttl>` there stops ClickHouse with Code 36 ([Code 36 page](clickhouse-system-log-ttl-inside-engine.md)).
+- **`opentelemetry_span_log` takes its TTL inside `<engine>`**, with the `ORDER BY` your server uses: `SELECT engine_full FROM system.tables WHERE database = 'system' AND name = 'opentelemetry_span_log'` shows it. The file above has the `ORDER BY` of the stock config in 25.3 and newer ([PR #75907](https://github.com/ClickHouse/ClickHouse/pull/75907)). On 25.2 and older (all of 24.x), and with SigNoz's and ClickStack's own `config.xml`, end it with `, trace_id)`. A plain `<ttl>` there stops ClickHouse with Code 36 ([Code 36 page](clickhouse-system-log-ttl-inside-engine.md)).
 - **No `text_log` before 24.8 or on SigNoz.** The stock config turns it on from 24.8, and SigNoz's own [`config.xml`](https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml) doesn't. Delete that line there, because a section in the config turns a log on: on 24.3, this line alone turned `text_log` on, with messages down to `Trace`.
 - **SigNoz:** also add `processors_profile_log`, which has no TTL in that file.
-- **More logs have no TTL:** `error_log`; on 24.8 also `processors_profile_log` (the stock config keeps it 30 days from 25.5 on); on 25.12 and 26.9 also `query_metric_log` and `background_schedule_pool_log`. If they are big on your server, add them the same way.
+- **More logs have no TTL:** `error_log`; on 24.8 also `processors_profile_log` (the stock config keeps it 30 days from 25.2 on, [PR #66139](https://github.com/ClickHouse/ClickHouse/pull/66139)); on 25.12 and 26.9 also `query_metric_log` and `background_schedule_pool_log`. If they are big on your server, add them the same way.
 - **Keep the mount line.** If you replace `docker-compose.yml` with a new copy, for example when you update Langfuse, add the line again. Without the file, the next restart moves each log, TTL and all, to a `_0` copy and creates it again without a TTL.
 - **Kubernetes:** the TTL goes into your Helm chart's values, not into the pod. Files written inside a container, outside its volumes, are gone when it restarts ([Kubernetes docs](https://kubernetes.io/docs/concepts/storage/volumes/)). The [Kubernetes recipe](../recipes/kubernetes.md#charts-at-a-glance) has the values key for each chart.
 
@@ -189,7 +189,8 @@ gone. The `remove="1"` drop with `SYNC` on 24.8 and 26.9. On 24.3.18.7: no `text
 `TRUNCATE` of it fails with Code 60, and the TTL file turns it on. The
 `opentelemetry_span_log` `ORDER BY` and the `processors_profile_log` TTL are
 from the stock `config.xml` of 24.1.2.5, 24.3.18.7, 24.8, 25.5.11.15,
-25.8.5.17, 25.12 and 26.9. Code 359 with `max_table_size_to_drop` lowered to
+25.8.5.17, 25.12 and 26.9, and of the source tags 24.10.1 to 25.5.1 (read, not
+run). Code 359 with `max_table_size_to_drop` lowered to
 1 byte. The compose commands and the diskvet 0.3.1 report on 25.12 with a
 compose file like Langfuse's (Compose v5.1.0). The SigNoz command with another
 container name. The global profiler is off on 25.5.11.15 and 25.8.5.17. Not
@@ -201,6 +202,7 @@ the two `curl` downloads (both URLs answer).
 - System tables overview (unlimited growth): https://clickhouse.com/docs/reference/system-tables/overview
 - Default `config.xml` (log TTLs, `text_log` level, `total_memory_profiler_step`): https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml
 - `text_log` on by default since 24.8: https://github.com/ClickHouse/ClickHouse/pull/67428, https://github.com/ClickHouse/ClickHouse/blob/master/docs/changelogs/v24.8.1.2684-lts.md
+- `processors_profile_log` keeps 30 days since 25.2: https://github.com/ClickHouse/ClickHouse/pull/66139; `trace_id` left the `opentelemetry_span_log` `ORDER BY` in 25.3: https://github.com/ClickHouse/ClickHouse/pull/75907
 - The rename of a changed log: https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/SystemLog.cpp
 - DROP and `SYNC`, the drop delay: https://clickhouse.com/docs/reference/statements/drop, https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec
 - Files in a container are lost when it restarts: https://kubernetes.io/docs/concepts/storage/volumes/

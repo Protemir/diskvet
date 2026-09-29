@@ -256,12 +256,13 @@ ${body.trim()}
   return { slug, title, desc };
 });
 
-// The list of the fix pages. The titles lose their leading "ClickHouse®": the heading has it.
+// The list of the fix pages. The titles lose their leading "ClickHouse®" and the
+// descriptions their ®: the heading has it.
 {
   const pagePath = '/fix/';
   const title = 'Common ClickHouse® disk errors and fixes';
   const list = fixes.map(f => `      <li><a href="${f.slug}/">${attr(f.title.replace(/^ClickHouse®:?\s+/, ''))}</a>
-        <p>${attr(f.desc)}</p></li>`).join('\n');
+        <p>${attr(f.desc.replace(/ClickHouse®/g, 'ClickHouse'))}</p></li>`).join('\n');
   const page = layout({
     l: EN, pagePath, title: `${title} · diskvet`, ogTitle: title,
     desc: 'One page per ClickHouse® disk error or symptom, such as Code 243, 252 or 359: a read-only check, the fix, and the versions it was tested on.',

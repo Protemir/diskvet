@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ClickHouse® system.trace_log and text_log are huge: how to fix it · diskvet</title>
-  <meta name="description" content="Why system.trace_log and text_log fill the disk in self-hosted ClickHouse, how to empty them now and add a TTL so they stay small.">
+  <meta name="description" content="Why system.trace_log and text_log fill the disk in self-hosted ClickHouse®, how to empty them now and add a TTL so they stay small.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="../../style.css">
   <meta property="og:title" content="ClickHouse® system.trace_log and text_log are huge: how to fix it">
-  <meta property="og:description" content="Why system.trace_log and text_log fill the disk in self-hosted ClickHouse, how to empty them now and add a TTL so they stay small.">
+  <meta property="og:description" content="Why system.trace_log and text_log fill the disk in self-hosted ClickHouse®, how to empty them now and add a TTL so they stay small.">
   <meta property="og:url" content="https://diskvet.dev/fix/clickhouse-trace-log-huge/">
   <meta property="og:type" content="article">
   <meta property="og:locale" content="en_US">
@@ -130,13 +130,13 @@ restarts ClickHouse. The TTL takes effect only at a restart.</p>
       - ./clickhouse-ttl.xml:/etc/clickhouse-server/config.d/clickhouse-ttl.xml:ro</code></pre>
 <ul>
 <li>
-<strong><code>opentelemetry_span_log</code> takes its TTL inside <code>&lt;engine&gt;</code></strong>, with the <code>ORDER BY</code> your server uses: <code>SELECT engine_full FROM system.tables WHERE database = 'system' AND name = 'opentelemetry_span_log'</code> shows it. The file above has the <code>ORDER BY</code> of the stock config in 25.5 and newer. On 24.8 and older, and with SigNoz's config, end it with <code>, trace_id)</code>. A plain <code>&lt;ttl&gt;</code> there stops ClickHouse with Code 36 (<a href="../clickhouse-system-log-ttl-inside-engine/">Code 36 page</a>).</li>
+<strong><code>opentelemetry_span_log</code> takes its TTL inside <code>&lt;engine&gt;</code></strong>, with the <code>ORDER BY</code> your server uses: <code>SELECT engine_full FROM system.tables WHERE database = 'system' AND name = 'opentelemetry_span_log'</code> shows it. The file above has the <code>ORDER BY</code> of the stock config in 25.3 and newer (<a href="https://github.com/ClickHouse/ClickHouse/pull/75907">PR #75907</a>). On 25.2 and older (all of 24.x), and with SigNoz's and ClickStack's own <code>config.xml</code>, end it with <code>, trace_id)</code>. A plain <code>&lt;ttl&gt;</code> there stops ClickHouse with Code 36 (<a href="../clickhouse-system-log-ttl-inside-engine/">Code 36 page</a>).</li>
 <li>
 <strong>No <code>text_log</code> before 24.8 or on SigNoz.</strong> The stock config turns it on from 24.8, and SigNoz's own <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml"><code>config.xml</code></a> doesn't. Delete that line there, because a section in the config turns a log on: on 24.3, this line alone turned <code>text_log</code> on, with messages down to <code>Trace</code>.</li>
 <li>
 <strong>SigNoz:</strong> also add <code>processors_profile_log</code>, which has no TTL in that file.</li>
 <li>
-<strong>More logs have no TTL:</strong> <code>error_log</code>; on 24.8 also <code>processors_profile_log</code> (the stock config keeps it 30 days from 25.5 on); on 25.12 and 26.9 also <code>query_metric_log</code> and <code>background_schedule_pool_log</code>. If they are big on your server, add them the same way.</li>
+<strong>More logs have no TTL:</strong> <code>error_log</code>; on 24.8 also <code>processors_profile_log</code> (the stock config keeps it 30 days from 25.2 on, <a href="https://github.com/ClickHouse/ClickHouse/pull/66139">PR #66139</a>); on 25.12 and 26.9 also <code>query_metric_log</code> and <code>background_schedule_pool_log</code>. If they are big on your server, add them the same way.</li>
 <li>
 <strong>Keep the mount line.</strong> If you replace <code>docker-compose.yml</code> with a new copy, for example when you update Langfuse, add the line again. Without the file, the next restart moves each log, TTL and all, to a <code>_0</code> copy and creates it again without a TTL.</li>
 <li>
@@ -222,7 +222,8 @@ gone. The <code>remove="1"</code> drop with <code>SYNC</code> on 24.8 and 26.9. 
 <code>TRUNCATE</code> of it fails with Code 60, and the TTL file turns it on. The
 <code>opentelemetry_span_log</code> <code>ORDER BY</code> and the <code>processors_profile_log</code> TTL are
 from the stock <code>config.xml</code> of 24.1.2.5, 24.3.18.7, 24.8, 25.5.11.15,
-25.8.5.17, 25.12 and 26.9. Code 359 with <code>max_table_size_to_drop</code> lowered to
+25.8.5.17, 25.12 and 26.9, and of the source tags 24.10.1 to 25.5.1 (read, not
+run). Code 359 with <code>max_table_size_to_drop</code> lowered to
 1 byte. The compose commands and the diskvet 0.3.1 report on 25.12 with a
 compose file like Langfuse's (Compose v5.1.0). The SigNoz command with another
 container name. The global profiler is off on 25.5.11.15 and 25.8.5.17. Not
@@ -236,6 +237,9 @@ the two <code>curl</code> downloads (both URLs answer).</p>
 </li>
 <li>
 <code>text_log</code> on by default since 24.8: <a href="https://github.com/ClickHouse/ClickHouse/pull/67428">https://github.com/ClickHouse/ClickHouse/pull/67428</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/master/docs/changelogs/v24.8.1.2684-lts.md">https://github.com/ClickHouse/ClickHouse/blob/master/docs/changelogs/v24.8.1.2684-lts.md</a>
+</li>
+<li>
+<code>processors_profile_log</code> keeps 30 days since 25.2: <a href="https://github.com/ClickHouse/ClickHouse/pull/66139">https://github.com/ClickHouse/ClickHouse/pull/66139</a>; <code>trace_id</code> left the <code>opentelemetry_span_log</code> <code>ORDER BY</code> in 25.3: <a href="https://github.com/ClickHouse/ClickHouse/pull/75907">https://github.com/ClickHouse/ClickHouse/pull/75907</a>
 </li>
 <li>The rename of a changed log: <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/SystemLog.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/SystemLog.cpp</a>
 </li>

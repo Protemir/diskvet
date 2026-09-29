@@ -1,5 +1,5 @@
 # ClickHouse® Code 36: TTL parameters should be specified directly inside 'engine'
-<!-- description: ClickHouse exits with Code 36 after you add a TTL for opentelemetry_span_log. Put the TTL inside <engine> or switch the log off. -->
+<!-- description: ClickHouse® exits with Code 36 after you add a TTL for opentelemetry_span_log. Put the TTL inside <engine> or switch the log off. -->
 
 You added a `config.d` file with TTLs for the system logs, restarted, and now
 ClickHouse® doesn't start. Its error log says:

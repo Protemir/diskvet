@@ -1,5 +1,5 @@
 # ClickHouse® TTL not deleting old data, or DELETE not freeing disk
-<!-- description: Rows are expired or deleted but ClickHouse disk stays full. Why TTL and lightweight DELETE wait for merges, and how to force them. -->
+<!-- description: Rows are expired or deleted but ClickHouse® disk stays full. Why TTL and lightweight DELETE wait for merges, and how to force them. -->
 
 You set a TTL or a retention period, or you ran `DELETE FROM`, but the disk
 stays full. There is no error: ClickHouse® is waiting for a merge that may not
