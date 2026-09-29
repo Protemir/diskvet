@@ -70,6 +70,7 @@ container 93a4b5c6d7ea clickhouse/clickhouse-server:25.12.5 signoz-telemetrystor
 container a4b5c6d7e8fb signoz/signoz-otel-collector:latest signoz-telemetrystore-migrator exited
 container b5c6d7e8f9a1 postgres:16 signoz-metastore-postgres-0 running
 container c6d7e8f9a0b2 signoz/signoz:latest signoz-signoz-0 running
+container d7e8f9a0b1c4 signoz/signoz-otel-collector:latest signoz-ingester-1 running
 EOF
 # an image and a volume named clickhouse, but no container of that name
 { cat "$W/ps/langfuse"; printf '%s\n' "image clickhouse" "volume clickhouse"; } >"$W/ps/same-name"
