@@ -200,4 +200,4 @@ KILL MUTATION WHERE database = 'default' AND table = 'scores' AND mutation_id = 
 
 ---
 This is a snapshot. It can't tell when the disk will really run out, or whether your text_log is normal for a Langfuse of your size.
-Want an email before the disk fills? Join early access (free beta): https://github.com/Protemir/diskvet#early-access
+Want an email before the disk fills? It's planned and will be free; say you'd use it here: https://github.com/Protemir/diskvet#early-access

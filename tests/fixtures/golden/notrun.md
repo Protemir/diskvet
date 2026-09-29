@@ -47,4 +47,4 @@ Could not run: Code: 497. diskvet: Not enough privileges. (ACCESS_DENIED)
 
 ---
 This is a snapshot. It can't tell when the disk will really run out, or whether your trace_log is normal for a ClickHouse of your size.
-Want an email before the disk fills? Join early access (free beta): https://github.com/Protemir/diskvet#early-access
+Want an email before the disk fills? It's planned and will be free; say you'd use it here: https://github.com/Protemir/diskvet#early-access

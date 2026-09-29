@@ -131,7 +131,7 @@ has "$r" "Not in table parts: 30.7 GiB" "space not in parts"
 has "$r" "95% full in ~12 days" "rough forecast"
 has "$r" "APPLY DELETED MASK IN PARTITION ID '202608';" "APPLY DELETED MASK with the real partition"
 has "$r" "Before upgrading ClickHouse to 26.8+, update Langfuse first" "Langfuse version heads-up"
-has "$r" "Join early access (free beta)" "beta line"
+has "$r" "It's planned and will be free; say you'd use it here:" "beta line"
 has "$r" "github.com/Protemir/diskvet#early-access" "beta URL"
 
 p=$out/alex.json
@@ -179,7 +179,9 @@ echo "== golden files: docker and local renders are byte-identical to v0.2.2"
 # tests/fixtures/golden/ holds what v0.2.2 printed for these fixtures, frozen
 # before the Kubernetes work: the reports without their date line, the payload
 # without sent_at. New report text must not reach docker or local reports, so
-# only the version number may differ. Never regenerate them to make this pass.
+# only the version number may differ. Never regenerate them to make this pass;
+# a line changed on purpose is changed by hand in each (so far only the last
+# one, the early-access line, reworded after 0.3.0).
 ver=$(sed -n 's/^VERSION=//p' diskvet.sh | sed 's/\./\\./g')
 same() {  # NAME FILE: FILE, minus the date line and sent_at, with this version written as 0.2.2, is golden/NAME
     g=tests/fixtures/golden/$1

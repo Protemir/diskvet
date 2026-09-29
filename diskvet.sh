@@ -1568,7 +1568,7 @@ function report(   i, s, notes) {
     }
     print "---"
     print "This is a snapshot. It can't tell when the disk will really run out, or whether your " ((top_log != "") ? top_log : "trace_log") " is normal for " ((product == "other") ? "a ClickHouse" : "a " plabel) " of your size."
-    print "Want an email before the disk fills? Join early access (free beta): " beta_url
+    print "Want an email before the disk fills? It's planned and will be free; say you'd use it here: " beta_url
 }
 
 # ---------------------------------------------------------------- payload
