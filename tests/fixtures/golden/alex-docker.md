@@ -85,9 +85,9 @@ Without Docker: copy it to `/etc/clickhouse-server/config.d/` and run `sudo syst
 On restart ClickHouse renames every changed log to `<name>_0` (its old rows stay there) and starts a new table with the TTL. Do Fix A first so these copies are small, then run this report again: it lists the copies to drop.
 If ClickHouse does not start and its log says `TTL parameters should be specified directly inside 'engine'`, your config defines that log with `<engine>`: put the TTL inside that `<engine>` (like opentelemetry_span_log above) or remove the log from this file.
 
-**Fix C: drop old copies.** Irreversible, safe for your data: ClickHouse no longer writes to these tables.
+**Fix C: drop old copies.** Irreversible, safe for your data: ClickHouse no longer writes to these tables. `SYNC` gives the space back at once (without it, 8 minutes later).
 ```sql
-DROP TABLE system.trace_log_0;
+DROP TABLE system.trace_log_0 SYNC;
 ```
 
 **TTL is set but old rows are still there.** ClickHouse removes expired rows during merges (by default at most every 4 h, merge_with_ttl_timeout).

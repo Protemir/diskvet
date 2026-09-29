@@ -60,18 +60,18 @@ Without Docker: copy it to `/etc/clickhouse-server/config.d/` and run `sudo syst
 On restart ClickHouse renames every changed log to `<name>_0` (its old rows stay there) and starts a new table with the TTL. Do Fix A first so these copies are small, then run this report again: it lists the copies to drop.
 If ClickHouse does not start and its log says `TTL parameters should be specified directly inside 'engine'`, your config defines that log with `<engine>`: put the TTL inside that `<engine>` (like opentelemetry_span_log above) or remove the log from this file.
 
-**Fix C: drop old copies.** Irreversible, safe for your data: ClickHouse no longer writes to these tables.
+**Fix C: drop old copies.** Irreversible, safe for your data: ClickHouse no longer writes to these tables. `SYNC` gives the space back at once (without it, 8 minutes later).
 ```sql
-DROP TABLE system.query_log_2;
+DROP TABLE system.query_log_2 SYNC;
 ```
 system.query_log_1 (60.0 GiB) is over the drop limit (max_table_size_to_drop = 50 GB, the default: this user can't read system.server_settings), so ClickHouse refuses a plain DROP. Create the one-time flag right before it (the first DROP that needs the flag uses it up; create it again before the next big table):
 ```sh
 docker exec langfuse-clickhouse-1 sh -c 'touch /data/clickhouse/flags/force_drop_table && chmod 666 /data/clickhouse/flags/force_drop_table'
 ```
 ```sql
-DROP TABLE system.query_log_1;
+DROP TABLE system.query_log_1 SYNC;
 ```
-Or, on ClickHouse 24.1 and newer, without the flag: `DROP TABLE system.query_log_1 SETTINGS max_table_size_to_drop = 0;`
+Or, on ClickHouse 24.1 and newer, without the flag: `DROP TABLE system.query_log_1 SYNC SETTINGS max_table_size_to_drop = 0;`
 
 ## 2. Disk space not in ClickHouse table parts: CRITICAL
 

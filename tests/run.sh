@@ -351,15 +351,18 @@ EOF
     nd=$(grep -c . "$F-drops.sql")
     if [ "$nd" = "$copies" ]; then ok "report lists all $nd copies for DROP, each once"; else fail "report lists $nd DROPs for $copies copies"; fi
     # trace_log_0 is over the 10 MiB drop limit: the report gives it the flag and the SETTINGS variant
-    grep -o 'DROP TABLE system\.[A-Za-z0-9_]* SETTINGS max_table_size_to_drop = 0;' "$R2" >"$F-drops-big.sql"
-    if grep -qx 'DROP TABLE system.trace_log_0 SETTINGS max_table_size_to_drop = 0;' "$F-drops-big.sql"; then ok "big copy trace_log_0 gets the flag and the SETTINGS variant"; else fail "no SETTINGS variant for trace_log_0: $(cat "$F-drops-big.sql")"; fi
-    x=$(chq "DROP TABLE system.trace_log_0")
+    grep -o 'DROP TABLE system\.[A-Za-z0-9_]* SYNC SETTINGS max_table_size_to_drop = 0;' "$R2" >"$F-drops-big.sql"
+    if grep -qx 'DROP TABLE system.trace_log_0 SYNC SETTINGS max_table_size_to_drop = 0;' "$F-drops-big.sql"; then ok "big copy trace_log_0 gets the flag and the SETTINGS variant"; else fail "no SETTINGS variant for trace_log_0: $(cat "$F-drops-big.sql")"; fi
+    x=$(chq "DROP TABLE system.trace_log_0 SYNC")
     case $x in *"Code: 359"*) ok "plain DROP of the big copy is refused (Code 359)" ;; *) fail "plain DROP of the big copy was not refused: $x" ;; esac
     sed 's/ SETTINGS max_table_size_to_drop = 0;$/;/' "$F-drops-big.sql" >"$F-drops-big-plain.sql"
     grep -vxF -f "$F-drops-big-plain.sql" "$F-drops.sql" | cat - "$F-drops-big.sql" >"$F-drops-run.sql"
     ch --multiquery <"$F-drops-run.sql" >"$F-drops.txt" 2>&1 || fail "DROP: $(tail -2 "$F-drops.txt")"
     left=$(chq "SELECT count() FROM system.tables WHERE database = 'system' AND match(name, '_log_[0-9]+\$')")
     if [ "$left" = 0 ]; then ok "DROP commands from the report removed every copy"; else fail "$left copies left"; fi
+    # SYNC: no copy waits out database_atomic_delay_before_drop_table_sec (480 s) in store/
+    waiting=$(chq "SELECT count() FROM system.dropped_tables WHERE database = 'system'")
+    if [ "$waiting" = 0 ]; then ok "DROP ... SYNC left nothing in system.dropped_tables"; else fail "$waiting dropped copies wait in system.dropped_tables"; fi
     # Checks 5, 6, 7: run the SQL the first report printed (merges started again by the restart anyway)
     for n in 5 6 7; do
         sql_of_section "$R" "$n" >"$F-fix-$n.sql"

@@ -125,7 +125,7 @@ hasnt "$r" "TRUNCATE TABLE system.opentelemetry_span_log" "no TRUNCATE for a 1 M
 has "$r" "<ttl>event_date + INTERVAL 7 DAY DELETE</ttl>" "TTL config generated"
 has "$r" "ORDER BY (finish_date, finish_time_us) TTL finish_date + INTERVAL 7 DAY DELETE</engine>" "opentelemetry_span_log TTL inside <engine> with finish_date"
 hasnt "$r" "<processors_profile_log>" "no TTL config for a log that has TTL"
-has "$r" "DROP TABLE system.trace_log_0;" "old copy listed for DROP"
+has "$r" "DROP TABLE system.trace_log_0 SYNC;" "old copy listed for DROP ... SYNC"
 has "$r" "TTL 30 d, but the oldest row is 45 d old" "TTL present but old rows warned"
 has "$r" "Not in table parts: 30.7 GiB" "space not in parts"
 has "$r" "95% full in ~12 days" "rough forecast"
@@ -147,8 +147,8 @@ r=$out/worst.md
 sh diskvet.sh report --replay tests/fixtures/worst.tsv >"$r" 2>/dev/null
 statuses "$r" "CRITICAL CRITICAL CRITICAL CRITICAL CRITICAL CRITICAL CRITICAL"
 has "$r" "50 GB, the default: this user can't read system.server_settings" "unknown drop limit is said out loud"
-has "$r" "DROP TABLE system.query_log_1;" "old copy _1"
-has "$r" "DROP TABLE system.query_log_2;" "old copy _2"
+has "$r" "DROP TABLE system.query_log_1 SYNC;" "old copy _1"
+has "$r" "DROP TABLE system.query_log_2 SYNC;" "old copy _2"
 has "$r" "sudo sh -c 'du -h /var/lib/docker/containers/*/*-json.log | sort -h | tail -5'" "Docker log sizes command"
 has "$r" "max-size: \"50m\"" "Docker log rotation"
 has "$r" "SYSTEM START MERGES default.events_full;" "start merges"
@@ -214,8 +214,9 @@ echo "== golden files: docker and local renders are byte-identical to v0.2.2"
 # without sent_at. New report text must not reach docker or local reports, so
 # only the version number may differ. Never regenerate them to make this pass;
 # a line changed on purpose is changed by hand in each (so far the last one,
-# the early-access line, reworded after 0.3.0, and check 7's Langfuse cleaner
-# line after 0.3.1: the cleaner looks only at patch parts).
+# the early-access line, reworded after 0.3.0; after 0.3.1 check 7's Langfuse
+# cleaner line (the cleaner looks only at patch parts) and Fix C, whose DROP
+# lines got SYNC).
 ver=$(sed -n 's/^VERSION=//p' diskvet.sh | sed 's/\./\\./g')
 same() {  # NAME FILE: FILE, minus the date line and sent_at, with this version written as 0.2.2, is golden/NAME
     g=tests/fixtures/golden/$1

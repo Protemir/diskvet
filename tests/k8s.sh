@@ -758,7 +758,7 @@ after_fixb() {  # T NAME USER
     report "$2-fixb" "$1" "$3" --k8s "$_n/$_p"
     fix_steps "$F-$2-fixb.md" 1 '**Fix C:' >"$W/fixc"
     while IFS= read -r lg; do
-        if grep -q "DROP TABLE system\.${lg}_0;" "$W/fixc"; then ok "$1: Fix C lists the old copy system.${lg}_0"; else fail "$1: no system.${lg}_0 in Fix C"; fi
+        if grep -q "DROP TABLE system\.${lg}_0 SYNC;" "$W/fixc"; then ok "$1: Fix C lists the old copy system.${lg}_0"; else fail "$1: no system.${lg}_0 in Fix C"; fi
     done <"$F-$2-fixb.logs"
     if run_fix "$1" "$F-$2-fixb.md" 1 '**Fix C:'; then ok "$1: Fix C ran as printed"; else fail "$1: Fix C: $(tail -4 "$F-$2-fixb.md.fix.txt" | oneline)"; fi
     report "$2-fixc" "$1" "$3" --k8s "$_n/$_p"

@@ -978,7 +978,11 @@ function limit_text(   s) {
 }
 
 # SQL (and the one-time flag when needed) to TRUNCATE or DROP one table.
-function drop_block(verb, fqname, bytes,   s) {
+# DROP gets SYNC: system is an Atomic database, where a plain DROP leaves the
+# data on disk for database_atomic_delay_before_drop_table_sec (480 s).
+# SYNC goes before SETTINGS (after it: Code 62). TRUNCATE frees at once.
+function drop_block(verb, fqname, bytes,   s, sy) {
+    sy = (verb == "DROP") ? " SYNC" : ""
     if (drop_limit > 0 && bytes > 0.95 * drop_limit) {
         if (bytes > drop_limit) {
             s = fqname " (" hs(bytes) ") is over the drop limit (max_table_size_to_drop = " limit_text() ")"
@@ -990,9 +994,9 @@ function drop_block(verb, fqname, bytes,   s) {
         s = s " Create the one-time flag right before it"
         s = s " (the first " verb " that needs the flag uses it up; create it again before the next big table):\n"
         s = s "```sh\n" shcmd("touch " flag_path " && chmod 666 " flag_path) "\n```\n"
-        s = s "```sql\n" verb " TABLE " fqname ";\n```\n"
+        s = s "```sql\n" verb " TABLE " fqname sy ";\n```\n"
         if (vmaj == 0 || vmaj >= 24)
-            s = s "Or, on ClickHouse 24.1 and newer, without the flag: `" verb " TABLE " fqname " SETTINGS max_table_size_to_drop = 0;`\n"
+            s = s "Or, on ClickHouse 24.1 and newer, without the flag: `" verb " TABLE " fqname sy " SETTINGS max_table_size_to_drop = 0;`\n"
         return s
     }
     return ""
@@ -1168,7 +1172,7 @@ function check1(   i, f, name, is_old, has_ttl, tdays, b, rows, od, dcol, pexpr,
             rs = (b >= GiB) ? "WARN" : "INFO"
             # a copy over the drop limit gets its own block with the flag, not a plain DROP
             if (drop_limit > 0 && b > 0.95 * drop_limit) dropbig = dropbig drop_block("DROP", "system." name, b)
-            else drops = drops "DROP TABLE system." name ";\n"
+            else drops = drops "DROP TABLE system." name " SYNC;\n"
         } else if (!has_ttl) {
             nottl_n++; nottl_b += b
             if (b >= 10 * GiB || p >= 15) rs = "CRITICAL"
@@ -1250,7 +1254,7 @@ function check1(   i, f, name, is_old, has_ttl, tdays, b, rows, od, dcol, pexpr,
         s = s " your config defines that log with `<engine>`: put the TTL inside that `<engine>` (like opentelemetry_span_log above) or remove the log from this file.\n"
     }
     if (drops != "" || dropbig != "") {
-        s = s "\n**Fix C: drop old copies.** Irreversible, safe for your data: ClickHouse no longer writes to these tables.\n"
+        s = s "\n**Fix C: drop old copies.** Irreversible, safe for your data: ClickHouse no longer writes to these tables. `SYNC` gives the space back at once (without it, 8 minutes later).\n"
         if (drops != "") s = s "```sql\n" drops "```\n"
         s = s dropbig
     }

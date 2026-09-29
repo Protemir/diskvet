@@ -258,8 +258,7 @@ the two <code>curl</code> downloads (both URLs answer).</p>
 <p><a href="https://github.com/Protemir/diskvet">diskvet</a> is a free, open-source,
 read-only script. It runs the size and TTL checks and prints the <code>TRUNCATE</code>
 commands for the big logs, the TTL file and the <code>DROP</code> list for your tables.
-Its <code>DROP</code> lines have no <code>SYNC</code>: add it after the table name to get the space
-back at once. Read <code>checks.sql</code> before you run it (SigNoz:
+Read <code>checks.sql</code> before you run it (SigNoz:
 <code>--docker signoz-clickhouse</code>; Kubernetes: <code>--k8s auto</code>):</p>
 <pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql

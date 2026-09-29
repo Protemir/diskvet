@@ -589,13 +589,20 @@ These are the traps the report handles for you. Each was checked on ClickHouse
   is refused; the report shows the flag already from 95% of the limit. On
   ClickHouse 24.1 and newer this also works without the flag (tested on 24.1,
   24.3, 24.8, 25.12, 26.9):
-  `TRUNCATE TABLE system.trace_log SETTINGS max_table_size_to_drop = 0`, and the
-  same `SETTINGS` for `DROP TABLE`.
+  `TRUNCATE TABLE system.trace_log SETTINGS max_table_size_to_drop = 0`, and
+  `DROP TABLE system.trace_log_0 SYNC SETTINGS max_table_size_to_drop = 0` for a
+  copy (`SYNC` goes before `SETTINGS`).
 - **A TTL change creates `*_log_N` copies.** `<ttl>` in `config.d` needs a
   restart (`SYSTEM RELOAD CONFIG` is not enough). On restart ClickHouse renames
   the old table to `trace_log_0` (then `_1`, ...) with all its rows and starts
   a new one. So truncate first, restart second, drop the copies third. The
   report lists the copies from `system.tables`, not from a fixed list.
+- **A plain `DROP` frees the space 8 minutes later.** `system` is an Atomic
+  database: after `DROP TABLE` without `SYNC` the data stays in `store/` for
+  `database_atomic_delay_before_drop_table_sec` (480 s), and
+  `system.dropped_tables` lists it. The report's `DROP` lines end in `SYNC`,
+  which deletes at once; `SYNC` goes before `SETTINGS` (after it: Code 62).
+  `TRUNCATE` frees the space at once without it.
 - **`opentelemetry_span_log` is special.** The default server config defines it
   with `<engine>`. A plain `<ttl>` for it stops ClickHouse from starting:
   `If 'engine' is specified for system table, TTL parameters should be specified
@@ -651,7 +658,7 @@ These are the traps the report handles for you. Each was checked on ClickHouse
 | 25.12.11.4 | `clickhouse/clickhouse-server:25.12` | Git Bash, dash + mawk, busybox ash + busybox awk | full `tests/run.sh` |
 | 26.9.1.1629 | `clickhouse/clickhouse-server:latest` | Git Bash, dash + mawk, busybox ash + busybox awk | full `tests/run.sh` |
 | 24.8.14.39 | `clickhouse/clickhouse-server:24.8-alpine` | busybox ash + busybox awk | report and payload run, no seeded problems |
-| 24.1.2.5 | `clickhouse/clickhouse-server:24.1.2-alpine` (SigNoz's) | busybox ash + busybox awk | report and payload run; a fresh 24.1 has no `part_log` until the first flush, check 4 then falls back to `system.parts`. By hand: `TRUNCATE` / `DROP ... SETTINGS max_table_size_to_drop = 0` and `APPLY DELETED MASK IN PARTITION ID` work (24.3 too for the first) |
+| 24.1.2.5 | `clickhouse/clickhouse-server:24.1.2-alpine` (SigNoz's) | busybox ash + busybox awk | report and payload run; a fresh 24.1 has no `part_log` until the first flush, check 4 then falls back to `system.parts`. By hand: `TRUNCATE` / `DROP ... SYNC SETTINGS max_table_size_to_drop = 0` and `APPLY DELETED MASK IN PARTITION ID` work (24.3 too for the first) |
 
 A clean server with nothing seeded (fresh container, default config) gets OK on
 all seven checks on 24.1, 24.8, 25.12 and 26.9.
