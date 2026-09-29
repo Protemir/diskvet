@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Source of docs/og.png, the link preview image (1200x630). After editing, render it
+     with rsvg-convert and the DejaVu fonts, for example in an alpine:3 container with
+     the packages librsvg and font-dejavu, from the repository root:
+     rsvg-convert -w 1200 -h 630 tools/og.svg -o docs/og.png -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#fbfbf9"/>
+  <rect width="1200" height="10" fill="#1f5fbf"/>
+
+  <!-- The site's icon and the wordmark -->
+  <g transform="translate(80 68) scale(4.5)">
+    <rect width="16" height="16" rx="3" fill="#1f5fbf"/>
+    <rect x="3" y="9" width="2" height="4" fill="#ffffff"/>
+    <rect x="7" y="6" width="2" height="7" fill="#ffffff"/>
+    <rect x="11" y="3" width="2" height="10" fill="#ffffff"/>
+  </g>
+  <text x="176" y="126" font-family="DejaVu Sans Mono" font-weight="bold" font-size="64" fill="#1c1d1f">diskvet</text>
+
+  <!-- Value proposition -->
+  <g font-family="DejaVu Sans" font-weight="bold" font-size="42" fill="#1c1d1f">
+    <text x="80" y="238">What fills the disk of the ClickHouse®</text>
+    <text x="80" y="292">in self-hosted Langfuse, SigNoz and</text>
+    <text x="80" y="346">ClickStack <tspan fill="#1f5fbf">— and the fix</tspan></text>
+  </g>
+
+  <!-- Terminal line -->
+  <rect x="80" y="396" width="760" height="84" rx="12" fill="#1b1d20"/>
+  <text x="112" y="449" font-family="DejaVu Sans Mono" font-size="32" fill="#e7e7e4"><tspan fill="#5fcf8e">$</tspan> sh diskvet.sh report --docker auto</text>
+
+  <!-- Footer -->
+  <text x="80" y="566" font-family="DejaVu Sans" font-size="28" fill="#5d6066">free · open source · read-only · <tspan fill="#1f5fbf" font-weight="bold">diskvet.dev</tspan></text>
+</svg>

@@ -71,7 +71,9 @@ for (const l of LANGS) {
 
   const htmlOpen = pick(/<html[^>]*>/)[0];
   const icon = pick(/<link rel="icon"[^>]*>/)[0];
-  const locale = (landing.match(/<meta property="og:locale"[^>]*>/) || [''])[0];
+  // Locale and link preview image (docs/og.png, from tools/og.svg): the same as the landing page's.
+  const shared = [...landing.matchAll(/<meta (?:property="og:(?:locale|image(?::(?:width|height|alt))?)"|name="twitter:card")[^>]*>/g)].map(m => m[0]);
+  if (!shared.some(t => t.startsWith('<meta property="og:image"'))) throw new Error(`${l.code}: og:image not found in landing page`);
   const skip = pick(/<a class="skip"[^>]*>[\s\S]*?<\/a>/)[0];
   const footer = pick(/<footer class="site-footer">[\s\S]*?<\/footer>/)[0];
   const navOpen = pick(/<nav aria-label="[^"]*">/)[0];
@@ -111,7 +113,7 @@ ${htmlOpen}
   <meta property="og:description" content="${attr(desc)}">
   <meta property="og:url" content="${url}">
   <meta property="og:type" content="article">
-${locale ? '  ' + locale + '\n' : ''}  <link rel="canonical" href="${url}">
+${shared.map(t => '  ' + t + '\n').join('')}  <link rel="canonical" href="${url}">
 ${alternates}
 </head>
 <body>
