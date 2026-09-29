@@ -340,8 +340,18 @@ th { background: var(--surface-2); font-weight: 600; }
 }
 .site-footer a { color: var(--muted); }
 
+/* Phones: the logo and the language menu share the first row, the main menu
+   gets the second, instead of three rows. */
+@media (max-width: 640px) {
+  .site-header .wrap { gap: 8px 16px; }
+  .header-right { display: contents; }
+  .site-header .langs { order: 1; margin-left: auto; }
+  .site-header nav:not(.langs) { order: 2; flex-basis: 100%; }
+  .site-header nav:not(.langs) ul { gap: 4px 16px; }
+}
+
 @media (max-width: 480px) {
   body { font-size: 0.97rem; }
   .card { padding: 16px; }
-  th, td { padding: 6px 8px; }
+  th, td { padding: 6px 8px; -webkit-hyphens: auto; hyphens: auto; }
 }
