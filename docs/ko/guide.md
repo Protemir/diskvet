@@ -100,7 +100,7 @@ docker compose exec clickhouse sh -c 'touch /var/lib/clickhouse/flags/force_drop
 
 ClickHouse는 자체 진단 정보를 `system` 데이터베이스의 테이블(`query_log`, `trace_log`, `text_log`, `metric_log` 등)에 기록합니다. [공식 문서](https://clickhouse.com/docs/reference/system-tables/overview)에도 "By default, table growth is unlimited."(기본적으로 테이블 크기 증가에는 제한이 없습니다)라고 분명히 적혀 있습니다.
 
-최근 버전의 [기본 설정](https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml)도 일부 작은 로그에만 TTL을 지정하고(25.9부터 `processors_profile_log`는 30일간 보관), 큰 로그에는 지정하지 않습니다. 큰 로그가 빠르게 커지는 원인은 다음 두 가지 기본 설정입니다.
+최근 버전의 [기본 설정](https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml)도 일부 작은 로그에만 TTL을 지정하고(25.2부터 `processors_profile_log`는 30일간 보관), 큰 로그에는 지정하지 않습니다. 큰 로그가 빠르게 커지는 원인은 다음 두 가지 기본 설정입니다.
 
 - 쿼리 프로파일러(query profiler)가 켜져 있어, 실행 중인 쿼리의 스택 샘플을 `trace_log`에 기록합니다.
 - `text_log`는 서버 로그를 `trace` 레벨로 저장합니다.

@@ -124,7 +124,7 @@ TRUNCATE TABLE system.text_log SETTINGS max_table_size_to_drop = 0;</code></pre>
 <p>现在空间已经释放出来了，但日志表马上又会开始增长。第 4 节解决这个问题，第 3 节解释为什么会这样。</p>
 <h2 id="3-为什么-trace_log-和-text_log-这么大">3. 为什么 trace_log 和 text_log 这么大？</h2>
 <p>ClickHouse 会把自己的诊断信息写进 <code>system</code> 数据库中的表：<code>query_log</code>、<code>trace_log</code>、<code>text_log</code>、<code>metric_log</code> 等。<a href="https://clickhouse.com/docs/reference/system-tables/overview">文档</a>说得很直白：“By default, table growth is unlimited.”（默认情况下，表会无限增长。）</p>
-<p>较新的<a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">默认配置</a>只给少数几个小的日志表设置了 TTL（从 25.9 开始，<code>processors_profile_log</code> 保留 30 天），大的日志表都没有。有两个默认设置让这些大表增长得很快：</p>
+<p>较新的<a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">默认配置</a>只给少数几个小的日志表设置了 TTL（从 25.2 开始，<code>processors_profile_log</code> 保留 30 天），大的日志表都没有。有两个默认设置让这些大表增长得很快：</p>
 <ul>
 <li>查询分析器（query profiler）默认开启，会把正在运行的查询的堆栈采样写入 <code>trace_log</code>；</li>
 <li>

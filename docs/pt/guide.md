@@ -133,7 +133,7 @@ diz com todas as letras: “By default, table growth is unlimited.” (Por padr�
 o crescimento da tabela é ilimitado.)
 
 As [configurações padrão](https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml)
-recentes definem um TTL só para alguns logs pequenos (desde a 25.9, o
+recentes definem um TTL só para alguns logs pequenos (desde a 25.2, o
 `processors_profile_log` guarda 30 dias), não para os grandes. Dois valores
 padrão fazem os grandes crescerem rápido:
 

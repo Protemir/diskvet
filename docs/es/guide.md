@@ -134,7 +134,7 @@ crecimiento de las tablas es ilimitado).
 
 La [configuración por defecto](https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml)
 de las versiones recientes define un TTL solo para algunas tablas de registro pequeñas (desde
-25.9, `processors_profile_log` conserva 30 días), no para las grandes. Dos
+25.2, `processors_profile_log` conserva 30 días), no para las grandes. Dos
 valores por defecto hacen que las grandes crezcan rápido:
 
 - el perfilador de consultas (query profiler) está activado y escribe en `trace_log` muestras de la pila de las consultas en ejecución;

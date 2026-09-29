@@ -131,7 +131,7 @@ ClickHouse пишет собственную диагностику в табл�
 рост таблиц не ограничен.
 
 Свежие [стандартные конфиги](https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml)
-задают TTL только нескольким небольшим логам (с 25.9 `processors_profile_log`
+задают TTL только нескольким небольшим логам (с 25.2 `processors_profile_log`
 хранится 30 дней), а большим — нет. Быстро растут они из-за двух настроек по
 умолчанию:
 

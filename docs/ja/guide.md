@@ -100,7 +100,7 @@ docker compose exec clickhouse sh -c 'touch /var/lib/clickhouse/flags/force_drop
 
 ClickHouse は、自身の診断情報を `system` データベースのテーブル（`query_log`、`trace_log`、`text_log`、`metric_log` など）に書き込みます。[ドキュメント](https://clickhouse.com/docs/reference/system-tables/overview)には「By default, table growth is unlimited.」（デフォルトでは、テーブルの増大に制限はありません）とはっきり書かれています。
 
-最近の[デフォルト設定](https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml)でも、TTL が設定されているのは一部の小さなログテーブルだけで（25.9 以降、`processors_profile_log` は 30 日間保持）、大きなログテーブルには設定されていません。大きなログテーブルが急速に増えるのは、次の 2 つのデフォルト設定が原因です。
+最近の[デフォルト設定](https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml)でも、TTL が設定されているのは一部の小さなログテーブルだけで（25.2 以降、`processors_profile_log` は 30 日間保持）、大きなログテーブルには設定されていません。大きなログテーブルが急速に増えるのは、次の 2 つのデフォルト設定が原因です。
 
 - クエリプロファイラー（query profiler）が有効になっており、実行中のクエリのスタックサンプルを `trace_log` に書き込みます。
 - `text_log` は、サーバーログを `trace` レベルで保存します。

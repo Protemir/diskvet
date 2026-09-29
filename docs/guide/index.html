@@ -154,7 +154,7 @@ stops that. Section 3 explains why it happens.</p>
 <a href="https://clickhouse.com/docs/reference/system-tables/overview">documentation</a>
 says it plainly: "By default, table growth is unlimited."</p>
 <p>Recent <a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">default configs</a>
-set a TTL only for a few small logs (since 25.9, <code>processors_profile_log</code> keeps 30 days),
+set a TTL only for a few small logs (since 25.2, <code>processors_profile_log</code> keeps 30 days),
 not for the big ones. Two defaults make the big ones grow fast:</p>
 <ul>
 <li>the query profiler is on and writes stack samples of running queries into <code>trace_log</code>;</li>

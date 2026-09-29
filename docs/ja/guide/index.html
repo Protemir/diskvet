@@ -124,7 +124,7 @@ TRUNCATE TABLE system.text_log SETTINGS max_table_size_to_drop = 0;</code></pre>
 <p>これで容量は戻りましたが、ログテーブルはすぐにまた増え始めます。これを止める方法はセクション 4 で、増える理由はセクション 3 で説明します。</p>
 <h2 id="3-trace_log-と-text_log-はなぜこれほど大きくなるのか">3. trace_log と text_log はなぜこれほど大きくなるのか</h2>
 <p>ClickHouse は、自身の診断情報を <code>system</code> データベースのテーブル（<code>query_log</code>、<code>trace_log</code>、<code>text_log</code>、<code>metric_log</code> など）に書き込みます。<a href="https://clickhouse.com/docs/reference/system-tables/overview">ドキュメント</a>には「By default, table growth is unlimited.」（デフォルトでは、テーブルの増大に制限はありません）とはっきり書かれています。</p>
-<p>最近の<a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">デフォルト設定</a>でも、TTL が設定されているのは一部の小さなログテーブルだけで（25.9 以降、<code>processors_profile_log</code> は 30 日間保持）、大きなログテーブルには設定されていません。大きなログテーブルが急速に増えるのは、次の 2 つのデフォルト設定が原因です。</p>
+<p>最近の<a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">デフォルト設定</a>でも、TTL が設定されているのは一部の小さなログテーブルだけで（25.2 以降、<code>processors_profile_log</code> は 30 日間保持）、大きなログテーブルには設定されていません。大きなログテーブルが急速に増えるのは、次の 2 つのデフォルト設定が原因です。</p>
 <ul>
 <li>クエリプロファイラー（query profiler）が有効になっており、実行中のクエリのスタックサンプルを <code>trace_log</code> に書き込みます。</li>
 <li>

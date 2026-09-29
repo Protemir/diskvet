@@ -100,7 +100,7 @@ docker compose exec clickhouse sh -c 'touch /var/lib/clickhouse/flags/force_drop
 
 ClickHouse 会把自己的诊断信息写进 `system` 数据库中的表：`query_log`、`trace_log`、`text_log`、`metric_log` 等。[文档](https://clickhouse.com/docs/reference/system-tables/overview)说得很直白：“By default, table growth is unlimited.”（默认情况下，表会无限增长。）
 
-较新的[默认配置](https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml)只给少数几个小的日志表设置了 TTL（从 25.9 开始，`processors_profile_log` 保留 30 天），大的日志表都没有。有两个默认设置让这些大表增长得很快：
+较新的[默认配置](https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml)只给少数几个小的日志表设置了 TTL（从 25.2 开始，`processors_profile_log` 保留 30 天），大的日志表都没有。有两个默认设置让这些大表增长得很快：
 
 - 查询分析器（query profiler）默认开启，会把正在运行的查询的堆栈采样写入 `trace_log`；
 - `text_log` 以 `trace` 级别保存服务器日志。
