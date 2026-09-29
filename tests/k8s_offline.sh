@@ -116,56 +116,9 @@ nodocker() {  # FILE DESC: no Docker or host advice in a Kubernetes report
 official_target="dv-op|lf-langfuse-clickhouse-0-0-0|clickhouse-server|official|clickhouse-storage-volume-lf-langfuse-clickhouse-0-0-0|"
 
 echo "== diskvet.sh runs kubectl only through kc() and kx()"
-# The shell part of diskvet.sh as code only: no comments, no quoted strings, no
-# quoted here-documents (the report text is awk, after the render.awk line, and
-# only prints commands). $( ) and ` ` are code wherever they are, inside "..."
-# and unquoted here-documents too. A stack of frames: D "...", H an unquoted
-# here-document, C $( ), B ` `; sq is a '...' string.
-cat >"$W/calls.awk" <<'EOF'
-/^cat >"\$tmp\/render\.awk"/ { exit }
-hd != "" && $0 == hd { if (!hq) d--; hd = ""; next }
-hd != "" && hq { next }
-{
-    code = ""; s = $0
-    for (i = 1; i <= length(s); i++) {
-        c = substr(s, i, 1); top = st[d]
-        if (sq) { if (c == q) sq = 0; continue }
-        if (top == "D" || top == "H") {
-            if (c == "\\") { i++; continue }
-            if (top == "D" && c == "\"") { d--; continue }
-            if (c == "$" && substr(s, i + 1, 1) == "(") { st[++d] = "C"; pc[d] = 0; i++; code = code "$("; continue }
-            if (c == "`") { st[++d] = "B"; code = code c }
-            continue
-        }
-        if (c == q) { sq = 1; continue }
-        if (c == "\"") { st[++d] = "D"; continue }
-        if (c == "\\") { i++; continue }
-        if (c == "`") { if (top == "B") d--; else st[++d] = "B"; code = code c; continue }
-        if (c == "$" && substr(s, i + 1, 1) == "(") { st[++d] = "C"; pc[d] = 0; i++; code = code "$("; continue }
-        if (top == "C" && c == "(") pc[d]++
-        if (top == "C" && c == ")") { if (pc[d] == 0) { d--; code = code c; continue } pc[d]-- }
-        if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;(]/)) break
-        code = code c
-    }
-    if (index(code, "<<") && match(s, "<<-?[ ]*[\"" q "]?[A-Za-z_]+")) {
-        hd = substr(s, RSTART, RLENGTH); hq = (hd ~ "[\"" q "]"); gsub("[<\" " q "-]", "", hd)
-        if (!hq) st[++d] = "H"
-    }
-    if (s ~ /^kx\(\) \{/) inkx = 1
-    gsub(/command -v kubectl/, "", code)
-    if (code ~ /(^|[^A-Za-z0-9_.-])kubectl([^A-Za-z0-9_.-]|$)/) {
-        if (inkx || s ~ /^kc\(\) \{/) allowed++
-        else { print NR ": " s; bad++ }
-    }
-    if (inkx && s ~ /^}/) inkx = 0
-}
-END {
-    # a quote or a $( left open means this scan lost track: fail rather than pass
-    if (d != 0 || sq) print "the scan ended inside a quote or a $( ) (depth " d ")"
-    exit (bad || allowed != 2 || d != 0 || sq)
-}
-EOF
-calls() { awk -v q="'" -f "$W/calls.awk" "$1" >"$W/calls"; }
+# tests/calls.awk reads the shell part of diskvet.sh as code only (no comments,
+# strings or quoted here-documents) and names each kubectl call outside kc() and kx().
+calls() { awk -v q="'" -v cmd=kubectl -v fns='kc kx' -v want=2 -f tests/calls.awk "$1" >"$W/calls"; }
 if calls diskvet.sh; then
     ok "the only kubectl commands are in kc() and kx() (and the command -v check)"
 else
@@ -547,7 +500,7 @@ rc_is "$(execs)" 1 "a hanging exec: nothing after the probe"
 sleep 1
 noleft "no sleep left over (neither the watchdog's nor the hanging kubectl)" 'sleep 5' 'sleep 600'
 
-dv "KFAKE=one-official KFAKE_EXEC=hang_at=3 DISKVET_EXEC_TIMEOUT=5" report --k8s auto --save-raw "$W/raw" >"$W/r.md" 2>"$W/r.err"; rc_is $? 0 "hang_at=3: exit 0"
+dv "KFAKE=one-official KFAKE_EXEC=hang_at=3 DISKVET_EXEC_TIMEOUT=5" report --k8s auto --save-raw "$W/raw" >"$W/r.md" 2>"$W/r.err"; rc_is $? 4 "hang_at=3: exit 4 (the report is incomplete)"
 rc_is "$(execs)" 3 "hang_at=3: no exec after the 3rd"
 statuses "$W/r.md" "NOT_RUN NOT_RUN NOT_RUN NOT_RUN NOT_RUN NOT_RUN NOT_RUN" "hang_at=3 (the probe, passport, then drop_limit hangs): every check after it NOT_RUN"
 if awk -F '\t' '
@@ -562,7 +515,8 @@ else
     fail "hang_at=3: $(grep '^@@' "$W/raw" | cut -c1-100 | tr '\n' ' ')"
 fi
 has "$W/r.md" "Could not run: skipped: an earlier kubectl exec timed out" "hang_at=3: the report says why"
-dv "KFAKE=one-official KFAKE_EXEC=hang_at=6 DISKVET_EXEC_TIMEOUT=5" report --k8s auto >"$W/r.md" 2>"$W/r.err"; rc_is $? 0 "hang_at=6: exit 0"
+has "$W/r.err" "lost the connection partway: kubectl exec timed out after 5 s. The checks left are skipped, so this report is incomplete (exit code 4)." "hang_at=3: one note on stderr says so"
+dv "KFAKE=one-official KFAKE_EXEC=hang_at=6 DISKVET_EXEC_TIMEOUT=5" report --k8s auto >"$W/r.md" 2>"$W/r.err"; rc_is $? 4 "hang_at=6: exit 4"
 s1=$(status_of "$W/r.md" 1); s2=$(status_of "$W/r.md" 2); got=""
 for i in 3 4 5 6 7; do got="$got $(status_of "$W/r.md" "$i")"; done
 if [ -n "$s1" ] && [ "$s1" != NOT_RUN ] && [ -n "$s2" ] && [ "$s2" != NOT_RUN ] \

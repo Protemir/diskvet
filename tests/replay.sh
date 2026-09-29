@@ -233,6 +233,15 @@ else
     fail "tests/k8s_offline.sh stopped before its summary"
 fi
 
+echo "== --docker with a fake docker (tests/docker_offline.sh)"
+sh tests/docker_offline.sh | tee "$out/docker.txt"
+k=$(sed -n 's/^docker_offline: \([0-9][0-9]*\) passed, \([0-9][0-9]*\) failed$/\1 \2/p' "$out/docker.txt")
+if [ -n "$k" ]; then
+    PASS=$((PASS + ${k% *})); FAIL=$((FAIL + ${k#* }))
+else
+    fail "tests/docker_offline.sh stopped before its summary"
+fi
+
 echo
 echo "replay: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

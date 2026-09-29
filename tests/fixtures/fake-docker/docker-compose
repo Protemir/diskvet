@@ -1,0 +1,27 @@
+#!/bin/sh
+# Fake docker-compose (Compose v1) for the offline tests, next to the fake
+# docker: it answers only when DFAKE_COMPOSE=v1, and otherwise acts as if it
+# were not installed, so a real docker-compose further down PATH is never run.
+# The same $DLOG, $DFAKE_SERVICE, $DFAKE_DAEMON and DFAKE_HANG=compose as the fake docker.
+set -u
+if [ $# -gt 0 ]; then printf '[docker-compose] '; printf '[%s] ' "$@" | tr '\n' '~'; fi >>"${DLOG:?}"
+printf '\n' >>"$DLOG"
+if [ "${DFAKE_COMPOSE:-v2}" != v1 ]; then
+    echo "docker-compose: not installed (fake)" >&2
+    exit 127
+fi
+case "$#:$*" in
+    "1:version") echo "docker-compose version 1.29.2, build 5becea4c"; exit 0 ;;
+    "3:ps -q clickhouse") ;;
+    *) printf 'FAKE: docker-compose: only version and ps -q clickhouse are allowed: %s\n' "$*" | tee -a "$DLOG.bad" >&2; exit 99 ;;
+esac
+if [ "${DFAKE_HANG:-}" = compose ]; then exec sleep 600; fi
+if [ "${DFAKE_DAEMON:-up}" = down ]; then
+    echo "ERROR: Couldn't connect to Docker daemon at http+docker://localhost - is it running?" >&2
+    exit 1
+fi
+if [ -z "${DFAKE_SERVICE+x}" ]; then
+    echo "ERROR: Can't find a suitable configuration file in this directory or any parent. Are you in the right directory?" >&2
+    exit 1
+fi
+if [ -n "$DFAKE_SERVICE" ]; then printf '%s\n' "$DFAKE_SERVICE"; fi

@@ -73,6 +73,7 @@ running=$(docker ps --format '{{.Image}}' | tr -d '\r' | grep -c 'clickhouse-ser
 if [ "$running" = 1 ]; then
     sh diskvet.sh report --docker auto >"$OUT/auto-report-image.md" 2>"$OUT/auto-report-image.err"
     has "$OUT/auto-report-image.md" "container $name" "without a compose file: found the container by image"
+    has "$OUT/auto-report-image.err" "so diskvet picked container $name by its image (clickhouse/clickhouse-server:" "... and one note on stderr names it"
 else
     echo "  skip  $running clickhouse-server containers are running; the by-image fallback needs exactly one"
 fi
@@ -85,6 +86,8 @@ if [ "$(docker ps --format '{{.Image}}' | tr -d '\r' | grep -c 'clickhouse-serve
     if [ $rc -eq 2 ] && grep -q "no running ClickHouse container found" "$OUT/auto-none.err"; then ok "nothing running: clear error, exit 2"; else fail "nothing running: rc=$rc $(cat "$OUT/auto-none.err")"; fi
     sh diskvet.sh --print-payload --docker no-such-container >"$OUT/auto-none.json" 2>/dev/null
     if grep -q '"status": "ch_unreachable"' "$OUT/auto-none.json"; then ok "--print-payload for a missing container prints status ch_unreachable"; else fail "no ch_unreachable payload: $(cat "$OUT/auto-none.json")"; fi
+    sh diskvet.sh --print-payload --docker auto >"$OUT/auto-none-auto.json" 2>/dev/null
+    if [ "$(grep -c . "$OUT/auto-none-auto.json")" = 1 ] && grep -q '"status": "ch_unreachable"' "$OUT/auto-none-auto.json"; then ok "--print-payload --docker auto with nothing running prints status ch_unreachable"; else fail "--docker auto, nothing running: $(cat "$OUT/auto-none-auto.json")"; fi
 fi
 
 echo "auto: $PASS passed, $FAIL failed"

@@ -38,8 +38,9 @@ Usage:
   sh diskvet.sh push                                         not available yet
 
 Connection (pick one):
-  --docker auto               find the ClickHouse container (docker compose service
-                              "clickhouse" in this folder, else by image clickhouse-server)
+  --docker auto               find the ClickHouse container: docker compose service
+                              "clickhouse" in this folder, else the one running container
+                              with image clickhouse-server, clickhouse or bitnami*/clickhouse
   --docker NAME               run clickhouse-client inside this container (docker exec -i)
   --k8s auto                  find the one running ClickHouse pod (kubectl; all namespaces,
                               or -n NS); refuses if there are several
@@ -199,16 +200,19 @@ if [ -n "$k8s_set" ]; then
             ''|*[!A-Za-z0-9._:/@-]*) die "--context: diskvet prints this name into the fix commands, so it accepts only letters, digits and . _ : / @ -" ;;
         esac
     fi
-    case $kto in
-        ''|*[!0-9]*) die "DISKVET_EXEC_TIMEOUT must be a whole number of seconds (5 or more)" ;;
-    esac
-    [ "$kto" -ge 5 ] 2>/dev/null || die "DISKVET_EXEC_TIMEOUT must be a whole number of seconds (5 or more)"
     if [ -n "$replay" ] && { [ -n "$kauto" ] || [ -z "$kns" ]; }; then
         die "with --replay, name the pod: --k8s NAMESPACE/POD"
     fi
     transport=k8s
 elif [ -n "$kns_set$kctr_set$kctx_typed" ]; then
     die "-n/--namespace, --container and --context only work with --k8s"
+fi
+# the time limit of every docker call and kubectl exec (bounded)
+if [ "$transport" != local ]; then
+    case $kto in
+        ''|*[!0-9]*) die "DISKVET_EXEC_TIMEOUT must be a whole number of seconds (5 or more)" ;;
+    esac
+    [ "$kto" -ge 5 ] 2>/dev/null || die "DISKVET_EXEC_TIMEOUT must be a whole number of seconds (5 or more)"
 fi
 
 case $ttl_days in
@@ -243,7 +247,7 @@ if [ -z "$tmp" ] || [ ! -d "$tmp" ]; then
 fi
 trap 'rm -rf "$tmp"' EXIT
 # Ctrl-C or TERM: background jobs of a non-interactive sh ignore SIGINT, so the
-# kubectl run by bounded() and its watchdog are killed here.
+# kubectl or docker run by bounded() and its watchdog are killed here.
 _bp=""; _bw=""; timed_out=""
 trap '[ -n "$_bp" ] && kill "$_bp" 2>/dev/null; [ -n "$_bw" ] && kill "$_bw" 2>/dev/null; exit 130' INT TERM
 
@@ -292,16 +296,17 @@ run_mode="Queries ran with readonly=2 and resource limits."
 container=""
 client=""
 
-# bounded IN OUT ERR CMD...: CMD <IN >OUT 2>ERR, killed after $kto s (then status
-# 124 and timed_out=1). The explicit <IN beats the /dev/null stdin POSIX gives
-# background jobs. The watchdog's stdio is /dev/null, so "| tee" and "| cat"
-# pipelines close on time, and its sleep is killed through the TERM trap, so no
-# sleep is left behind. Once the time is up it ignores TERM, so the timed-out
-# mark is always written. Only that mark means a timeout: kubectl exec passes on
-# the status of the command in the pod, and clickhouse-client exits with its
-# error code mod 256 (Code 380 is status 124 too).
+# bounded WHAT IN OUT ERR CMD...: CMD <IN >OUT 2>ERR, killed after $kto s (then
+# status 124, timed_out=WHAT and "WHAT timed out after N s" in ERR). The explicit
+# <IN beats the /dev/null stdin POSIX gives background jobs. The watchdog's stdio
+# is /dev/null, so "| tee" and "| cat" pipelines close on time, and its sleep is
+# killed through the TERM trap, so no sleep is left behind. Once the time is up
+# it ignores TERM, so the timed-out mark is always written. Only that mark means
+# a timeout: kubectl exec and docker exec pass on the status of the command in
+# the pod or container, and clickhouse-client exits with its error code mod 256
+# (Code 380 is status 124 too).
 bounded() {
-    _bi=$1 _bo=$2 _be=$3; shift 3
+    _bwhat=$1 _bi=$2 _bo=$3 _be=$4; shift 4
     rm -f "$tmp/timedout"; timed_out=""
     "$@" <"$_bi" >"$_bo" 2>"$_be" &
     _bp=$!
@@ -315,8 +320,8 @@ bounded() {
     kill "$_bw" 2>/dev/null; wait "$_bw" 2>/dev/null
     _bp=""; _bw=""
     if [ -e "$tmp/timedout" ]; then
-        rm -f "$tmp/timedout"; timed_out=1
-        printf 'kubectl exec timed out after %s s\n' "$kto" >>"$_be"
+        rm -f "$tmp/timedout"; timed_out=$_bwhat
+        printf '%s timed out after %s s\n' "$_bwhat" "$kto" >>"$_be"
         return 124
     fi
     return "$_brc"
@@ -330,12 +335,31 @@ kx() {  # kx IN OUT ERR CMD...: CMD inside the pod, never with a TTY
     _ki=$1 _ko=$2 _ke=$3; shift 3
     set -- exec -i -n "$kns" "$kpod" -c "$kctr" -- "$@"
     if [ -n "$kctx" ]; then set -- --context "$kctx" "$@"; fi
-    bounded "$_ki" "$_ko" "$_ke" kubectl "$@"
+    bounded "kubectl exec" "$_ki" "$_ko" "$_ke" kubectl "$@"
+}
+# docker: every call goes through dk (compose, ps, inspect) or dx (exec), with
+# the same time limit as kubectl exec, so a hung daemon or container can't hang
+# the run. Once find_container picked Compose v1, "dk ... compose" runs docker-compose.
+compose=""
+dk() {  # dk OUT ERR ARGS...: docker ARGS </dev/null >OUT 2>ERR
+    _do=$1 _de=$2; shift 2
+    if [ "$1" = compose ] && [ "$compose" = v1 ]; then shift; set -- docker-compose "$@"; else set -- docker "$@"; fi
+    bounded "$1 $2" /dev/null "$_do" "$_de" "$@"
+}
+dx() {  # dx IN OUT ERR ARGS...: docker exec -i ARGS, never with a TTY
+    _xi=$1 _xo=$2 _xe=$3; shift 3
+    bounded "docker exec" "$_xi" "$_xo" "$_xe" docker exec -i "$@"
 }
 die_unreachable() { [ "$cmd" = payload ] && unreachable_json; die "$@"; }
 
-# What to try when the probe fails inside a pod (empty for --docker and local).
-k8s_hint() {
+# What to try when the probe fails inside a pod or container (empty for local).
+exec_hint() {
+    if [ "$transport" = docker ]; then
+        if grep -q 'timed out after' "$1"; then
+            printf ' (Docker or the container did not answer. Set DISKVET_EXEC_TIMEOUT to wait longer.)'
+        fi
+        return 0
+    fi
     [ "$transport" = k8s ] || return 0
     if grep -qi 'pods/exec' "$1" && grep -qi 'forbidden' "$1"; then
         printf ' (kubectl exec needs the create verb on pods/exec in namespace %s: README, Kubernetes, Permissions. Without it, use kubectl port-forward and --host 127.0.0.1 with a read-only user.)' "$kns"
@@ -364,7 +388,7 @@ run_query() {
     if [ "$transport" = k8s ]; then
         kx "$_in" "$_out" "$_err" sh -c "$inner" sh "$_m" "$@"
     elif [ -n "$container" ]; then
-        docker exec -i "$container" sh -c "$inner" sh "$_m" "$@" <"$_in" >"$_out" 2>"$_err"
+        dx "$_in" "$_out" "$_err" "$container" sh -c "$inner" sh "$_m" "$@"
     else
         # $client may be "clickhouse client": split on purpose.
         # shellcheck disable=SC2086
@@ -372,24 +396,39 @@ run_query() {
     fi
 }
 
+# --docker auto: the compose service "clickhouse" of this folder (Compose v2, else
+# v1), else the one running container with a ClickHouse image, the images --k8s
+# looks for (clickhouse-server, clickhouse, bitnami*/clickhouse, any registry).
+# Sets container. Never prompts: several containers or none is an error, and a
+# container found by its image gets one note on stderr.
 find_container() {
     _id=""
-    if docker compose version >/dev/null 2>&1; then
-        _id=$(docker compose ps -q clickhouse 2>/dev/null | tr -d '\r' | sed -n '1p')
+    if dk "$tmp/cv" "$tmp/cv.err" compose version; then
+        compose=v2
+    elif command -v docker-compose >/dev/null 2>&1; then
+        compose=v1
+        dk "$tmp/cv" "$tmp/cv.err" compose version || compose=""
     fi
-    if [ -z "$_id" ]; then
-        _list=$(docker ps --format '{{.ID}} {{.Image}} {{.Names}}' 2>/dev/null | tr -d '\r' \
-            | awk '$2 ~ /(^|\/)clickhouse-server([:@]|$)/ { print $1, $3 }')
-        _n=$(printf '%s\n' "$_list" | grep -c .)
-        if [ "$_n" -eq 0 ]; then
-            die "no running ClickHouse container found (looked for compose service 'clickhouse' here and for images named clickhouse-server). Pass --docker <container name>."
+    if [ -n "$compose" ]; then
+        if dk "$tmp/cps" "$tmp/cps.err" compose ps -q clickhouse; then
+            _id=$(tr -d '\r' <"$tmp/cps" | sed -n '1p')
+        elif [ -n "$timed_out" ]; then
+            die_unreachable "cannot list the compose services here: $(err_line "$tmp/cps.err")"
         fi
-        if [ "$_n" -gt 1 ]; then
-            die "found $_n ClickHouse containers: $(printf '%s\n' "$_list" | awk '{print $2}' | tr '\n' ' ')- pass --docker <container name>"
-        fi
-        _id=$(printf '%s\n' "$_list" | awk '{print $1}')
     fi
-    container=$_id
+    if [ -n "$_id" ]; then container=$_id; return 0; fi
+    dk "$tmp/ps" "$tmp/ps.err" ps --format '{{.ID}} {{.Image}} {{.Names}}' \
+        || die_unreachable "cannot list containers: $(err_line "$tmp/ps.err")"
+    tr -d '\r' <"$tmp/ps" | awk '$2 ~ /(^|\/)clickhouse(-server)?([:@]|$)/ { print $1, $3, $2 }' >"$tmp/found"
+    _n=$(grep -c . "$tmp/found")
+    if [ "$_n" -eq 0 ]; then
+        die_unreachable "no running ClickHouse container found (looked for compose service 'clickhouse' here and for images clickhouse-server, clickhouse or bitnami*/clickhouse). Pass --docker <container name>."
+    fi
+    if [ "$_n" -gt 1 ]; then
+        die_unreachable "found $_n ClickHouse containers: $(awk '{ printf "%s%s", (NR > 1) ? ", " : "", $2 }' "$tmp/found"). Pass --docker <container name> with one of them."
+    fi
+    read -r container _name _image <"$tmp/found"
+    note "no compose service 'clickhouse' is running in this folder, so diskvet picked container $_name by its image ($_image). Pass --docker NAME to check another one."
 }
 
 # --k8s: one list call gives all diskvet needs to pick the pod, by names, images,
@@ -542,8 +581,8 @@ hash_names() {
         kx "$tmp/h.in" "$tmp/h.out" "$tmp/h.err" sh -c 'cd /tmp && exec clickhouse local "$@"' sh \
             --input-format TSV --output-format TSV --structure "$_st" --query "$_sql" || return 1
     elif [ -n "$container" ]; then
-        docker exec -i -w /tmp "$container" clickhouse local --input-format TSV --output-format TSV \
-            --structure "$_st" --query "$_sql" <"$tmp/h.in" >"$tmp/h.out" 2>"$tmp/h.err" || return 1
+        dx "$tmp/h.in" "$tmp/h.out" "$tmp/h.err" -w /tmp "$container" clickhouse local --input-format TSV --output-format TSV \
+            --structure "$_st" --query "$_sql" || return 1
     else
         if command -v clickhouse-local >/dev/null 2>&1; then _local=clickhouse-local
         elif command -v clickhouse >/dev/null 2>&1; then _local="clickhouse local"
@@ -563,6 +602,7 @@ hash_names() {
 # ---------------------------------------------------------------- run the checks
 stream=$tmp/stream.tsv
 container_name=""
+dead=""
 
 if [ -n "$replay" ]; then
     [ -r "$replay" ] || die "cannot read $replay"
@@ -599,13 +639,15 @@ else
     if [ "$transport" = k8s ]; then
         k8s_find
     elif [ -n "$docker_arg" ]; then
-        command -v docker >/dev/null 2>&1 || die "docker is not installed or not in PATH"
+        command -v docker >/dev/null 2>&1 || die_unreachable "docker is not installed or not in PATH"
         if [ "$docker_arg" = auto ]; then find_container; else container=$docker_arg; fi
-        container_name=$(docker inspect --format '{{.Name}}' "$container" 2>/dev/null | tr -d '\r' | sed 's|^/||')
-        [ -n "$container_name" ] || {
-            [ "$cmd" = payload ] && unreachable_json
-            die "container '$container' not found (docker inspect failed)"
-        }
+        # --type container: an image, volume or network of that name is not it
+        if dk "$tmp/name" "$tmp/name.err" inspect --type container --format '{{.Name}}' "$container"; then
+            container_name=$(tr -d '\r' <"$tmp/name" | sed -n '1s|^/||p')
+        elif [ -n "$timed_out" ] || ! grep -q 'No such' "$tmp/name.err"; then
+            die_unreachable "cannot inspect container '$container': $(err_line "$tmp/name.err")"
+        fi
+        [ -n "$container_name" ] || die_unreachable "container '$container' not found (docker inspect failed)"
     else
         if command -v clickhouse-client >/dev/null 2>&1; then
             client=clickhouse-client
@@ -666,13 +708,13 @@ else
                     *)   cannot_run "the server refuses readonly=2 and readonly=1 for this user, and the user is not read-only, so nothing was run. Use a read-only user (README, variant B)." ;;
                 esac
             else
-                cannot_run "$(err_line "$tmp/probe.err")$(k8s_hint "$tmp/probe.err")"
+                cannot_run "$(err_line "$tmp/probe.err")$(exec_hint "$tmp/probe.err")"
             fi
         else
-            cannot_run "$(err_line "$tmp/probe.err")$(k8s_hint "$tmp/probe.err")"
+            cannot_run "$(err_line "$tmp/probe.err")$(exec_hint "$tmp/probe.err")"
         fi
     else
-        cannot_run "$(err_line "$tmp/probe.err")$(k8s_hint "$tmp/probe.err")"
+        cannot_run "$(err_line "$tmp/probe.err")$(exec_hint "$tmp/probe.err")"
     fi
 
     salt=""
@@ -698,13 +740,29 @@ else
         printf '@@\t_target\tok\n_target\tk8s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$kns" "$kpod" "$kctr" "$kflavor" "$kpvc" "$kgroup" "${kctx_typed:+$kctx}" >>"$stream"
     fi
-    k8s_dead=""
+    # answered ERR: the error in ERR is ClickHouse's answer to the query (a Code,
+    # but none of a lost connection: 32 end of stream, 209 socket timeout, 210
+    # network error), so the connection still works. Anything else (a docker or
+    # kubectl error, no error at all) is checked with the probe once more.
+    answered() {
+        case $(err_line "$1") in
+            'Code: 32'[!0-9]*|'Code: 209'[!0-9]*|'Code: 210'[!0-9]*) return 1 ;;
+            'Code: '[0-9]*) return 0 ;;
+        esac
+        return 1
+    }
+    # lost WHY ERROR: the connection is gone partway (or an exec timed out): no
+    # more queries, the checks left say "skipped: WHY", and the run exits with 4
+    lost() {
+        dead=$1
+        note "lost the connection partway: $2. The checks left are skipped, so this $cmd is incomplete (exit code 4)."
+    }
     while read -r qid qtag; do
         [ -n "$qid" ] || continue
         if [ "$qtag" = payload ] && [ "$cmd" != payload ]; then continue; fi
-        # after one kubectl exec timed out, don't wait for every other check too
-        if [ -n "$k8s_dead" ]; then
-            printf '@@\t%s\tfail\t%s\t%s\n' "$qid" "${qtag:-required}" "skipped: an earlier kubectl exec timed out" >>"$stream"
+        # after that, don't wait for every other check too
+        if [ -n "$dead" ]; then
+            printf '@@\t%s\tfail\t%s\t%s\n' "$qid" "${qtag:-required}" "skipped: $dead" >>"$stream"
             continue
         fi
         if run_query "$tmp/q.$qid" "$tmp/o.$qid" "$tmp/e.$qid"; then
@@ -716,15 +774,21 @@ else
                 else
                     printf '@@\t%s\tfail\t%s\t%s\n' "$qid" "${qtag:-required}" "cannot hash table names: $(err_line "$tmp/h.err")" >>"$stream"
                     note "cannot hash table names, so the payload has no tables: $(err_line "$tmp/h.err")"
+                    if [ -n "$timed_out" ]; then lost "an earlier $timed_out timed out" "$(err_line "$tmp/h.err")"; fi
                 fi
                 continue
             fi
             printf '@@\t%s\tok\n' "$qid" >>"$stream"
             tr -d '\r' <"$tmp/o.$qid" >>"$stream"
         else
-            # the watchdog's mark, not status 124 (see bounded)
-            if [ -n "$timed_out" ]; then k8s_dead=1; fi
             printf '@@\t%s\tfail\t%s\t%s\n' "$qid" "${qtag:-required}" "$(err_line "$tmp/e.$qid")" >>"$stream"
+            # the watchdog's mark, not status 124 (see bounded)
+            if [ -n "$timed_out" ]; then
+                lost "an earlier $timed_out timed out" "$(err_line "$tmp/e.$qid")"
+            elif ! answered "$tmp/e.$qid" && ! run_query "$tmp/probe.sql" "$tmp/probe.out" "$tmp/probe.err"; then
+                if [ -n "$timed_out" ]; then lost "an earlier $timed_out timed out" "$(err_line "$tmp/probe.err")"
+                else lost "the connection to ClickHouse was lost" "$(err_line "$tmp/probe.err")"; fi
+            fi
         fi
     done <"$tmp/index"
 fi
@@ -1673,4 +1737,6 @@ awk -v mode="$cmd" \
     -v now_human="$now_human" -v now_iso="$now_iso" \
     -v ctr="$container_name" -v run_mode="$run_mode" \
     -v ttl_days="$ttl_days" -v beta_url="$BETA_URL" \
-    -f "$tmp/render.awk" "$stream"
+    -f "$tmp/render.awk" "$stream" || exit
+# the connection was lost partway (lost): the report above is incomplete
+[ -z "$dead" ] || exit 4

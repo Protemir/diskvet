@@ -1,0 +1,121 @@
+#!/bin/sh
+# Fake docker for the offline tests (tests/docker_offline.sh). It never talks to
+# a Docker daemon: the containers, images and volumes are the lines of $DFAKE_PS,
+# and "exec" runs the command right here, in a clean environment, as if inside
+# the container (tests/fixtures/fake-kubectl/clickhouse-client answers there).
+# Anything diskvet must never do (another command, a TTY, inspect without
+# --type container, other ps columns) fails loudly.
+# Every call is logged to $DLOG as one line: [arg] [arg] ... (a newline inside
+# an argument is written as ~); $DLOG.n counts the execs, and $DLOG.bad keeps every refusal.
+#   DFAKE_PS=FILE       one object per line: container ID IMAGE NAME STATE [K=V...]
+#                       (STATE running or exited; K=V: its environment, no spaces),
+#                       image NAME, volume NAME
+#   DFAKE_COMPOSE=MODE  v2 (default): the compose plugin; v1: only docker-compose
+#                       (the fake next to this one); none: neither
+#   DFAKE_SERVICE=ID    what "compose ps -q clickhouse" prints (empty: the service is
+#                       not running; unset: no compose file in this folder)
+#   DFAKE_DAEMON=down   every call that needs the daemon fails, as with Docker stopped
+#   DFAKE_HANG=WHAT     compose, ps or inspect hangs
+#   DFAKE_EXEC=MODE     run (default), hang, hang_at=N (the Nth exec hangs),
+#                       gone_at=N (from the Nth exec on the container is stopped),
+#                       refused_at=N (from the Nth exec on ClickHouse refuses connections),
+#                       refused_once=N (only the Nth exec)
+#   DFAKE_CTRPATH=P     PATH inside the container (default: this PATH)
+#   DFAKE_CRLF=1        docker's own output lines end in CR LF
+set -u
+# (one printf for all the arguments: a process per argument is slow in Git Bash)
+if [ $# -gt 0 ]; then printf '[%s] ' "$@" | tr '\n' '~'; fi >>"${DLOG:?}"
+printf '\n' >>"$DLOG"
+
+objs=${DFAKE_PS:-/dev/null}
+cr() { if [ "${DFAKE_CRLF:-0}" = 1 ]; then awk '{ printf "%s\r\n", $0 }'; else cat; fi; }
+bad() { printf 'FAKE: %s\n' "$*" | tee -a "$DLOG.bad" >&2; exit 99; }
+hang() { if [ "${DFAKE_HANG:-}" = "$1" ]; then exec sleep 600; fi; }
+daemon() {
+    if [ "${DFAKE_DAEMON:-up}" = down ]; then
+        echo 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?' | cr >&2
+        exit 1
+    fi
+}
+# the container line of an ID or a name: ID IMAGE NAME STATE [K=V...]
+ctr() { awk -v n="$1" '$1 == "container" && ($2 == n || $4 == n) { $1 = ""; sub(/^ /, ""); print; exit }' "$objs"; }
+
+case ${1:-} in
+compose)
+    shift
+    if [ "${DFAKE_COMPOSE:-v2}" != v2 ]; then
+        printf "docker: 'compose' is not a docker command.\nSee 'docker --help'\n" | cr >&2
+        exit 1
+    fi
+    case "$#:$*" in
+        "1:version") echo "Docker Compose version v2.39.4" | cr; exit 0 ;;
+        "3:ps -q clickhouse") ;;
+        *) bad "compose: only 'version' and 'ps -q clickhouse' are allowed: $*" ;;
+    esac
+    hang compose; daemon
+    if [ -z "${DFAKE_SERVICE+x}" ]; then echo "no configuration file provided: not found" | cr >&2; exit 1; fi
+    if [ -n "$DFAKE_SERVICE" ]; then printf '%s\n' "$DFAKE_SERVICE" | cr; fi
+    ;;
+ps)
+    [ "$#:$*" = "3:ps --format {{.ID}} {{.Image}} {{.Names}}" ] || bad "ps: only --format '{{.ID}} {{.Image}} {{.Names}}' is allowed: $*"
+    hang ps; daemon
+    awk '$1 == "container" && $5 == "running" { print $2, $3, $4 }' "$objs" | cr
+    ;;
+inspect)
+    [ "$#:$2 $3 $4 $5" = "6:--type container --format {{.Name}}" ] || bad "inspect: only --type container --format '{{.Name}}' NAME is allowed: $*"
+    hang inspect; daemon
+    line=$(ctr "$6")
+    if [ -z "$line" ]; then
+        echo | cr
+        printf 'Error response from daemon: No such container: %s\n' "$6" | cr >&2
+        exit 1
+    fi
+    printf '/%s\n' "$(echo "$line" | awk '{ print $3 }')" | cr
+    ;;
+exec)
+    shift
+    si=""; wd=""
+    while [ $# -gt 0 ]; do
+        case $1 in
+            -i) si=1 ;;
+            -w) wd=${2:-}; [ -n "$wd" ] || bad "-w without a folder"; shift ;;
+            -*) bad "bad exec argv: $1 (diskvet never asks for a TTY, another user or env: only -i and -w)" ;;
+            *) break ;;
+        esac
+        shift
+    done
+    if [ -z "$si" ] || [ $# -lt 2 ]; then bad "bad exec argv (needs -i [-w DIR] CONTAINER CMD)"; fi
+    c=$1; shift
+    daemon
+    line=$(ctr "$c")
+    if [ -z "$line" ]; then printf 'Error response from daemon: No such container: %s\n' "$c" | cr >&2; exit 1; fi
+    # shellcheck disable=SC2086
+    set -- $line -- "$@"
+    id=$1 state=$4; shift 4
+    envs=""
+    while [ "$1" != -- ]; do envs="$envs $1"; shift; done
+    shift
+    n=$(cat "$DLOG.n" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$DLOG.n"
+    mode=${DFAKE_EXEC:-run}
+    stopped() { printf 'Error response from daemon: container %s is not running\n' "$id" | cr >&2; exit 1; }
+    refused() { echo "Code: 210. DB::NetException: Connection refused (localhost:9000). (NETWORK_ERROR)" >&2; exit 210; }
+    [ "$state" = running ] || stopped
+    case $mode in
+        run) ;;
+        hang) exec sleep 600 ;;
+        hang_at=*) if [ "$n" -eq "${mode#hang_at=}" ]; then exec sleep 600; fi ;;
+        gone_at=*) if [ "$n" -ge "${mode#gone_at=}" ]; then stopped; fi ;;
+        refused_at=*) if [ "$n" -ge "${mode#refused_at=}" ]; then refused; fi ;;
+        refused_once=*) if [ "$n" -eq "${mode#refused_once=}" ]; then refused; fi ;;
+        *) bad "unknown DFAKE_EXEC=$mode" ;;
+    esac
+    if [ -n "$wd" ]; then cd "$wd" || exit 126; fi
+    # inside the "container": only its own environment, plus what the fake client needs
+    # shellcheck disable=SC2086
+    exec env -i PATH="${DFAKE_CTRPATH:-$PATH}" CLOG="${CLOG:-/dev/null}" KFAKE_STREAM="${KFAKE_STREAM:-}" \
+        KFAKE_AUTH="${KFAKE_AUTH:-0}" KFAKE_PROFILE_RO="${KFAKE_PROFILE_RO:-0}" $envs "$@"
+    ;;
+*)
+    bad "docker ${1:-}: not a command diskvet may use (compose, ps, inspect, exec)"
+    ;;
+esac
