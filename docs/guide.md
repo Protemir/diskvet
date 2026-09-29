@@ -15,6 +15,9 @@ need any extra tools.
 (the SigNoz commands on 25.5 and 25.12), with the ClickHouse service and
 config taken from Langfuse's and SigNoz's compose files.*
 
+Looking up one error message, such as Code 243 or Code 359? See
+[common errors and fixes](fix/).
+
 ## TL;DR
 
 1. **Check.** Run one read-only query on `system.parts`. If `system.*_log` tables are bigger than your data, ClickHouse's own logs are the problem.
