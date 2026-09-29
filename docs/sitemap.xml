@@ -154,4 +154,31 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://diskvet.dev/zh/guide/"/>
     <xhtml:link rel="alternate" hreflang="x-default" href="https://diskvet.dev/guide/"/>
   </url>
+  <url>
+    <loc>https://diskvet.dev/fix/</loc>
+  </url>
+  <url>
+    <loc>https://diskvet.dev/fix/clickhouse-trace-log-huge/</loc>
+  </url>
+  <url>
+    <loc>https://diskvet.dev/fix/clickhouse-not-enough-space/</loc>
+  </url>
+  <url>
+    <loc>https://diskvet.dev/fix/clickhouse-max-table-size-to-drop/</loc>
+  </url>
+  <url>
+    <loc>https://diskvet.dev/fix/clickhouse-system-log-copies/</loc>
+  </url>
+  <url>
+    <loc>https://diskvet.dev/fix/clickhouse-system-log-ttl-inside-engine/</loc>
+  </url>
+  <url>
+    <loc>https://diskvet.dev/fix/clickhouse-ttl-delete-not-freeing-disk/</loc>
+  </url>
+  <url>
+    <loc>https://diskvet.dev/fix/clickhouse-too-many-parts/</loc>
+  </url>
+  <url>
+    <loc>https://diskvet.dev/fix/clickhouse-cannot-log-message-ownasyncsplitchannel/</loc>
+  </url>
 </urlset>

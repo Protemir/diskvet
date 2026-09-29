@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClickHouse® Code 252: Too many parts. Merges are processing significantly slower than inserts · diskvet</title>
+  <meta name="description" content="What Too many parts (Code 252, TOO_MANY_PARTS) means, how to check parts, merges and free space, and how to fix it with fewer, bigger inserts.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../../style.css">
+  <meta property="og:title" content="ClickHouse® Code 252: Too many parts. Merges are processing significantly slower than inserts">
+  <meta property="og:description" content="What Too many parts (Code 252, TOO_MANY_PARTS) means, how to check parts, merges and free space, and how to fix it with fewer, bigger inserts.">
+  <meta property="og:url" content="https://diskvet.dev/fix/clickhouse-too-many-parts/">
+  <meta property="og:type" content="article">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://diskvet.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="diskvet: what fills the disk of the ClickHouse® in self-hosted Langfuse, SigNoz and ClickStack, and the fix; sh diskvet.sh report --docker auto">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://diskvet.dev/fix/clickhouse-too-many-parts/">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="../../">diskvet</a>
+    <div class="header-right">
+      <nav aria-label="Main">
+        <ul>
+          <li><a href="../../">Home</a></li>
+          <li><a href="../../guide/">Guide</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a></li>
+          <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+        </ul>
+      </nav>
+      <nav class="langs" aria-label="Language">
+        <details>
+          <summary><svg class="globe" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8h13M8 1.5c1.9 2 2.8 4.1 2.8 6.5S9.9 12.5 8 14.5M8 1.5C6.1 3.5 5.2 5.6 5.2 8s.9 4.5 2.8 6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg> English</summary>
+          <ul>
+            <li><a href="./" hreflang="en" lang="en" aria-current="page">English</a></li>
+            <li><a href="../../es/guide/" hreflang="es" lang="es">Español</a></li>
+            <li><a href="../../pt/guide/" hreflang="pt" lang="pt-BR">Português</a></li>
+            <li><a href="../../ru/guide/" hreflang="ru" lang="ru">Русский</a></li>
+            <li><a href="../../ja/guide/" hreflang="ja" lang="ja">日本語</a></li>
+            <li><a href="../../ko/guide/" hreflang="ko" lang="ko">한국어</a></li>
+            <li><a href="../../zh/guide/" hreflang="zh-Hans" lang="zh-Hans">中文</a></li>
+          </ul>
+        </details>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow">
+    <article class="guide">
+<h1 id="clickhouse-code-252-too-many-parts-merges-are-processing-significantly-slower-than-inserts">ClickHouse® Code 252: Too many parts. Merges are processing significantly slower than inserts</h1>
+<p>Your inserts fail, and ClickHouse® says:</p>
+<pre><code>Code: 252. DB::Exception: Too many parts (3 with average size of 262.00 B) in table 'default.t (2a45a11e-0e4b-4fb9-98aa-cb69e9b29a6d)'. Merges are processing significantly slower than inserts. (TOO_MANY_PARTS)
+</code></pre>
+<p>This text comes from <code>clickhouse local</code> 25.12 and a test table with
+<code>parts_to_throw_insert = 3</code>. 24.8 and 26.9 print the same text with another
+average size. A 26.9 server, where async inserts are on by default, adds
+<code>: While executing WaitForAsyncInsert</code> after <code>slower than inserts</code>. Real
+reports read <code>Too many parts (10001 with average size of 12.94 KiB) in table 'signoz_metrics.time_series_v4_1week ...'</code> (<a href="https://github.com/SigNoz/signoz/issues/7983">SigNoz #7983</a>)
+or <code>(3001 with average size of 37.52 KiB)</code> (<a href="https://github.com/SigNoz/signoz/issues/9794">SigNoz #9794</a>),
+often with a <code>while pushing to view ...</code> tail: the insert came through a
+materialized view, and the table in the error is the target of the first view
+named.</p>
+<h2 id="short-answer">Short answer</h2>
+<p>One partition of the table has reached <code>parts_to_throw_insert</code> active parts.
+The default is 3000. From <code>parts_to_delay_insert</code> = 1000, ClickHouse slows each
+insert down, by up to 1 s. Before 23.6 the limits were 300 and 150. Each insert
+writes at least one new part (async inserts can share one), and background
+merges join parts into bigger ones. So either the inserts are too many and too
+small, or merges can't run. The checks below tell which.</p>
+<p>Don't raise the limit: the <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/parts-to#parts_to_throw_insert">docs</a>
+warn that SELECTs may get slower and that you notice a merge problem, such as
+low disk space, later. A SigNoz maintainer called 10000 "way too many" (#7983).</p>
+<h2 id="check">Check</h2>
+<p>Run these in a read-only client (<code>--readonly=1</code>, see <a href="../../guide/#1-what-is-using-the-disk-check-clickhouse-disk-usage-by-table">guide, section 1</a>).</p>
+<p><strong>1. Which partitions have the most parts, and what are the limits?</strong></p>
+<pre><code>SELECT database, table, partition_id, count() AS parts
+FROM system.parts WHERE active
+GROUP BY database, table, partition_id
+ORDER BY parts DESC LIMIT 10;
+
+SELECT name, value, changed FROM system.merge_tree_settings
+WHERE name IN ('parts_to_delay_insert', 'parts_to_throw_insert');
+
+SELECT event, value FROM system.events WHERE event IN ('DelayedInserts', 'RejectedInserts');</code></pre>
+<p><code>changed = 1</code> means someone changed the server default. A table can also set
+its own limits in <code>SETTINGS</code> (see <code>SHOW CREATE TABLE</code>). The last query counts
+inserts slowed down or rejected since the server started; no row means zero.</p>
+<p><strong>2. Do merges run?</strong></p>
+<pre><code>SELECT database, table, round(elapsed) AS sec, round(progress, 2) AS progress, num_parts FROM system.merges;</code></pre>
+<p>No merges while a partition has thousands of parts usually means they are
+blocked: someone ran <code>SYSTEM STOP MERGES</code>, or the disk is nearly full. Merges
+that run all the time while the count still grows can't keep up.</p>
+<p><strong>3. Is there free space for merges?</strong></p>
+<pre><code>SELECT name, formatReadableSize(free_space) AS free,
+       formatReadableSize(unreserved_space) AS unreserved, formatReadableSize(total_space) AS total
+FROM system.disks;</code></pre>
+<p>A background merge takes source parts only up to half of the unreserved free
+space (<a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/Compaction/CompactionStatistics.cpp">CompactionStatistics.cpp</a>),
+so on a nearly full disk only small merges run. In our test, 8 parts of 7.7 MiB
+with 22 MiB unreserved stayed unmerged, and 3 new 1 MiB parts stayed next to
+them: 11 parts after 2 minutes. Once we freed space (167 MiB unreserved), all
+11 merged into one within 30 s. Don't wait for a log message: the server log
+gave no reason for the skipped background merges. Only <code>OPTIMIZE</code> says why
+(<a href="#fix">Fix</a>). Disk nearly full? Start with <a href="../clickhouse-not-enough-space/">Not enough space</a>.</p>
+<p><strong>4. How fast do new parts arrive?</strong></p>
+<pre><code>SELECT database, table, count() AS new_parts_last_hour,
+       round(avg(rows)) AS avg_rows, formatReadableSize(avg(size_in_bytes)) AS avg_size
+FROM system.part_log
+WHERE event_type = 'NewPart' AND event_date &gt;= yesterday() AND event_time &gt; now() - INTERVAL 1 HOUR
+GROUP BY database, table ORDER BY new_parts_last_hour DESC LIMIT 10;</code></pre>
+<p>Thousands of new parts an hour with a few rows each is the usual cause. On
+25.12 and 26.9 the <code>system.*</code> logs show up too, up to about 480 parts an hour
+each (one per flush), which is normal. 24.8 leaves system tables out of
+<code>part_log</code> (<a href="https://github.com/ClickHouse/ClickHouse/blob/v24.8.14.39-lts/src/Interpreters/Context.cpp">Context.cpp</a>).
+If the query fails with Code 60 (<code>UNKNOWN_TABLE</code>), <code>part_log</code> is off on your
+server, or the server started seconds ago: the table appears with the first
+flush.</p>
+<h2 id="fix">Fix</h2>
+<p><strong>Send fewer, bigger inserts.</strong> The ClickHouse docs recommend inserting "in
+batches of at least 1,000 rows, and ideally between 10,000–100,000 rows", and
+about one insert query per second
+(<a href="https://clickhouse.com/docs/best-practices/selecting-an-insert-strategy#batch-inserts-if-synchronous">insert strategy</a>).</p>
+<p>If many clients send small inserts at once, let the server batch them: add
+<code>SETTINGS async_insert = 1, wait_for_async_insert = 1</code> to the <code>INSERT</code>, or set
+both in the writer's settings. Keep the second at 1: with 0, the client may not
+see insert errors (same docs page). Traps:</p>
+<ul>
+<li>
+<strong>With <code>wait_for_async_insert = 1</code>, it helps only with concurrent inserts.</strong> On 24.8, 25.12 and 26.9, 100 single-row inserts sent at once (100 parallel HTTP requests) made 100 parts with <code>async_insert = 0</code> and 1 or 2 with <code>async_insert = 1</code>. One writer that sends a row, waits, then sends the next still made one part per insert (20 of 20).</li>
+<li>
+<strong>It is on by default since 26.2</strong> (<a href="https://clickhouse.com/docs/reference/settings/session-settings/async-insert#async_insert"><code>async_insert</code></a>). On 26.9 the same 100 inserts made 1 part with no settings.</li>
+<li>
+<strong>Langfuse already does it.</strong> Its client sends every query with <code>async_insert: 1</code> and <code>wait_for_async_insert: 1</code> (<a href="https://github.com/langfuse/langfuse/blob/d59f50ea3636605629ac061597be0c104a70d58b/packages/shared/src/server/clickhouse/client.ts#L268-L269">client.ts</a>).
+On Langfuse, look at merges and free space first (checks 2 and 3).</li>
+</ul>
+<p><strong>SigNoz: fewer, bigger writes from the collector.</strong> SigNoz writes through its
+OpenTelemetry collector. Its <code>batch</code> processor sends a batch when
+<code>send_batch_size</code> items have come in or when <code>timeout</code> has passed, whichever
+comes first. <code>send_batch_max_size</code> splits bigger batches; 0, the default, means
+no cap (<a href="https://github.com/open-telemetry/opentelemetry-collector/blob/v0.144.0/processor/batchprocessor/README.md">batch processor</a>).
+So to write less often, raise <code>send_batch_size</code> and <code>timeout</code> above what you
+run now. A shorter <code>timeout</code> or a lower cap means more writes. Each collector
+replica batches on its own. What SigNoz ships (size = <code>send_batch_size</code>, cap =
+<code>send_batch_max_size</code>):</p>
+<ul>
+<li>
+<strong>Docker Compose</strong>, <code>deploy/docker/otel-collector-config.yaml</code>: size 10000, cap 11000, timeout 10s (<a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/otel-collector-config.yaml#L27-L30">v0.129.0</a>, the last release with these files). Restart the collector after the edit: <code>docker compose restart otel-collector</code> in <code>deploy/docker</code>.</li>
+<li>
+<strong>Foundry</strong>, SigNoz's Docker install after that release (<a href="https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/MIGRATION.md">migration guide</a>): its example <code>ingester/ingester.yaml</code> has size 50000, cap 55000, timeout 5s (<a href="https://github.com/SigNoz/foundry/blob/db8a859301d373812680fe5c01d6c6564918438d/docs/examples/docker/compose/pours/deployment/ingester/ingester.yaml#L44-L47">Foundry example</a>). <code>foundryctl forge</code> writes that file. How to change it so the change stays is not checked here.</li>
+<li>
+<strong>Helm</strong>, <code>otelCollector.config.processors.batch</code>: size 50000, no cap, timeout 1s (<a href="https://github.com/SigNoz/charts/blob/signoz-0.144.0/charts/signoz/values.yaml#L1642-L1644">chart signoz-0.144.0</a>). Put your values in the values file you pass to every <code>helm upgrade</code>.</li>
+</ul>
+<p>In #7983 a maintainer found <code>send_batch_size: 512</code> too low. SigNoz team members
+there and in #9794 suggested <code>send_batch_size: 20000</code>, <code>send_batch_max_size: 25000</code>,
+<code>timeout: 1s</code>. That is smaller than what Helm and Foundry ship. Against the
+Compose file, it writes every second instead of every 10 s at low traffic. So
+compare it with your config before you copy it. None of the SigNoz settings
+are tested here. Bigger batches didn't fix every case: in #7983 the user found
+the suggested config worse, and still got the error with <code>send_batch_size: 100000</code> and <code>timeout: 22s</code>. In #9794 the chart's 50000 and 1s were in place,
+and one metric had over 1.5 million time series.</p>
+<p><strong>Free disk space if merges are blocked</strong> (ClickHouse's own logs: <a href="../../guide/#2-how-do-i-free-the-disk-space-right-now">guide, section 2</a>).
+Merges then start again by themselves. If someone stopped them, start them
+(safe). A restart starts them too: after <code>SYSTEM STOP MERGES</code> and a container
+restart, 12 parts merged into one within a minute on 24.8 and 26.9.
+<code>OPTIMIZE</code> merges one partition now, but it is heavy: it rewrites the whole
+partition and needs more than twice its size in unreserved space. Take the
+<code>partition_id</code> from check 1:</p>
+<pre><code>SYSTEM START MERGES db.table;
+OPTIMIZE TABLE db.table PARTITION ID '202609' FINAL SETTINGS optimize_throw_if_noop = 1;</code></pre>
+<p>Without <code>optimize_throw_if_noop = 1</code>, an <code>OPTIMIZE</code> that can't run returns no
+error and does nothing. With it, a nearly full disk gives <code>Code: 388 ... (CANNOT_ASSIGN_OPTIMIZE)</code>. For 8 parts of 61.28 MiB, 25.12 said <code>Cannot OPTIMIZE table: Not enough free space to merge parts from all_1_1_0 to all_8_8_0. Has 20.69 MiB free and unreserved, 122.56 MiB required now</code>, and
+26.9 gave the same message. 24.8 said <code>Cannot OPTIMIZE table: Insufficient available disk space, required 122.80 MiB</code> and logged a warning, <code>Won't merge parts from ... because not enough free space</code>. While merges are stopped,
+<code>OPTIMIZE</code> fails with <code>Cancelled merging parts. (ABORTED)</code>, with or without
+the setting. After a merge, the old parts stay on disk for <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime"><code>old_parts_lifetime</code></a>
+(480 s).</p>
+<p><strong>Your own tables: check <code>PARTITION BY</code>.</strong> A key that is too fine (by hour, or
+by a column with many values) splits each insert into many partitions, one part
+each. That gives two other Code 252 errors (tested): <code>Too many partitions for single INSERT block (more than 100)</code>
+(<a href="https://clickhouse.com/docs/reference/settings/session-settings/max-partitions#max_partitions_per_insert_block"><code>max_partitions_per_insert_block</code></a>)
+and <code>Too many parts (N) in all partitions in total</code> (<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-parts#max_parts_in_total"><code>max_parts_in_total</code></a>, default 100000).</p>
+<h2 id="system-logs-hit-it-too">System logs hit it too</h2>
+<p>ClickHouse's own logs are MergeTree tables. Most flush every 7.5 s (stock
+<a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/programs/server/config.xml">config.xml</a>),
+one new part per flush: our 25.12 test server's <code>system.metric_log</code> got 39 in 5
+minutes. If merges stop, they pile up. In ClickHouse #86927, <code>system.metric_log</code>
+hit <code>Too many parts (300 ...)</code> on 23.4, where the limit was still 300; a
+ClickHouse member called the version obsolete and asked to upgrade.</p>
+<p>If a system log is the table in your error, find what blocks the merges
+(checks 2 and 3). To get rid of its parts at once, empty it; its rows are lost
+(<a href="../../guide/#2-how-do-i-free-the-disk-space-right-now">guide, section 2</a>; a
+log over 50 GB needs <a href="../clickhouse-max-table-size-to-drop/">the Code 359 fix</a>).
+Then set a TTL (<a href="../../guide/#4-how-do-i-set-a-ttl-on-clickhouse-system-logs">guide, section 4</a>).
+A TTL keeps the log small later; it doesn't lower the part count now.</p>
+<h2 id="why-it-happens">Why it happens</h2>
+<p>Each insert writes a new part: at least one per partition it touches, more for
+a big insert (a 4-million-row <code>INSERT ... SELECT</code> made 4 parts in our test).
+Merges join them in a pool with a fixed number of slots, and each merge needs
+free disk space. When parts arrive faster than merges remove them, ClickHouse
+slows inserts down at 1000 parts in one partition and rejects them at 3000
+(<a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/MergeTreeData.cpp"><code>delayInsertOrThrowIfNeeded</code></a>).
+Materialized views multiply this: an insert into the source table also writes a
+part into each view's target table (tested with two views). Big parts can hit
+the limit too: they averaged 84.45 MiB in ClickHouse #95158. The check skips a
+partition only when its parts average more than 1 GiB
+(<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max#max_avg_part_size_for_too_many_parts"><code>max_avg_part_size_for_too_many_parts</code></a>).</p>
+<h2 id="tested-on">Tested on</h2>
+<p>ClickHouse 24.8.14.39, 25.12.11.4 and 26.9.1.1629 (<code>clickhouse/clickhouse-server</code>
+images, 800 MiB memory limit): the error texts (<code>clickhouse local</code> and server,
+also through a materialized view), defaults, the checks with <code>--readonly=1</code>,
+async inserts (100 parallel HTTP inserts, 20 in a row), the 4-million-row
+insert, the two partition errors, <code>SYSTEM START MERGES</code>, <code>OPTIMIZE</code> with
+merges stopped and on a nearly full disk (a 256 MiB tmpfs), and the
+<code>old_parts_lifetime</code> default. Merges after a restart: 24.8 and 26.9. The
+unmerged parts on the nearly full disk and the <code>metric_log</code> count: 25.12 only.
+The <code>part_log</code> error: also 24.1.2. diskvet 0.3.1 ran against 26.9. The SigNoz
+settings come from the issues and SigNoz's own files, not from a deploy.</p>
+<h2 id="sources">Sources</h2>
+<ul>
+<li>Settings: <code>parts_to_delay_insert</code>, <code>parts_to_throw_insert</code> (defaults, 300 before 23.6, raising it) <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/parts-to">https://clickhouse.com/docs/reference/settings/merge-tree-settings/parts-to</a>, 150 and 300 in 23.5 <a href="https://github.com/ClickHouse/ClickHouse/blob/v23.5.5.92-stable/src/Storages/MergeTree/MergeTreeSettings.h">https://github.com/ClickHouse/ClickHouse/blob/v23.5.5.92-stable/src/Storages/MergeTree/MergeTreeSettings.h</a>, <code>max_avg_part_size_for_too_many_parts</code> <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max#max_avg_part_size_for_too_many_parts">https://clickhouse.com/docs/reference/settings/merge-tree-settings/max#max_avg_part_size_for_too_many_parts</a>, <code>max_delay_to_insert</code> <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-delay#max_delay_to_insert">https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-delay#max_delay_to_insert</a>, <code>max_parts_in_total</code> <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-parts#max_parts_in_total">https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-parts#max_parts_in_total</a>, <code>max_partitions_per_insert_block</code> <a href="https://clickhouse.com/docs/reference/settings/session-settings/max-partitions#max_partitions_per_insert_block">https://clickhouse.com/docs/reference/settings/session-settings/max-partitions#max_partitions_per_insert_block</a>
+</li>
+<li>Insert strategy (batch size, one insert per second, async inserts): <a href="https://clickhouse.com/docs/best-practices/selecting-an-insert-strategy">https://clickhouse.com/docs/best-practices/selecting-an-insert-strategy</a>
+</li>
+<li>
+<code>async_insert</code> on by default since 26.2: <a href="https://clickhouse.com/docs/reference/settings/session-settings/async-insert#async_insert">https://clickhouse.com/docs/reference/settings/session-settings/async-insert#async_insert</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/v26.9.1.1629-stable/src/Core/SettingsChangesHistory.cpp">https://github.com/ClickHouse/ClickHouse/blob/v26.9.1.1629-stable/src/Core/SettingsChangesHistory.cpp</a>
+</li>
+<li>Source (limit check and error texts; half of unreserved space; <code>Not enough free space to merge parts</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/MergeTreeData.cpp">https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/MergeTreeData.cpp</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/Compaction/CompactionStatistics.cpp">https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/Compaction/CompactionStatistics.cpp</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/MergeTreeDataMergerMutator.cpp">https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/MergeTreeDataMergerMutator.cpp</a>; 24.8 (<code>Insufficient available disk space</code>, <code>Won't merge parts</code>) <a href="https://github.com/ClickHouse/ClickHouse/blob/v24.8.14.39-lts/src/Storages/MergeTree/MergeTreeDataMergerMutator.cpp">https://github.com/ClickHouse/ClickHouse/blob/v24.8.14.39-lts/src/Storages/MergeTree/MergeTreeDataMergerMutator.cpp</a>; 24.8 leaves system tables out of <code>part_log</code> <a href="https://github.com/ClickHouse/ClickHouse/blob/v24.8.14.39-lts/src/Interpreters/Context.cpp">https://github.com/ClickHouse/ClickHouse/blob/v24.8.14.39-lts/src/Interpreters/Context.cpp</a>
+</li>
+<li>
+<code>old_parts_lifetime</code>: <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime">https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime</a>
+</li>
+<li>Statements and tables: OPTIMIZE <a href="https://clickhouse.com/docs/reference/statements/optimize">https://clickhouse.com/docs/reference/statements/optimize</a>, <code>optimize_throw_if_noop</code> <a href="https://clickhouse.com/docs/reference/settings/session-settings/optimize#optimize_throw_if_noop">https://clickhouse.com/docs/reference/settings/session-settings/optimize#optimize_throw_if_noop</a>, SYSTEM START MERGES <a href="https://clickhouse.com/docs/reference/statements/system#start-merges">https://clickhouse.com/docs/reference/statements/system#start-merges</a>, <a href="https://clickhouse.com/docs/reference/system-tables/parts">https://clickhouse.com/docs/reference/system-tables/parts</a>, <a href="https://clickhouse.com/docs/reference/system-tables/merges">https://clickhouse.com/docs/reference/system-tables/merges</a>, <a href="https://clickhouse.com/docs/reference/system-tables/disks">https://clickhouse.com/docs/reference/system-tables/disks</a>, <a href="https://clickhouse.com/docs/reference/system-tables/part_log">https://clickhouse.com/docs/reference/system-tables/part_log</a>
+</li>
+<li>Stock <code>config.xml</code> (system logs flush every 7500 ms): <a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/programs/server/config.xml">https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/programs/server/config.xml</a>
+</li>
+<li>Issues: ClickHouse #86927 <a href="https://github.com/ClickHouse/ClickHouse/issues/86927">https://github.com/ClickHouse/ClickHouse/issues/86927</a>, #95158 <a href="https://github.com/ClickHouse/ClickHouse/issues/95158">https://github.com/ClickHouse/ClickHouse/issues/95158</a>; SigNoz #7983 <a href="https://github.com/SigNoz/signoz/issues/7983">https://github.com/SigNoz/signoz/issues/7983</a>, #9794 <a href="https://github.com/SigNoz/signoz/issues/9794">https://github.com/SigNoz/signoz/issues/9794</a>
+</li>
+<li>OpenTelemetry batch processor (<code>send_batch_size</code>, <code>timeout</code>, <code>send_batch_max_size</code>): <a href="https://github.com/open-telemetry/opentelemetry-collector/blob/v0.144.0/processor/batchprocessor/README.md">https://github.com/open-telemetry/opentelemetry-collector/blob/v0.144.0/processor/batchprocessor/README.md</a>
+</li>
+<li>SigNoz v0.129.0 collector config and compose file <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/otel-collector-config.yaml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/otel-collector-config.yaml</a>, <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml</a>; Foundry migration <a href="https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/MIGRATION.md">https://github.com/SigNoz/signoz/blob/v0.144.0/deploy/MIGRATION.md</a>; Foundry example collector config <a href="https://github.com/SigNoz/foundry/blob/db8a859301d373812680fe5c01d6c6564918438d/docs/examples/docker/compose/pours/deployment/ingester/ingester.yaml">https://github.com/SigNoz/foundry/blob/db8a859301d373812680fe5c01d6c6564918438d/docs/examples/docker/compose/pours/deployment/ingester/ingester.yaml</a>; SigNoz Helm chart signoz-0.144.0 <a href="https://github.com/SigNoz/charts/blob/signoz-0.144.0/charts/signoz/values.yaml">https://github.com/SigNoz/charts/blob/signoz-0.144.0/charts/signoz/values.yaml</a>
+</li>
+<li>Langfuse ClickHouse client <a href="https://github.com/langfuse/langfuse/blob/d59f50ea3636605629ac061597be0c104a70d58b/packages/shared/src/server/clickhouse/client.ts">https://github.com/langfuse/langfuse/blob/d59f50ea3636605629ac061597be0c104a70d58b/packages/shared/src/server/clickhouse/client.ts</a>
+</li>
+</ul>
+<h2 id="check-it-with-diskvet">Check it with diskvet</h2>
+<p><a href="https://github.com/Protemir/diskvet">diskvet</a> is a free, open-source,
+read-only script. Its check 5 (<a href="https://github.com/Protemir/diskvet#what-it-checks">What it checks</a>)
+lists the partitions with the most parts next to each table's own limits: WARN
+from 300 parts, CRITICAL at the table's <code>parts_to_delay_insert</code>, plus delayed
+and rejected inserts. Read <code>checks.sql</code> first (SigNoz: <code>--docker signoz-clickhouse</code>;
+Kubernetes: <code>--k8s auto</code>):</p>
+<pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
+sh diskvet.sh report --docker auto &gt; report.md</code></pre>
+<hr>
+<p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.</p>
+    </article>
+    <p class="small muted guide-source"><a href="../">All disk errors and fixes</a> · <a href="https://github.com/Protemir/diskvet/blob/main/docs/fix/clickhouse-too-many-parts.md">Source on GitHub</a></p>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="../../guide/">Guide</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">Report a problem</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">Report a security issue</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet is free and open source (Apache-2.0).</p>
+    <p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.
+      Langfuse, SigNoz and ClickStack are trademarks of their respective owners and are mentioned only to describe compatibility.</p>
+  </div>
+</footer>
+<script src="../../langs.js" defer></script>
+</body>
+</html>

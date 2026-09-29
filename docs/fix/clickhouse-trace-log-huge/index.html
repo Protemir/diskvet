@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClickHouse® system.trace_log and text_log are huge: how to fix it · diskvet</title>
+  <meta name="description" content="Why system.trace_log and text_log fill the disk in self-hosted ClickHouse, how to empty them now and add a TTL so they stay small.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../../style.css">
+  <meta property="og:title" content="ClickHouse® system.trace_log and text_log are huge: how to fix it">
+  <meta property="og:description" content="Why system.trace_log and text_log fill the disk in self-hosted ClickHouse, how to empty them now and add a TTL so they stay small.">
+  <meta property="og:url" content="https://diskvet.dev/fix/clickhouse-trace-log-huge/">
+  <meta property="og:type" content="article">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://diskvet.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="diskvet: what fills the disk of the ClickHouse® in self-hosted Langfuse, SigNoz and ClickStack, and the fix; sh diskvet.sh report --docker auto">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://diskvet.dev/fix/clickhouse-trace-log-huge/">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="../../">diskvet</a>
+    <div class="header-right">
+      <nav aria-label="Main">
+        <ul>
+          <li><a href="../../">Home</a></li>
+          <li><a href="../../guide/">Guide</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a></li>
+          <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+        </ul>
+      </nav>
+      <nav class="langs" aria-label="Language">
+        <details>
+          <summary><svg class="globe" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8h13M8 1.5c1.9 2 2.8 4.1 2.8 6.5S9.9 12.5 8 14.5M8 1.5C6.1 3.5 5.2 5.6 5.2 8s.9 4.5 2.8 6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg> English</summary>
+          <ul>
+            <li><a href="./" hreflang="en" lang="en" aria-current="page">English</a></li>
+            <li><a href="../../es/guide/" hreflang="es" lang="es">Español</a></li>
+            <li><a href="../../pt/guide/" hreflang="pt" lang="pt-BR">Português</a></li>
+            <li><a href="../../ru/guide/" hreflang="ru" lang="ru">Русский</a></li>
+            <li><a href="../../ja/guide/" hreflang="ja" lang="ja">日本語</a></li>
+            <li><a href="../../ko/guide/" hreflang="ko" lang="ko">한국어</a></li>
+            <li><a href="../../zh/guide/" hreflang="zh-Hans" lang="zh-Hans">中文</a></li>
+          </ul>
+        </details>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow">
+    <article class="guide">
+<h1 id="clickhouse-systemtrace_log-and-text_log-are-huge-how-to-fix-it">ClickHouse® system.trace_log and text_log are huge: how to fix it</h1>
+<p>Your Langfuse, SigNoz or ClickStack disk keeps filling, but your own data is
+small. In the size list, <code>system.trace_log</code> or <code>system.text_log</code> is at the top.</p>
+<h2 id="short-answer">Short answer</h2>
+<p>These tables are ClickHouse®'s own diagnostic logs, not your data. The
+<a href="https://clickhouse.com/docs/reference/system-tables/overview">documentation</a>
+says it plainly: "By default, table growth is unlimited." Empty them with
+<code>TRUNCATE</code> (no restart). Then add a TTL in <code>config.d</code>, restart, and drop the
+old copies the restart leaves, so they stay small.</p>
+<h2 id="check">Check</h2>
+<p>Save this query as <code>size.sql</code>. It lists the biggest tables by size on disk:</p>
+<pre><code>SELECT database, table, formatReadableSize(sum(bytes_on_disk)) AS size,
+       sum(rows) AS rows, count() AS parts
+FROM system.parts
+WHERE active
+GROUP BY database, table
+ORDER BY sum(bytes_on_disk) DESC
+LIMIT 15;</code></pre>
+<p>Run it read-only. Langfuse: in the folder with its <code>docker-compose.yml</code>.
+SigNoz: the container is usually <code>signoz-clickhouse</code> (check with <code>docker ps</code>).</p>
+<pre><code># Langfuse
+docker compose exec -T clickhouse sh -c \
+  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' &lt; size.sql
+# SigNoz
+docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact &lt; size.sql</code></pre>
+<p><code>--readonly=1</code> makes ClickHouse refuse any change. Compare the <code>system</code> rows
+with your data (<code>default</code> for Langfuse, <code>signoz_*</code> for SigNoz). If the
+<code>system</code> logs are bigger, this page is your fix.</p>
+<p>Kubernetes: run the same client with <code>kubectl exec</code> in the ClickHouse pod. The
+<a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md#charts-at-a-glance">Kubernetes recipe</a> names the pod
+and container for each Helm chart.</p>
+<h2 id="fix">Fix</h2>
+<h3 id="1-empty-the-logs-now">1. Empty the logs now</h3>
+<p>Open a client with write access
+(<a href="../../guide/#2-how-do-i-free-the-disk-space-right-now">guide, section 2</a>)
+and empty the big logs:</p>
+<pre><code>TRUNCATE TABLE system.trace_log;
+TRUNCATE TABLE system.text_log;
+TRUNCATE TABLE system.metric_log;
+TRUNCATE TABLE system.query_log;</code></pre>
+<p>This deletes only ClickHouse's own diagnostics, not your traces. Run only the
+lines for logs in your size list: <code>TRUNCATE</code> of a log your server doesn't have
+fails with Code 60 (<code>UNKNOWN_TABLE</code>). SigNoz's config and the stock config
+before 24.8 don't turn on <code>text_log</code>.</p>
+<ul>
+<li>
+<strong>Over 50 GB (46.6 GiB in the size list)?</strong> <code>TRUNCATE</code> fails with Code 359. Add <code>SETTINGS max_table_size_to_drop = 0</code> to that statement (<a href="../clickhouse-max-table-size-to-drop/">Code 359 page</a>).</li>
+<li>
+<strong>Disk at 100%?</strong> <code>TRUNCATE</code> can fail with Code 243 (<code>NOT_ENOUGH_SPACE</code>). The <a href="../clickhouse-not-enough-space/">Code 243 page</a> has the <code>DROP ... SYNC</code> way.</li>
+<li>
+<strong>Langfuse reads <code>system.query_log</code></strong> to follow some of its own queries (<a href="https://github.com/langfuse/langfuse/issues/13123">#13123</a>). Empty it, but don't switch it off.</li>
+</ul>
+<h3 id="2-add-a-ttl-so-they-stay-small">2. Add a TTL so they stay small</h3>
+<p>Save this as <code>clickhouse-ttl.xml</code> next to <code>docker-compose.yml</code> (the file from
+<a href="../../guide/#step-2-add-a-ttl-file-in-configd">guide, step 2</a>):</p>
+<pre><code>&lt;clickhouse&gt;
+    &lt;!-- Keep 7 days of ClickHouse's own logs. List only logs your server has. --&gt;
+    &lt;query_log&gt;&lt;ttl&gt;event_date + INTERVAL 7 DAY DELETE&lt;/ttl&gt;&lt;/query_log&gt;
+    &lt;trace_log&gt;&lt;ttl&gt;event_date + INTERVAL 7 DAY DELETE&lt;/ttl&gt;&lt;/trace_log&gt;
+    &lt;text_log&gt;&lt;ttl&gt;event_date + INTERVAL 7 DAY DELETE&lt;/ttl&gt;&lt;/text_log&gt;
+    &lt;metric_log&gt;&lt;ttl&gt;event_date + INTERVAL 7 DAY DELETE&lt;/ttl&gt;&lt;/metric_log&gt;
+    &lt;asynchronous_metric_log&gt;&lt;ttl&gt;event_date + INTERVAL 7 DAY DELETE&lt;/ttl&gt;&lt;/asynchronous_metric_log&gt;
+    &lt;part_log&gt;&lt;ttl&gt;event_date + INTERVAL 7 DAY DELETE&lt;/ttl&gt;&lt;/part_log&gt;
+    &lt;opentelemetry_span_log&gt;
+        &lt;engine&gt;ENGINE = MergeTree PARTITION BY toYYYYMM(finish_date) ORDER BY (finish_date, finish_time_us) TTL finish_date + INTERVAL 7 DAY DELETE&lt;/engine&gt;
+    &lt;/opentelemetry_span_log&gt;
+&lt;/clickhouse&gt;</code></pre>
+<p>Mount it into the <code>clickhouse</code> service (keep your existing volume lines), then
+run <code>docker compose up -d clickhouse</code>. That recreates the container and
+restarts ClickHouse. The TTL takes effect only at a restart.</p>
+<pre><code>  clickhouse:
+    volumes:
+      - ./clickhouse-ttl.xml:/etc/clickhouse-server/config.d/clickhouse-ttl.xml:ro</code></pre>
+<ul>
+<li>
+<strong><code>opentelemetry_span_log</code> takes its TTL inside <code>&lt;engine&gt;</code></strong>, with the <code>ORDER BY</code> your server uses: <code>SELECT engine_full FROM system.tables WHERE database = 'system' AND name = 'opentelemetry_span_log'</code> shows it. The file above has the <code>ORDER BY</code> of the stock config in 25.5 and newer. On 24.8 and older, and with SigNoz's config, end it with <code>, trace_id)</code>. A plain <code>&lt;ttl&gt;</code> there stops ClickHouse with Code 36 (<a href="../clickhouse-system-log-ttl-inside-engine/">Code 36 page</a>).</li>
+<li>
+<strong>No <code>text_log</code> before 24.8 or on SigNoz.</strong> The stock config turns it on from 24.8, and SigNoz's own <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml"><code>config.xml</code></a> doesn't. Delete that line there, because a section in the config turns a log on: on 24.3, this line alone turned <code>text_log</code> on, with messages down to <code>Trace</code>.</li>
+<li>
+<strong>SigNoz:</strong> also add <code>processors_profile_log</code>, which has no TTL in that file.</li>
+<li>
+<strong>More logs have no TTL:</strong> <code>error_log</code>; on 24.8 also <code>processors_profile_log</code> (the stock config keeps it 30 days from 25.5 on); on 25.12 and 26.9 also <code>query_metric_log</code> and <code>background_schedule_pool_log</code>. If they are big on your server, add them the same way.</li>
+<li>
+<strong>Keep the mount line.</strong> If you replace <code>docker-compose.yml</code> with a new copy, for example when you update Langfuse, add the line again. Without the file, the next restart moves each log, TTL and all, to a <code>_0</code> copy and creates it again without a TTL.</li>
+<li>
+<strong>Kubernetes:</strong> the TTL goes into your Helm chart's values, not into the pod. Files written inside a container, outside its volumes, are gone when it restarts (<a href="https://kubernetes.io/docs/concepts/storage/volumes/">Kubernetes docs</a>). The <a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md#charts-at-a-glance">Kubernetes recipe</a> has the values key for each chart.</li>
+</ul>
+<h3 id="3-drop-the-old-copies">3. Drop the old copies</h3>
+<p>The restart keeps each changed log's old table, with all its rows and no TTL,
+as <code>trace_log_0</code>, <code>text_log_0</code> and so on. A log moves to its new table at its
+first flush after the restart, so flush first, then list the copies:</p>
+<pre><code>SYSTEM FLUSH LOGS;
+SELECT 'DROP TABLE system.' || name || ' SYNC SETTINGS max_table_size_to_drop = 0;'
+FROM system.tables
+WHERE database = 'system' AND match(name, '_log_[0-9]+$');</code></pre>
+<p>Read the statements, then paste them into the client. <code>DROP</code> can't be undone.
+<code>SYNC</code> gives the space back at once. Without it, the <code>system</code> database
+(Atomic) keeps the data for 8 minutes
+(<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec"><code>database_atomic_delay_before_drop_table_sec</code></a> = 480 s).
+<code>SYNC</code> goes before <code>SETTINGS</code>; after it, the statement fails with Code 62
+(<code>SYNTAX_ERROR</code>). More on the copies:
+<a href="../clickhouse-system-log-copies/">system log copies</a>.</p>
+<h3 id="4-check-the-result">4. Check the result</h3>
+<p>Run the TTL query from <a href="../../guide/#step-1-which-logs-have-no-ttl">guide, step 1</a>:
+every big log should show a TTL, and no <code>_N</code> names should be left. ClickHouse
+deletes expired rows in merges and repeats a TTL merge at most every 4 hours
+(<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout"><code>merge_with_ttl_timeout</code></a> = 14400 s).
+If the size doesn't go down, see <a href="../clickhouse-ttl-delete-not-freeing-disk/">TTL not freeing disk</a>.</p>
+<h3 id="dont-use-alter-table--modify-ttl">Don't use ALTER TABLE ... MODIFY TTL</h3>
+<p><code>ALTER TABLE system.query_log MODIFY TTL event_date + INTERVAL 7 DAY</code> works
+until the next restart. Then ClickHouse sees that the table differs from its
+config, logs <code>Renaming it to query_log_0</code>, and creates a new <code>query_log</code>
+without a TTL. Your TTL stays on the copy. Put it in <code>config.d</code> instead.</p>
+<h3 id="or-stop-what-writes-trace_log">Or stop what writes trace_log</h3>
+<p>If nobody reads <code>trace_log</code>, add <code>&lt;clickhouse&gt;&lt;trace_log remove="1"/&gt;&lt;/clickhouse&gt;</code>
+as a <code>config.d</code> file (and delete the <code>trace_log</code> line from <code>clickhouse-ttl.xml</code>),
+recreate the container, then drop the old table, which <code>remove="1"</code> leaves on
+disk: <code>DROP TABLE system.trace_log SYNC SETTINGS max_table_size_to_drop = 0;</code></p>
+<p>To keep the table but stop the profilers, turning off only the query profiler
+is not enough on 25.10 and newer: the global profiler keeps writing. With all
+six settings below at <code>0</code> and the container recreated, <code>trace_log</code> got no new
+rows on 25.12 and 26.9:</p>
+<ul>
+<li>in <code>users.d/</code>, under <code>&lt;profiles&gt;&lt;default&gt;</code>: <code>query_profiler_real_time_period_ns</code>, <code>query_profiler_cpu_time_period_ns</code> and <code>memory_profiler_step</code>. Under <code>&lt;profiles&gt;</code> in <code>config.d/</code> they are ignored (<a href="https://github.com/triggerdotdev/trigger.dev/issues/4343">trigger.dev #4343</a>). At the top level of <code>config.d/</code>, ClickHouse doesn't start: <code>A setting 'query_profiler_real_time_period_ns' appeared at top level in config</code> (Code 137, <code>UNKNOWN_ELEMENT_IN_CONFIG</code>).</li>
+<li>in <code>config.d/</code>, at the top level: <code>global_profiler_real_time_period_ns</code>, <code>global_profiler_cpu_time_period_ns</code> and <code>total_memory_profiler_step</code>.</li>
+</ul>
+<h2 id="why-it-happens">Why it happens</h2>
+<p>ClickHouse writes its own diagnostics into <code>system.*_log</code> tables, and the stock
+<a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml"><code>config.xml</code></a> gives only a few of them a TTL:</p>
+<ul>
+<li>
+<strong>With a TTL (25.12, 26.9):</strong> <code>processors_profile_log</code>, <code>blob_storage_log</code>, <code>aggregated_zookeeper_log</code> and <code>zookeeper_connection_log</code> keep 30 days, <code>asynchronous_insert_log</code> 3 days. On 24.8 only <code>blob_storage_log</code> and <code>asynchronous_insert_log</code> have one.</li>
+<li>
+<strong>No TTL:</strong> <code>trace_log</code>, <code>text_log</code>, <code>query_log</code>, <code>metric_log</code>, <code>asynchronous_metric_log</code>, <code>part_log</code>, <code>error_log</code>, <code>opentelemetry_span_log</code>, <code>query_metric_log</code> and others.</li>
+</ul>
+<p>Four defaults fill <code>trace_log</code> and <code>text_log</code>:</p>
+<ul>
+<li>
+<strong>The query profiler</strong> samples each query's threads once a second of real time and once a second of CPU time (<a href="https://clickhouse.com/docs/reference/settings/session-settings/query-profiler"><code>query_profiler_real_time_period_ns</code> and <code>query_profiler_cpu_time_period_ns</code></a> = 1000000000).</li>
+<li>
+<strong>The memory profiler</strong> writes a stack trace at every 4 MiB step of a query's memory (<a href="https://clickhouse.com/docs/reference/settings/session-settings/memory-profiler#memory_profiler_step"><code>memory_profiler_step</code></a> = 4194304). The stock <code>config.xml</code> sets the server-wide <code>total_memory_profiler_step</code> to 4 MiB too.</li>
+<li>
+<strong>The global profiler</strong>, on by default since 25.10 (<a href="https://github.com/ClickHouse/ClickHouse/pull/88209">PR #88209</a>), samples every server thread every 10 seconds of real time and every 10 seconds of CPU time, query or not (<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/global-profiler#global_profiler_real_time_period_ns"><code>global_profiler_real_time_period_ns</code> and <code>global_profiler_cpu_time_period_ns</code></a> = 10000000000). On idle 25.12 and 26.9 test servers, most <code>trace_log</code> rows were its samples (<code>trace_type</code> <code>Real</code>, empty <code>query_id</code>).</li>
+<li>
+<strong><code>text_log</code></strong>, on by default since 24.8 (<a href="https://github.com/ClickHouse/ClickHouse/pull/67428">PR #67428</a>), stores the server log at <code>&lt;level&gt;trace&lt;/level&gt;</code> in the stock <code>config.xml</code>.</li>
+</ul>
+<p>Public cases:</p>
+<ul>
+<li>
+<a href="https://github.com/langfuse/langfuse/issues/13123">Langfuse #13123</a>: <code>system.trace_log</code> was 66.86 GiB, while <code>traces</code>, <code>observations</code> and <code>scores</code> took about 51 MiB together.</li>
+<li>
+<a href="https://github.com/comet-ml/opik/issues/6224">Opik #6224</a>: <code>trace_log</code> was 66.42 GiB with 3 billion rows. ClickHouse's own tables were 98% of the volume.</li>
+<li>
+<a href="https://github.com/ClickHouse/ClickStack-helm-charts/issues/191">ClickStack Helm chart #191</a>: <code>trace_log</code> reached ~97 GB in about 6 weeks and filled a 108 GB PVC. <a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">PR #275</a> adds a 7-day TTL to five logs in the chart, not to <code>trace_log</code>.</li>
+<li>
+<a href="https://github.com/SigNoz/signoz/issues/12050">SigNoz #12050</a>: more than 80 GB of system logs next to less than 500 MB of telemetry.</li>
+<li>
+<a href="https://github.com/lmnr-ai/lmnr/issues/2176">Laminar #2176</a>: 13.4 GiB of system logs (11 GiB of it <code>trace_log</code>) against 15.6 KiB of data, after a month of light use.</li>
+</ul>
+<h2 id="tested-on">Tested on</h2>
+<p>ClickHouse 24.8.14.39, 25.12.11.4 and 26.9.1.1629 (stock images, Docker
+29.3.0): the defaults above and every step on this page, with the <code>SYNC</code> drop
+list, <code>SYNC</code> after <code>SETTINGS</code> (Code 62) and a restart after the mount line is
+gone. The <code>remove="1"</code> drop with <code>SYNC</code> on 24.8 and 26.9. On 24.3.18.7: no <code>text_log</code>,
+<code>TRUNCATE</code> of it fails with Code 60, and the TTL file turns it on. The
+<code>opentelemetry_span_log</code> <code>ORDER BY</code> and the <code>processors_profile_log</code> TTL are
+from the stock <code>config.xml</code> of 24.1.2.5, 24.3.18.7, 24.8, 25.5.11.15,
+25.8.5.17, 25.12 and 26.9. Code 359 with <code>max_table_size_to_drop</code> lowered to
+1 byte. The compose commands and the diskvet 0.3.1 report on 25.12 with a
+compose file like Langfuse's (Compose v5.1.0). The SigNoz command with another
+container name. The global profiler is off on 25.5.11.15 and 25.8.5.17. Not
+run: a full disk, a real 50 GB table, SigNoz's own <code>config.xml</code>, Kubernetes,
+the two <code>curl</code> downloads (both URLs answer).</p>
+<h2 id="sources">Sources</h2>
+<ul>
+<li>System tables overview (unlimited growth): <a href="https://clickhouse.com/docs/reference/system-tables/overview">https://clickhouse.com/docs/reference/system-tables/overview</a>
+</li>
+<li>Default <code>config.xml</code> (log TTLs, <code>text_log</code> level, <code>total_memory_profiler_step</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml</a>
+</li>
+<li>
+<code>text_log</code> on by default since 24.8: <a href="https://github.com/ClickHouse/ClickHouse/pull/67428">https://github.com/ClickHouse/ClickHouse/pull/67428</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/master/docs/changelogs/v24.8.1.2684-lts.md">https://github.com/ClickHouse/ClickHouse/blob/master/docs/changelogs/v24.8.1.2684-lts.md</a>
+</li>
+<li>The rename of a changed log: <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/SystemLog.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/SystemLog.cpp</a>
+</li>
+<li>DROP and <code>SYNC</code>, the drop delay: <a href="https://clickhouse.com/docs/reference/statements/drop">https://clickhouse.com/docs/reference/statements/drop</a>, <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec</a>
+</li>
+<li>Files in a container are lost when it restarts: <a href="https://kubernetes.io/docs/concepts/storage/volumes/">https://kubernetes.io/docs/concepts/storage/volumes/</a>
+</li>
+<li>system.trace_log (<code>trace_type</code>): <a href="https://clickhouse.com/docs/reference/system-tables/trace_log">https://clickhouse.com/docs/reference/system-tables/trace_log</a>
+</li>
+<li>Profiler settings: <a href="https://clickhouse.com/docs/reference/settings/session-settings/query-profiler">https://clickhouse.com/docs/reference/settings/session-settings/query-profiler</a>, <a href="https://clickhouse.com/docs/reference/settings/session-settings/memory-profiler#memory_profiler_step">https://clickhouse.com/docs/reference/settings/session-settings/memory-profiler#memory_profiler_step</a>, <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/total-memory#total_memory_profiler_step">https://clickhouse.com/docs/reference/settings/server-settings/settings/total-memory#total_memory_profiler_step</a>, <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/global-profiler#global_profiler_real_time_period_ns">https://clickhouse.com/docs/reference/settings/server-settings/settings/global-profiler#global_profiler_real_time_period_ns</a> (the global one needs a restart); on by default since 25.10: <a href="https://github.com/ClickHouse/ClickHouse/pull/88209">https://github.com/ClickHouse/ClickHouse/pull/88209</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/master/docs/changelogs/v25.10.1.3832-stable.md">https://github.com/ClickHouse/ClickHouse/blob/master/docs/changelogs/v25.10.1.3832-stable.md</a>
+</li>
+<li>Altinity KB, "System tables ate my disk" (restart needed): <a href="https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/">https://kb.altinity.com/altinity-kb-setup-and-maintenance/altinity-kb-system-tables-eat-my-disk/</a>
+</li>
+</ul>
+<h2 id="check-it-with-diskvet">Check it with diskvet</h2>
+<p><a href="https://github.com/Protemir/diskvet">diskvet</a> is a free, open-source,
+read-only script. It runs the size and TTL checks and prints the <code>TRUNCATE</code>
+commands for the big logs, the TTL file and the <code>DROP</code> list for your tables.
+Its <code>DROP</code> lines have no <code>SYNC</code>: add it after the table name to get the space
+back at once. Read <code>checks.sql</code> before you run it (SigNoz:
+<code>--docker signoz-clickhouse</code>; Kubernetes: <code>--k8s auto</code>):</p>
+<pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
+sh diskvet.sh report --docker auto &gt; report.md</code></pre>
+<p>More depth: <a href="../../guide/#3-why-are-trace_log-and-text_log-so-big">guide, section 3</a> and <a href="../../guide/#4-how-do-i-set-a-ttl-on-clickhouse-system-logs">section 4</a>.</p>
+<hr>
+<p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.</p>
+    </article>
+    <p class="small muted guide-source"><a href="../">All disk errors and fixes</a> · <a href="https://github.com/Protemir/diskvet/blob/main/docs/fix/clickhouse-trace-log-huge.md">Source on GitHub</a></p>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="../../guide/">Guide</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">Report a problem</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">Report a security issue</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet is free and open source (Apache-2.0).</p>
+    <p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.
+      Langfuse, SigNoz and ClickStack are trademarks of their respective owners and are mentioned only to describe compatibility.</p>
+  </div>
+</footer>
+<script src="../../langs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Common ClickHouse® disk errors and fixes · diskvet</title>
+  <meta name="description" content="One page per ClickHouse® disk error or symptom, such as Code 243, 252 or 359: a read-only check, the fix, and the versions it was tested on.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <meta property="og:title" content="Common ClickHouse® disk errors and fixes">
+  <meta property="og:description" content="One page per ClickHouse® disk error or symptom, such as Code 243, 252 or 359: a read-only check, the fix, and the versions it was tested on.">
+  <meta property="og:url" content="https://diskvet.dev/fix/">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://diskvet.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="diskvet: what fills the disk of the ClickHouse® in self-hosted Langfuse, SigNoz and ClickStack, and the fix; sh diskvet.sh report --docker auto">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://diskvet.dev/fix/">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="../">diskvet</a>
+    <div class="header-right">
+      <nav aria-label="Main">
+        <ul>
+          <li><a href="../">Home</a></li>
+          <li><a href="../guide/">Guide</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a></li>
+          <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+        </ul>
+      </nav>
+      <nav class="langs" aria-label="Language">
+        <details>
+          <summary><svg class="globe" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8h13M8 1.5c1.9 2 2.8 4.1 2.8 6.5S9.9 12.5 8 14.5M8 1.5C6.1 3.5 5.2 5.6 5.2 8s.9 4.5 2.8 6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg> English</summary>
+          <ul>
+            <li><a href="./" hreflang="en" lang="en" aria-current="page">English</a></li>
+            <li><a href="../es/guide/" hreflang="es" lang="es">Español</a></li>
+            <li><a href="../pt/guide/" hreflang="pt" lang="pt-BR">Português</a></li>
+            <li><a href="../ru/guide/" hreflang="ru" lang="ru">Русский</a></li>
+            <li><a href="../ja/guide/" hreflang="ja" lang="ja">日本語</a></li>
+            <li><a href="../ko/guide/" hreflang="ko" lang="ko">한국어</a></li>
+            <li><a href="../zh/guide/" hreflang="zh-Hans" lang="zh-Hans">中文</a></li>
+          </ul>
+        </details>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow">
+    <h1>Common ClickHouse® disk errors and fixes</h1>
+    <p>Each page starts from one error message or symptom in self-hosted Langfuse, SigNoz or
+      ClickStack. It gives a read-only check, the fix, and the versions it was tested on. For the
+      whole picture, from the first check to a TTL that keeps the logs small, read the
+      <a href="../guide/">guide</a>.</p>
+    <ul class="fix-list">
+      <li><a href="clickhouse-trace-log-huge/">system.trace_log and text_log are huge: how to fix it</a>
+        <p>Why system.trace_log and text_log fill the disk in self-hosted ClickHouse, how to empty them now and add a TTL so they stay small.</p></li>
+      <li><a href="clickhouse-not-enough-space/">Code 243: Cannot reserve 1.00 MiB, not enough space</a>
+        <p>ClickHouse says Cannot reserve 1.00 MiB, not enough space (NOT_ENOUGH_SPACE). At 100% even TRUNCATE fails. What still works and how to free space.</p></li>
+      <li><a href="clickhouse-max-table-size-to-drop/">Code 359: Table or Partition was not dropped (max_table_size_to_drop, 50 GB)</a>
+        <p>TRUNCATE or DROP over 50 GB fails with Code 359 TABLE_SIZE_EXCEEDS_MAX_DROP_SIZE_LIMIT. Lift the limit for one statement or use the force_drop_table flag.</p></li>
+      <li><a href="clickhouse-system-log-copies/">trace_log_0 and query_log_1: old system log copies</a>
+        <p>What trace_log_0, query_log_1 and other _N system tables are, why they have no TTL, and how to drop them safely.</p></li>
+      <li><a href="clickhouse-system-log-ttl-inside-engine/">Code 36: TTL parameters should be specified directly inside 'engine'</a>
+        <p>ClickHouse exits with Code 36 after you add a TTL for opentelemetry_span_log. Put the TTL inside &lt;engine> or switch the log off.</p></li>
+      <li><a href="clickhouse-ttl-delete-not-freeing-disk/">TTL not deleting old data, or DELETE not freeing disk</a>
+        <p>Rows are expired or deleted but ClickHouse disk stays full. Why TTL and lightweight DELETE wait for merges, and how to force them.</p></li>
+      <li><a href="clickhouse-too-many-parts/">Code 252: Too many parts. Merges are processing significantly slower than inserts</a>
+        <p>What Too many parts (Code 252, TOO_MANY_PARTS) means, how to check parts, merges and free space, and how to fix it with fewer, bigger inserts.</p></li>
+      <li><a href="clickhouse-cannot-log-message-ownasyncsplitchannel/">Cannot log message in OwnAsyncSplitChannel channel</a>
+        <p>ClickHouse can't write its log file, floods stderr and Docker's json log, and burns CPU. Why it happens and how to stop it.</p></li>
+    </ul>
+    <p class="small muted guide-source"><a href="https://github.com/Protemir/diskvet/tree/main/docs/fix">Source on GitHub</a></p>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="../guide/">Guide</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">Report a problem</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">Report a security issue</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet is free and open source (Apache-2.0).</p>
+    <p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.
+      Langfuse, SigNoz and ClickStack are trademarks of their respective owners and are mentioned only to describe compatibility.</p>
+  </div>
+</footer>
+<script src="../langs.js" defer></script>
+</body>
+</html>

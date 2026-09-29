@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClickHouse® TTL not deleting old data, or DELETE not freeing disk · diskvet</title>
+  <meta name="description" content="Rows are expired or deleted but ClickHouse disk stays full. Why TTL and lightweight DELETE wait for merges, and how to force them.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../../style.css">
+  <meta property="og:title" content="ClickHouse® TTL not deleting old data, or DELETE not freeing disk">
+  <meta property="og:description" content="Rows are expired or deleted but ClickHouse disk stays full. Why TTL and lightweight DELETE wait for merges, and how to force them.">
+  <meta property="og:url" content="https://diskvet.dev/fix/clickhouse-ttl-delete-not-freeing-disk/">
+  <meta property="og:type" content="article">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://diskvet.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="diskvet: what fills the disk of the ClickHouse® in self-hosted Langfuse, SigNoz and ClickStack, and the fix; sh diskvet.sh report --docker auto">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://diskvet.dev/fix/clickhouse-ttl-delete-not-freeing-disk/">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="../../">diskvet</a>
+    <div class="header-right">
+      <nav aria-label="Main">
+        <ul>
+          <li><a href="../../">Home</a></li>
+          <li><a href="../../guide/">Guide</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a></li>
+          <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+        </ul>
+      </nav>
+      <nav class="langs" aria-label="Language">
+        <details>
+          <summary><svg class="globe" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8h13M8 1.5c1.9 2 2.8 4.1 2.8 6.5S9.9 12.5 8 14.5M8 1.5C6.1 3.5 5.2 5.6 5.2 8s.9 4.5 2.8 6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg> English</summary>
+          <ul>
+            <li><a href="./" hreflang="en" lang="en" aria-current="page">English</a></li>
+            <li><a href="../../es/guide/" hreflang="es" lang="es">Español</a></li>
+            <li><a href="../../pt/guide/" hreflang="pt" lang="pt-BR">Português</a></li>
+            <li><a href="../../ru/guide/" hreflang="ru" lang="ru">Русский</a></li>
+            <li><a href="../../ja/guide/" hreflang="ja" lang="ja">日本語</a></li>
+            <li><a href="../../ko/guide/" hreflang="ko" lang="ko">한국어</a></li>
+            <li><a href="../../zh/guide/" hreflang="zh-Hans" lang="zh-Hans">中文</a></li>
+          </ul>
+        </details>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow">
+    <article class="guide">
+<h1 id="clickhouse-ttl-not-deleting-old-data-or-delete-not-freeing-disk">ClickHouse® TTL not deleting old data, or DELETE not freeing disk</h1>
+<p>You set a TTL or a retention period, or you ran <code>DELETE FROM</code>, but the disk
+stays full. There is no error: ClickHouse® is waiting for a merge that may not
+come soon.</p>
+<h2 id="short-answer">Short answer</h2>
+<p>ClickHouse frees disk only when it writes a part again without the rows, or
+drops a whole part. Expired rows go at a TTL merge. After one TTL merge in a
+partition, the next one there waits at least
+<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout"><code>merge_with_ttl_timeout</code></a>
+(14400 s, 4 hours), and until then <code>SELECT</code> still returns the expired rows. A
+lightweight <code>DELETE</code> only marks rows as deleted. To free the space now, use
+<code>MATERIALIZE TTL</code> for expired rows, <code>APPLY DELETED MASK</code> for deleted rows, or
+<code>DROP PARTITION</code> for whole old partitions you don't need.</p>
+<h2 id="check">Check</h2>
+<p>Open a client as in <a href="../../guide/#1-what-is-using-the-disk-check-clickhouse-disk-usage-by-table">section 1 of the guide</a>,
+with <code>--readonly=1</code>. These queries read only <code>system</code> tables. On Kubernetes,
+the pod and the login for each Helm chart are in the
+<a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md#chart-by-chart">Kubernetes recipe</a>.</p>
+<p><strong>1. Which tables have a TTL?</strong></p>
+<pre><code>SELECT database, name,
+       extract(engine_full, ' TTL (.+?)(?: SETTINGS |$)') AS ttl,
+       extract(engine_full, 'ttl_only_drop_parts = (\\d)') AS ttl_only_drop_parts
+FROM system.tables
+WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema') AND engine LIKE '%MergeTree'
+ORDER BY total_bytes DESC LIMIT 20;</code></pre>
+<p>An empty <code>ttl</code> means the table has no table TTL (column TTLs don't show
+here). An empty <code>ttl_only_drop_parts</code> means the table uses the server's value:
+<code>SELECT value FROM system.merge_tree_settings WHERE name = 'ttl_only_drop_parts'</code>.
+Langfuse's retention doesn't use a TTL: it removes old rows with <code>DELETE</code>
+(check 3).</p>
+<p>The query leaves out <code>system</code>. If you gave a <code>system.*_log</code> table a TTL and
+the disk is still full, look for <code>*_log_N</code> copies: they keep the old rows and
+usually have no TTL (<a href="../clickhouse-system-log-copies/">system log copies</a>).</p>
+<p><strong>2. Did the parts get their expiry dates?</strong></p>
+<pre><code>SELECT database, table, partition_id, count() AS parts,
+       formatReadableSize(sum(bytes_on_disk)) AS size,
+       min(delete_ttl_info_min) AS oldest_expiry,
+       max(delete_ttl_info_max) AS newest_expiry
+FROM system.parts
+WHERE active AND database != 'system'
+GROUP BY database, table, partition_id
+ORDER BY sum(bytes_on_disk) DESC LIMIT 30;</code></pre>
+<ul>
+<li>
+<code>1970-01-01 00:00:00</code>: the parts have no expiry date. Tables without a TTL show this too. In a table that has a TTL, the TTL was never calculated for these parts, so no TTL merge picks them. You get this after adding a TTL with <code>MODIFY TTL ... SETTINGS materialize_ttl_after_modify = 0</code>.</li>
+<li>
+<code>oldest_expiry</code> in the past: some rows have expired and wait for a TTL merge.</li>
+<li>
+<code>newest_expiry</code> in the past: every row in the partition has expired. 25.12 and 26.9 dropped such a part within a minute; 24.8 can wait up to 4 hours after an earlier TTL merge in the partition. If it stays longer, see <a href="#clickhouse-bugs-that-keep-expired-parts">ClickHouse bugs</a>.</li>
+<li>Expiry dates later than the new TTL would give: the parts still carry the old TTL. <code>MODIFY TTL</code> with <code>materialize_ttl_after_modify = 0</code> doesn't recalculate them. In the tests, a 365-day TTL changed to 7 days this way kept the 2027 expiry dates, and all 200,000 rows stayed, about 176,000 of them older than 7 days.</li>
+</ul>
+<p><strong>3. Rows removed with DELETE</strong> (the same query as in the guide):</p>
+<pre><code>SELECT database, table, partition_id, count() AS parts,
+       formatReadableSize(sum(bytes_on_disk)) AS size
+FROM system.parts
+WHERE active AND has_lightweight_delete
+GROUP BY database, table, partition_id
+ORDER BY sum(bytes_on_disk) DESC;</code></pre>
+<p><strong>4. Parts too big to merge, and free space</strong></p>
+<pre><code>SELECT database, table, partition_id, name, formatReadableSize(bytes_on_disk) AS size
+FROM system.parts
+WHERE active
+  AND bytes_on_disk &gt; (SELECT toUInt64(value) FROM system.merge_tree_settings
+                       WHERE name = 'max_bytes_to_merge_at_max_space_in_pool')
+ORDER BY bytes_on_disk DESC;
+
+SELECT name, formatReadableSize(free_space) AS free, formatReadableSize(unreserved_space) AS unreserved FROM system.disks;</code></pre>
+<p>Background merges skip parts over
+<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool"><code>max_bytes_to_merge_at_max_space_in_pool</code></a>
+(150 GiB). Since 25.1, so do TTL merges that delete rows. With the limit set
+to 1 MB on a test table, 25.12 and 26.9 left an
+18.5 MiB part with expired rows alone. 24.8 still ran a TTL merge on it: it
+takes the part with the oldest expiry whatever its size
+(<a href="https://github.com/ClickHouse/ClickHouse/blob/v24.8.14.39-lts/src/Storages/MergeTree/TTLMergeSelector.cpp"><code>TTLMergeSelector.cpp</code> in 24.8</a>).
+A merge starts only if unreserved space is at least twice the size
+of its parts; a mutation needs about 1.1 times the size of the part
+(<a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/Compaction/CompactionStatistics.cpp"><code>CompactionStatistics.cpp</code></a>).</p>
+<p><strong>5. Stuck mutations</strong></p>
+<pre><code>SELECT database, table, mutation_id, command, create_time, parts_to_do, latest_fail_reason
+FROM system.mutations WHERE NOT is_done;</code></pre>
+<p>A mutation with <code>parts_to_do</code> above 0 and an empty <code>latest_fail_reason</code> may
+be waiting for free space. The server log
+(<code>/var/log/clickhouse-server/clickhouse-server.log</code>, at the default <code>trace</code>
+level) then has <code>Will not mutate part ... yet</code>. In the tests the mutation
+started by itself once there was room.</p>
+<h2 id="fix">Fix</h2>
+<p>Use a client with write access (<a href="../../guide/#2-how-do-i-free-the-disk-space-right-now">guide, section 2</a>).
+Take the partition ids from checks 2 and 3, and run check 5 before the next partition.</p>
+<h3 id="expired-rows-materialize-ttl">Expired rows: MATERIALIZE TTL</h3>
+<pre><code>ALTER TABLE &lt;db&gt;.&lt;table&gt; MATERIALIZE TTL IN PARTITION ID '202608';</code></pre>
+<p>On a test table (200,000 rows over 60 days, a 7-day TTL added with
+<code>materialize_ttl_after_modify = 0</code>) it left 23,338 rows, and 38.31 MiB became
+4.47 MiB (on 24.8, 38.68 MiB became 4.51 MiB).</p>
+<ul>
+<li>It is a mutation: it rewrites the parts and needs free space of about 1.1 times each part, or it waits (check 5). The 150 GiB merge limit doesn't apply to it: with the limit set to 1 MB, it rewrote the 18.5 MiB part that TTL merges had skipped.</li>
+<li>The old parts stay on disk for <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime"><code>old_parts_lifetime</code></a> (480 s), so <code>df</code> shows the space 8 minutes or more later. The same goes for <code>APPLY DELETED MASK</code> and <code>OPTIMIZE</code> below.</li>
+<li>
+<code>MODIFY TTL</code> does this to the whole table by itself. With the default <a href="https://clickhouse.com/docs/reference/settings/session-settings/materialize#materialize_ttl_after_modify"><code>materialize_ttl_after_modify</code></a> = 1 it starts a <code>MATERIALIZE TTL</code> mutation that rewrites every part, even when no row has expired: on a test table with a 365-day TTL, it read every column of the part and removed no rows. On a nearly full disk, run <code>MODIFY TTL ... SETTINGS materialize_ttl_after_modify = 0</code>, then <code>MATERIALIZE TTL</code> partition by partition.</li>
+<li>A lighter option: run <code>ALTER TABLE &lt;db&gt;.&lt;table&gt; MODIFY SETTING materialize_ttl_recalculate_only = 1</code> first. <code>MATERIALIZE TTL</code> then only fills in the expiry dates, and background TTL merges remove the rows later, with all their limits. The setting stays on the table until <code>ALTER TABLE &lt;db&gt;.&lt;table&gt; RESET SETTING materialize_ttl_recalculate_only</code>.</li>
+<li>On a table with <code>ttl_only_drop_parts = 1</code>, 24.10 and newer do the same by themselves: <code>MATERIALIZE TTL</code> reads only the columns the TTL needs, drops the parts where every row has expired, and leaves the expired rows in the other parts (<a href="https://github.com/ClickHouse/ClickHouse/pull/65488">PR #65488</a>). On the monthly test table <a href="#tables-partitioned-by-day-ttl_only_drop_parts">below</a>, 25.12 and 26.9 kept all 96,677 rows of September; <code>OPTIMIZE ... FINAL</code> removed the expired ones. 24.8 removed them with <code>MATERIALIZE TTL</code>.</li>
+</ul>
+<h3 id="deleted-rows-apply-deleted-mask">Deleted rows: APPLY DELETED MASK</h3>
+<pre><code>ALTER TABLE &lt;db&gt;.&lt;table&gt; APPLY DELETED MASK IN PARTITION ID '202605';</code></pre>
+<p>On the same test table, a <code>DELETE</code> of 90% of the rows left about 20,000 rows in
+<code>count()</code>, but the size grew from 38.31 MiB to 38.37 MiB. <code>APPLY DELETED MASK</code>
+brought it down to about 3.8 MiB.</p>
+<ul>
+<li>It is a heavyweight mutation, the same as <code>ALTER TABLE ... DELETE WHERE _row_exists = 0</code> (<a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">docs</a>). It rewrites the parts, so it needs free space and loads the disk. In <a href="https://github.com/orgs/langfuse/discussions/13969">Langfuse discussion #13969</a> it freed about 360 GiB per replica in about 17 minutes.</li>
+<li>Partition ids that start with <code>patch-</code> in check 3 come from <code>lightweight_delete_mode = 'lightweight_update'</code>. Check 3 then shows only the small patch parts, not the space: under 200 KiB for a 10 MiB partition in the tests. Run the command with the id after the last <code>-</code> (<code>202605</code> for <code>patch-…-202605</code>), as Langfuse's cleaner does. With the full <code>patch-</code> id it ran without an error and removed nothing, even after three runs. With <code>202605</code> it took two runs: the first only wrote the mask into the parts, and the size stayed the same; the second removed the rows. The small <code>patch-</code> parts left check 3 a few minutes later.</li>
+<li>
+<code>OPTIMIZE TABLE &lt;db&gt;.&lt;table&gt; PARTITION ID '&lt;id&gt;' FINAL</code> removes expired and deleted rows too, but it merges the whole partition into one part. In the tests it also removed expired rows from parts with <code>1970-01-01</code> expiry dates and from a table with <code>ttl_only_drop_parts = 1</code>. It needs unreserved space of twice the partition. Without that, <code>OPTIMIZE</code> returns OK and does nothing (<a href="https://clickhouse.com/docs/reference/statements/optimize">docs</a>). Add <code>SETTINGS optimize_throw_if_noop = 1</code> to see why: <code>Code: 388 ... (CANNOT_ASSIGN_OPTIMIZE)</code> with the space it needs.</li>
+</ul>
+<h3 id="whole-old-partitions-drop-partition">Whole old partitions: DROP PARTITION</h3>
+<pre><code>ALTER TABLE &lt;db&gt;.&lt;table&gt; DROP PARTITION ID '202604';</code></pre>
+<p>Nothing is rewritten, so it needs almost no free space, but on a disk at 100%
+it fails too, with <code>Code: 243</code> (<a href="../clickhouse-not-enough-space/">not enough space</a>).
+It deletes every row of the partition and can't be undone. A partition over
+50 GB fails with <code>Code: 359</code>
+(<a href="../../guide/#truncate-fails-with-code-359-tables-over-50-gb">guide</a>): add
+<code>SETTINGS max_partition_size_to_drop = 0</code>.</p>
+<h3 id="tables-partitioned-by-day-ttl_only_drop_parts">Tables partitioned by day: ttl_only_drop_parts</h3>
+<pre><code>ALTER TABLE &lt;db&gt;.&lt;table&gt; MODIFY SETTING ttl_only_drop_parts = 1;</code></pre>
+<p>With <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#ttl_only_drop_parts"><code>ttl_only_drop_parts</code></a>
+= 1 (default 0), TTL merges drop a part once all its rows have expired and no
+longer rewrite parts to delete rows. It removes no more than the default does:
+it saves the rewrites and the free space they need. It fits daily partitions.
+On a monthly test table with a 7-day TTL, the August part went within
+seconds, but all 96,677 rows of September stayed, 73,339 of them expired.</p>
+<h2 id="langfuse-signoz-and-clickstack">Langfuse, SigNoz and ClickStack</h2>
+<ul>
+<li>
+<strong>Langfuse</strong> partitions <code>traces</code>, <code>observations</code>, <code>scores</code>, <code>events_full</code> and <code>events_core</code> by month and removes old rows with <code>DELETE</code>. At high ingest, parts reach 150 GiB and are not merged again: in #13969 a May partition of about 802 GiB was about 85% deleted rows. Since v3.179.0 the worker has a cleaner, off by default: <code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code> (<a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>). Its query picks only <code>patch-*</code> partitions, except the current month's (<a href="https://github.com/langfuse/langfuse/blob/main/worker/src/features/deleted-mask-cleaner/helpers.ts"><code>helpers.ts</code></a>). With the default <code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=alter_update</code>, a <code>DELETE</code> writes no patch parts, so the cleaner finds nothing: run <code>APPLY DELETED MASK</code> yourself. <code>DROP PARTITION</code> of an old month is fine only if no project keeps data that long (the cleaner's author in #13969).</li>
+<li>
+<strong>SigNoz</strong> partitions its logs, traces and metrics tables by day, most of them with <code>ttl_only_drop_parts = 1</code>. Change retention on the Settings page, Workspace tab, and don't change the TTL of SigNoz tables by hand. A new retention applies only to newly ingested data (<a href="https://signoz.io/docs/userguide/retention-period/">SigNoz docs</a>): SigNoz runs <code>MODIFY TTL</code> with <code>materialize_ttl_after_modify=0</code>, and logs keep their retention in a <code>_retention_days</code> column. Old data leaves on the old schedule. In <a href="https://github.com/SigNoz/signoz/issues/9553">SigNoz #9553</a> the UI showed the new value while the TTL stayed at 30 days, so run check 1 after a change.</li>
+<li>
+<strong>ClickStack</strong> also partitions by day with <code>ttl_only_drop_parts = 1</code>, and keeps 3 days by default. Its <a href="https://clickhouse.com/docs/clickstack/managing/ttl">TTL docs</a> change retention with <code>MODIFY TTL</code>. On a test table like that (daily partitions, <code>ttl_only_drop_parts = 1</code>, one row TTL), the <code>MATERIALIZE TTL</code> it starts read only the TTL column on 25.12 and 26.9, and every column on 24.8 (<a href="https://github.com/ClickHouse/ClickHouse/pull/65488">PR #65488</a>, in 24.10 and newer). With <code>SETTINGS materialize_ttl_after_modify = 0</code>, old parts keep the old TTL.</li>
+</ul>
+<h2 id="clickhouse-bugs-that-keep-expired-parts">ClickHouse bugs that keep expired parts</h2>
+<ul>
+<li>
+<strong>Fully expired parts over 150 GiB.</strong> Since 25.1, TTL didn't drop such a part, and the parts after it in the partition stayed too (<a href="https://github.com/ClickHouse/ClickHouse/issues/80681">#80681</a>, reported on 25.3). Fixed by <a href="https://github.com/ClickHouse/ClickHouse/pull/86439">PR #86439</a>: in 25.9 and newer, and in 25.8 LTS from 25.8.12.129. The 25.3 cherry-pick was closed without merging. With the limit set to 1 MB, 25.8.5 kept a fully expired 20 MiB part, and 24.8, 25.12 and 26.9 dropped it. Until you upgrade, use <code>MATERIALIZE TTL</code> or <code>DROP PARTITION</code>: on 25.8.5, <code>MATERIALIZE TTL IN PARTITION ID</code> emptied that part.</li>
+<li>
+<strong>Volumes with <code>prefer_not_to_merge</code></strong>, such as a cold volume. Since 25.1, TTL didn't drop expired parts there (<a href="https://github.com/ClickHouse/ClickHouse/issues/85636">#85636</a>, <a href="https://github.com/SigNoz/charts/issues/820">SigNoz charts #820</a>). <a href="https://github.com/ClickHouse/ClickHouse/pull/90059">PR #90059</a> drops whole expired parts there again; it is in 25.12.1.649 and newer, with no backport found. TTL merges that delete rows skip such volumes by design, in 24.8 and in the <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/Compaction/MergeSelectors/TTLMergeSelector.cpp">current source</a>, so there the expired rows of a part that isn't fully expired stay. SigNoz's Helm chart moved to ClickHouse 25.12.5 in June 2026 (<a href="https://github.com/SigNoz/charts/pull/887">charts PR #887</a>); older installs ran 25.5.6.</li>
+</ul>
+<h2 id="why-it-happens">Why it happens</h2>
+<p>Parts on disk never change. To remove rows, ClickHouse writes a new part
+without them, or drops a part whose rows have all expired. "Data with an
+expired TTL is removed when ClickHouse merges data parts"
+(<a href="https://clickhouse.com/docs/reference/engines/table-engines/mergetree-family/mergetree#mergetree-removing-expired-data">docs</a>).
+A lightweight <code>DELETE</code> writes a hidden <code>_row_exists</code> mask and leaves the rows
+in place until the next merge (<a href="https://clickhouse.com/docs/reference/statements/delete">docs</a>).
+Old partitions get no writes and are rarely merged, and parts over 150 GiB are
+skipped, so in a table partitioned by month the space may never come back by
+itself.</p>
+<p><em>Tested on stock <code>clickhouse/clickhouse-server</code> 24.8.14.39, 25.12.11.4 and
+26.9.1.1629, and 25.8.5.17 for the fully expired part over the merge limit,
+one server, no replication (the <code>patch-</code> case on 25.12 and 26.9 only). The
+free-space cases (<code>OPTIMIZE</code>, the waiting mutation, <code>DROP PARTITION</code> at 100%)
+ran with the data folder on a 320 MiB tmpfs. Not tested on Langfuse, SigNoz or
+ClickStack installs.</em></p>
+<h2 id="sources">Sources</h2>
+<ul>
+<li>TTL, lightweight DELETE, APPLY DELETED MASK, MODIFY TTL, DROP PARTITION, OPTIMIZE, system.parts, system.mutations: <a href="https://clickhouse.com/docs/reference/engines/table-engines/mergetree-family/mergetree#mergetree-removing-expired-data">https://clickhouse.com/docs/reference/engines/table-engines/mergetree-family/mergetree#mergetree-removing-expired-data</a>, <a href="https://clickhouse.com/docs/reference/statements/delete">https://clickhouse.com/docs/reference/statements/delete</a>, <a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask</a>, <a href="https://clickhouse.com/docs/reference/statements/alter/ttl">https://clickhouse.com/docs/reference/statements/alter/ttl</a>, <a href="https://clickhouse.com/docs/reference/statements/alter/partition#drop-partitionpart">https://clickhouse.com/docs/reference/statements/alter/partition#drop-partitionpart</a>, <a href="https://clickhouse.com/docs/reference/statements/optimize">https://clickhouse.com/docs/reference/statements/optimize</a>, <a href="https://clickhouse.com/docs/reference/system-tables/parts">https://clickhouse.com/docs/reference/system-tables/parts</a>, <a href="https://clickhouse.com/docs/reference/system-tables/mutations">https://clickhouse.com/docs/reference/system-tables/mutations</a>
+</li>
+<li>MergeTree settings: <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout">https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout</a>, <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#ttl_only_drop_parts">https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#ttl_only_drop_parts</a>, <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/materialize#materialize_ttl_recalculate_only">https://clickhouse.com/docs/reference/settings/merge-tree-settings/materialize#materialize_ttl_recalculate_only</a>, <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool">https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool</a>
+</li>
+<li>Query settings: <a href="https://clickhouse.com/docs/reference/settings/session-settings/materialize#materialize_ttl_after_modify">https://clickhouse.com/docs/reference/settings/session-settings/materialize#materialize_ttl_after_modify</a>, <a href="https://clickhouse.com/docs/reference/settings/session-settings/lightweight#lightweight_delete_mode">https://clickhouse.com/docs/reference/settings/session-settings/lightweight#lightweight_delete_mode</a>, <a href="https://clickhouse.com/docs/reference/settings/session-settings/max#max_partition_size_to_drop">https://clickhouse.com/docs/reference/settings/session-settings/max#max_partition_size_to_drop</a>, <a href="https://clickhouse.com/docs/reference/settings/session-settings/optimize#optimize_throw_if_noop">https://clickhouse.com/docs/reference/settings/session-settings/optimize#optimize_throw_if_noop</a>
+</li>
+<li>Source code: <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/Compaction/MergeSelectorApplier.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/Compaction/MergeSelectorApplier.cpp</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/Compaction/MergeSelectors/TTLMergeSelector.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/Compaction/MergeSelectors/TTLMergeSelector.cpp</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/Compaction/CompactionStatistics.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/Compaction/CompactionStatistics.cpp</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/MergeTreeDataMergerMutator.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/MergeTreeDataMergerMutator.cpp</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/MutationsInterpreter.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/MutationsInterpreter.cpp</a>, and in 24.8 (TTL drops wait for the timer, a TTL merge always takes its first part): <a href="https://github.com/ClickHouse/ClickHouse/blob/v24.8.14.39-lts/src/Storages/MergeTree/MergeTreeDataMergerMutator.cpp">https://github.com/ClickHouse/ClickHouse/blob/v24.8.14.39-lts/src/Storages/MergeTree/MergeTreeDataMergerMutator.cpp</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/v24.8.14.39-lts/src/Storages/MergeTree/TTLMergeSelector.cpp">https://github.com/ClickHouse/ClickHouse/blob/v24.8.14.39-lts/src/Storages/MergeTree/TTLMergeSelector.cpp</a>
+</li>
+<li>ClickHouse PR #65488 (<code>MATERIALIZE TTL</code> with <code>ttl_only_drop_parts</code>): <a href="https://github.com/ClickHouse/ClickHouse/pull/65488">https://github.com/ClickHouse/ClickHouse/pull/65488</a>
+</li>
+<li>ClickHouse #80681, PR #86439, 25.8 backport PR #89708, 25.3 cherry-pick #89706: <a href="https://github.com/ClickHouse/ClickHouse/issues/80681">https://github.com/ClickHouse/ClickHouse/issues/80681</a>, <a href="https://github.com/ClickHouse/ClickHouse/pull/86439">https://github.com/ClickHouse/ClickHouse/pull/86439</a>, <a href="https://github.com/ClickHouse/ClickHouse/pull/89708">https://github.com/ClickHouse/ClickHouse/pull/89708</a>, <a href="https://github.com/ClickHouse/ClickHouse/pull/89706">https://github.com/ClickHouse/ClickHouse/pull/89706</a>
+</li>
+<li>ClickHouse #85636, PR #90059, SigNoz charts #820, PR #887: <a href="https://github.com/ClickHouse/ClickHouse/issues/85636">https://github.com/ClickHouse/ClickHouse/issues/85636</a>, <a href="https://github.com/ClickHouse/ClickHouse/pull/90059">https://github.com/ClickHouse/ClickHouse/pull/90059</a>, <a href="https://github.com/SigNoz/charts/issues/820">https://github.com/SigNoz/charts/issues/820</a>, <a href="https://github.com/SigNoz/charts/pull/887">https://github.com/SigNoz/charts/pull/887</a>
+</li>
+<li>ClickHouse #48928 (deleted rows stay until a merge) and the ClickStack TTL docs: <a href="https://github.com/ClickHouse/ClickHouse/issues/48928">https://github.com/ClickHouse/ClickHouse/issues/48928</a>, <a href="https://clickhouse.com/docs/clickstack/managing/ttl">https://clickhouse.com/docs/clickstack/managing/ttl</a>
+</li>
+<li>Langfuse discussion #13969, PR #14035, the cleaner's tables and query, the delete mode default: <a href="https://github.com/orgs/langfuse/discussions/13969">https://github.com/orgs/langfuse/discussions/13969</a>, <a href="https://github.com/langfuse/langfuse/pull/14035">https://github.com/langfuse/langfuse/pull/14035</a>, <a href="https://github.com/langfuse/langfuse/blob/main/worker/src/features/deleted-mask-cleaner/helpers.ts">https://github.com/langfuse/langfuse/blob/main/worker/src/features/deleted-mask-cleaner/helpers.ts</a>, <a href="https://github.com/langfuse/langfuse/blob/main/packages/shared/src/env.ts">https://github.com/langfuse/langfuse/blob/main/packages/shared/src/env.ts</a>
+</li>
+<li>SigNoz retention docs, #9553, <code>reader.go</code>, logs, traces and metrics schemas: <a href="https://signoz.io/docs/userguide/retention-period/">https://signoz.io/docs/userguide/retention-period/</a>, <a href="https://github.com/SigNoz/signoz/issues/9553">https://github.com/SigNoz/signoz/issues/9553</a>, <a href="https://github.com/SigNoz/signoz/blob/main/pkg/query-service/app/clickhouseReader/reader.go">https://github.com/SigNoz/signoz/blob/main/pkg/query-service/app/clickhouseReader/reader.go</a>, <a href="https://github.com/SigNoz/signoz-otel-collector/blob/main/cmd/signozschemamigrator/schema_migrator/v2_squashed_logs_migration.go">https://github.com/SigNoz/signoz-otel-collector/blob/main/cmd/signozschemamigrator/schema_migrator/v2_squashed_logs_migration.go</a>, <a href="https://github.com/SigNoz/signoz-otel-collector/blob/main/cmd/signozschemamigrator/schema_migrator/squashed_traces_migrations.go">https://github.com/SigNoz/signoz-otel-collector/blob/main/cmd/signozschemamigrator/schema_migrator/squashed_traces_migrations.go</a>, <a href="https://github.com/SigNoz/signoz-otel-collector/blob/main/cmd/signozschemamigrator/schema_migrator/squashed_metrics_migrations.go">https://github.com/SigNoz/signoz-otel-collector/blob/main/cmd/signozschemamigrator/schema_migrator/squashed_metrics_migrations.go</a>
+</li>
+</ul>
+<p>More on deleted rows in Langfuse: <a href="../../guide/#why-do-deleted-rows-still-take-space">the guide</a>.
+<a href="https://github.com/Protemir/diskvet">diskvet</a> is a free, open-source, read-only script. Its check 7
+lists partitions with deleted rows and unfinished mutations, and prints <code>APPLY DELETED MASK</code> where they are 10% of a table or more.
+Like check 3, it sees only the small <code>patch-</code> parts in <code>lightweight_update</code> mode.
+Read <code>checks.sql</code> before you run it (SigNoz: <code>--docker signoz-clickhouse</code>):</p>
+<pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
+sh diskvet.sh report --docker auto &gt; report.md</code></pre>
+<hr>
+<p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.</p>
+    </article>
+    <p class="small muted guide-source"><a href="../">All disk errors and fixes</a> · <a href="https://github.com/Protemir/diskvet/blob/main/docs/fix/clickhouse-ttl-delete-not-freeing-disk.md">Source on GitHub</a></p>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="../../guide/">Guide</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">Report a problem</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">Report a security issue</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet is free and open source (Apache-2.0).</p>
+    <p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.
+      Langfuse, SigNoz and ClickStack are trademarks of their respective owners and are mentioned only to describe compatibility.</p>
+  </div>
+</footer>
+<script src="../../langs.js" defer></script>
+</body>
+</html>

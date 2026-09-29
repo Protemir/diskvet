@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClickHouse® trace_log_0 and query_log_1: old system log copies · diskvet</title>
+  <meta name="description" content="What trace_log_0, query_log_1 and other _N system tables are, why they have no TTL, and how to drop them safely.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../../style.css">
+  <meta property="og:title" content="ClickHouse® trace_log_0 and query_log_1: old system log copies">
+  <meta property="og:description" content="What trace_log_0, query_log_1 and other _N system tables are, why they have no TTL, and how to drop them safely.">
+  <meta property="og:url" content="https://diskvet.dev/fix/clickhouse-system-log-copies/">
+  <meta property="og:type" content="article">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://diskvet.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="diskvet: what fills the disk of the ClickHouse® in self-hosted Langfuse, SigNoz and ClickStack, and the fix; sh diskvet.sh report --docker auto">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://diskvet.dev/fix/clickhouse-system-log-copies/">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="../../">diskvet</a>
+    <div class="header-right">
+      <nav aria-label="Main">
+        <ul>
+          <li><a href="../../">Home</a></li>
+          <li><a href="../../guide/">Guide</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a></li>
+          <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+        </ul>
+      </nav>
+      <nav class="langs" aria-label="Language">
+        <details>
+          <summary><svg class="globe" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8h13M8 1.5c1.9 2 2.8 4.1 2.8 6.5S9.9 12.5 8 14.5M8 1.5C6.1 3.5 5.2 5.6 5.2 8s.9 4.5 2.8 6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg> English</summary>
+          <ul>
+            <li><a href="./" hreflang="en" lang="en" aria-current="page">English</a></li>
+            <li><a href="../../es/guide/" hreflang="es" lang="es">Español</a></li>
+            <li><a href="../../pt/guide/" hreflang="pt" lang="pt-BR">Português</a></li>
+            <li><a href="../../ru/guide/" hreflang="ru" lang="ru">Русский</a></li>
+            <li><a href="../../ja/guide/" hreflang="ja" lang="ja">日本語</a></li>
+            <li><a href="../../ko/guide/" hreflang="ko" lang="ko">한국어</a></li>
+            <li><a href="../../zh/guide/" hreflang="zh-Hans" lang="zh-Hans">中文</a></li>
+          </ul>
+        </details>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow">
+    <article class="guide">
+<h1 id="clickhouse-trace_log_0-and-query_log_1-old-system-log-copies">ClickHouse® trace_log_0 and query_log_1: old system log copies</h1>
+<p>Your <code>system</code> database has tables like <code>trace_log_0</code>, <code>query_log_1</code> or
+<code>text_log_2</code>, and some of them are big. ClickHouse® made them itself. At the
+default <code>trace</code> log level, the server log has a line for each one:</p>
+<pre><code>&lt;Debug&gt; SystemLog (system.query_log): Existing table system.query_log for system log has obsolete or different structure. Renaming it to query_log_0.
+</code></pre>
+<p>The next two lines, <code>Old:</code> and <code>New:</code>, hold the old table's definition and
+the one ClickHouse wants, so you can see what differed.</p>
+<h2 id="short-answer">Short answer</h2>
+<p>After a restart, when ClickHouse first writes to a system log, it compares
+the log's definition in the config with the existing table. If they differ, it
+renames the old table to <code>name_N</code> and creates a new one. They differ when:</p>
+<ul>
+<li>you added, changed or removed a TTL, in <code>config.d</code> or with <code>ALTER TABLE</code>;</li>
+<li>you changed other engine settings, such as the storage policy;</li>
+<li>an upgrade changed the log's schema.</li>
+</ul>
+<p>The copy keeps all its old rows and gets no new ones. It keeps the TTL it had,
+which for most logs is none. ClickHouse doesn't write to it again or read it
+for its own work, so you can drop it.</p>
+<h2 id="check">Check</h2>
+<p>Save this as <code>copies.sql</code>:</p>
+<pre><code>SELECT name,
+       formatReadableSize(total_bytes) AS size,
+       total_rows AS rows,
+       extract(engine_full, 'TTL [^S]*') AS ttl
+FROM system.tables
+WHERE database = 'system' AND match(name, '_log_[0-9]+$')
+ORDER BY total_bytes DESC;</code></pre>
+<p>Run it read-only, like <code>size.sql</code> in the
+<a href="../../guide/#1-what-is-using-the-disk-check-clickhouse-disk-usage-by-table">guide</a>:</p>
+<pre><code># Langfuse
+docker compose exec -T clickhouse sh -c \
+  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' &lt; copies.sql
+# SigNoz
+docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --format PrettyCompact &lt; copies.sql</code></pre>
+<p>No rows means no copies. An empty <code>ttl</code> means the copy keeps its rows forever.</p>
+<p>Right after a restart, some copies may not exist yet. By default a log makes
+its copy at its first flush, not at startup: a busy log within seconds, a log
+that gets no new rows (such as <code>backup_log</code>) only when it gets one. To make
+them all now, run <code>SYSTEM FLUSH LOGS;</code> in a client with write access
+(<a href="../../guide/#2-how-do-i-free-the-disk-space-right-now">guide, section 2</a>).</p>
+<p>To see when each copy was made (Langfuse; SigNoz's
+<a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml">config</a>
+logs at <code>information</code> level, which doesn't show these lines):</p>
+<pre><code>docker compose exec -T clickhouse sh -c 'zgrep -h "Renaming it to" /var/log/clickhouse-server/clickhouse-server.log*'</code></pre>
+<p><code>zgrep</code> also reads the rotated <code>.gz</code> files. The stock config keeps 10 of them,
+so lines older than that are gone.</p>
+<h2 id="fix">Fix</h2>
+<p>Save the <code>DROP</code> generator from
+<a href="../../guide/#step-4-drop-the-old-trace_log_0-copies">step 4 of the guide</a> as
+<code>drop-gen.sql</code>:</p>
+<pre><code>SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
+FROM system.tables
+WHERE database = 'system' AND match(name, '_log_[0-9]+$');</code></pre>
+<p>Write the statements to a file, read it, then run it:</p>
+<pre><code># Langfuse
+docker compose exec -T clickhouse sh -c \
+  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1' &lt; drop-gen.sql &gt; drops.sql
+cat drops.sql
+docker compose exec -T clickhouse sh -c \
+  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery' &lt; drops.sql
+# SigNoz
+docker exec -i signoz-clickhouse clickhouse-client --readonly=1 &lt; drop-gen.sql &gt; drops.sql
+cat drops.sql
+docker exec -i signoz-clickhouse clickhouse-client --multiquery &lt; drops.sql</code></pre>
+<p>Each line deletes one table with all its rows, so keep only the lines you
+mean. Then run <code>copies.sql</code> again: it should return nothing.</p>
+<p>Traps:</p>
+<ul>
+<li>
+<p><strong>The space comes back 8 minutes later.</strong> The <code>system</code> database uses the Atomic engine. A plain <code>DROP</code> only marks the table as dropped, and the data is deleted after <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec"><code>database_atomic_delay_before_drop_table_sec</code></a> (480 s). <code>SELECT table FROM system.dropped_tables</code> lists the tables still waiting. To free the space at once, put <code>SYNC</code> before <code>SETTINGS</code>: <code>DROP TABLE system.trace_log_0 SYNC SETTINGS max_table_size_to_drop = 0;</code>. After <code>SETTINGS</code>, <code>SYNC</code> is a syntax error (Code 62). On a full disk, use the <code>SYNC</code> form (<a href="../clickhouse-not-enough-space/">Code 243 page</a>).</p>
+</li>
+<li>
+<p><strong>Big copies need the setting.</strong> A copy over the default limit of 50 GB fails without <code>SETTINGS max_table_size_to_drop = 0</code>, with Code 359 (<a href="../clickhouse-max-table-size-to-drop/">Code 359 page</a>). The query setting needs ClickHouse 23.12 or newer (<a href="https://github.com/ClickHouse/ClickHouse/pull/57452">PR #57452</a>).</p>
+</li>
+<li>
+<p><strong>On 26.7 and newer, a new copy without a TTL is read-only.</strong> When 26.7 or newer makes a copy of a plain <code>MergeTree</code> log that has no TTL, it sets <code>table_readonly</code> on it (<a href="https://github.com/ClickHouse/ClickHouse/pull/95079">PR #95079</a>). On 26.9 the copy's <code>engine_full</code> then ends with <code>table_readonly = true</code>. Copies with a TTL, <code>ReplicatedMergeTree</code> copies and copies made by an older version stay writable. On a read-only copy, the fixes suggested in <a href="https://github.com/getsentry/snuba/issues/7311">snuba #7311</a>, <code>ALTER TABLE system.trace_log_3 MODIFY TTL ...</code> or <code>TRUNCATE</code>, fail with the error below (26.9.1.1629). <code>DROP</code> still works. To keep the table instead, <code>ALTER TABLE system.query_log_0 MODIFY SETTING table_readonly = 0</code> turns this off (<a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/table#table_readonly">docs</a>).</p>
+<pre><code>Code: 774. DB::Exception: Received from localhost:9000. DB::Exception: Table is in readonly mode. (TABLE_IS_PERMANENTLY_READ_ONLY)
+</code></pre>
+</li>
+<li>
+<p><strong><code>ALTER TABLE ... MODIFY TTL</code> on a live log makes a copy at the next restart.</strong> Don't run <code>ALTER TABLE system.query_log MODIFY TTL event_date + INTERVAL 7 DAY</code>. It works until the restart. Then the table differs from the config, so ClickHouse renames it to <code>query_log_0</code>, with your TTL, and creates a new <code>query_log</code> from the config, without it. An <code>ALTER</code> that matches the config TTL exactly makes no copy. Put TTLs in <code>config.d</code> (<a href="../../guide/#step-2-add-a-ttl-file-in-configd">guide, step 2</a>).</p>
+</li>
+<li>
+<p><strong>Truncate before you add a TTL.</strong> The copy takes every row the table had at the restart. After a <code>TRUNCATE</code> (<a href="../../guide/#2-how-do-i-free-the-disk-space-right-now">guide, section 2</a>) it is tiny.</p>
+</li>
+<li>
+<p><strong>Upgrades make new copies.</strong> In our test, moving one volume from 25.12 to 26.9 turned all 22 system logs into <code>_0</code> copies. Run <code>copies.sql</code> after every upgrade (<a href="../../guide/#6-upgrading-clickhouse-check-this-first">guide, section 6</a>).</p>
+</li>
+<li>
+<p><strong>Config changes skip the copies.</strong> A TTL or storage policy in the config applies to the current table only; a copy keeps what it had (<a href="https://github.com/ClickHouse/ClickHouse/issues/81068">ClickHouse #81068</a>). Drop the copies; don't manage them.</p>
+</li>
+<li>
+<p><strong>Keep the TTL file mounted.</strong> A file you put into the container with <code>docker cp</code> or <code>docker exec</code> is gone when compose recreates the container, for example at <code>docker compose up -d</code> after <code>docker compose pull</code>. The next start then sees a log without a TTL in the config: the table with the TTL becomes a copy, and the new table has no TTL. Mount the file as in the <a href="../../guide/#step-2-add-a-ttl-file-in-configd">guide, step 2</a>.</p>
+</li>
+<li>
+<p><strong>Kubernetes: every pod has its own copies.</strong> Each ClickHouse pod has its own system logs, so run <code>copies.sql</code> and the drops in each pod. After a <code>helm upgrade</code> that changes the image or the TTL, the next pod restart can make new copies. Which pod and container each chart runs, and how it restarts: <a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md">Kubernetes recipe</a>.</p>
+</li>
+</ul>
+<h2 id="why-it-happens">Why it happens</h2>
+<p>In general ClickHouse can't apply such changes to an existing table, and some,
+like the partitioning, can't be changed at all (a ClickHouse contributor in
+<a href="https://github.com/ClickHouse/ClickHouse/issues/93778">#93778</a>). The
+<a href="https://clickhouse.com/docs/reference/system-tables/overview">docs</a> describe
+the rename for schema changes in a new release. The code does the same for
+any difference from the config
+(<a href="https://github.com/ClickHouse/ClickHouse/blob/v26.9.1.1629-stable/src/Interpreters/SystemLog.cpp"><code>SystemLog.cpp</code></a>,
+<code>prepareTable</code>, 26.9). The number is the first free one: <code>trace_log_3</code> means
+<code>_0</code> to <code>_2</code> existed when it was made. Since 26.8, the opt-in <code>all_...</code> tables
+(<code>create_union_system_log_tables</code> with <code>merge_rotated_tables</code>) also read the
+copies, so a drop removes their rows from those tables too.</p>
+<p>This is why people report that a TTL in <code>config.d</code> works only on new tables
+(<a href="https://github.com/langfuse/langfuse/issues/13123">Langfuse #13123</a>,
+<a href="https://github.com/lmnr-ai/lmnr/issues/2176">lmnr #2176</a>). It does work: the
+table ClickHouse creates has the TTL. The old rows stay behind in <code>_N</code>.</p>
+<p>Public cases:</p>
+<ul>
+<li>
+<a href="https://github.com/getsentry/snuba/issues/7311">snuba #7311</a> and <a href="https://github.com/ClickHouse/ClickHouse/issues/84639">ClickHouse #84639</a>: TTLs set in the Helm config for <code>query_log</code>, <code>trace_log</code> and others, and then <code>trace_log_3</code> is huge.</li>
+<li>
+<a href="https://github.com/ClickHouse/ClickHouse/issues/81068">ClickHouse #81068</a> (25.4): <code>text_log_2</code> 70.16 GiB, <code>processors_profile_log_1</code> 30.60 GiB, <code>query_log_0</code> 20.09 GiB, <code>part_log_1</code> 17.05 GiB, while the current <code>text_log</code>, <code>query_log</code> and <code>part_log</code> were under 20 MiB each.</li>
+<li>
+<a href="https://github.com/ClickHouse/ClickHouse/issues/93778">ClickHouse #93778</a> (24.5): after <code>ALTER TABLE system.query_log ... MODIFY TTL</code>, the <code>_0</code> copies had the TTL and the new tables didn't. Six copies held 67.87 GiB, <code>processors_profile_log_0</code> alone 24.85 GiB.</li>
+<li>
+<a href="https://github.com/SigNoz/signoz/issues/12050">SigNoz #12050</a> (25.5): <code>trace_log_0</code> among more than 80 GB of system logs, next to less than 500 MB of telemetry.</li>
+<li>
+<a href="https://github.com/langfuse/langfuse-k8s/issues/333">langfuse-k8s #333</a>: 115 MiB in <code>trace_log_0</code> alone, and system tables 20 times the size of the Langfuse data. The workaround there, a daily <code>ALTER TABLE ... MODIFY TTL</code> job, makes a new copy at each restart after it runs.</li>
+<li>
+<a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">ClickStack Helm chart PR #275</a>: its upgrade note warns that the new TTL leaves the old rows in <code>system.&lt;table&gt;_0</code>.</li>
+</ul>
+<h2 id="tested-on">Tested on</h2>
+<p>Stock <code>clickhouse/clickhouse-server</code> images 24.8.14.39, 25.5.11.15,
+25.12.11.4 and 26.9.1.1629.</p>
+<ul>
+<li>On all four: a TTL in <code>config.d</code> and a restart make <code>_0</code>, a restart with no
+change makes nothing, and a changed TTL makes <code>_1</code> with the old TTL.
+<code>ALTER ... MODIFY TTL</code> plus a restart moves the TTL into <code>query_log_0</code>, a
+second <code>ALTER</code> makes <code>query_log_1</code>, and the matching <code>ALTER</code> makes no copy.
+Truncating first leaves an empty copy. Also the log line, <code>copies.sql</code>, the
+generator, the plain and <code>SYNC</code> drops, <code>SYNC</code> after <code>SETTINGS</code> and
+<code>system.dropped_tables</code>.</li>
+<li>On 24.8, 25.12 and 26.9: a changed storage policy, and Code 359 with
+<code>max_table_size_to_drop = 1</code>. A busy log's copy appeared within 30 s of the
+restart without a flush; the copy of <code>backup_log</code>, which got no new rows,
+only at <code>SYSTEM FLUSH LOGS</code>.</li>
+<li>Only on 26.9: <code>table_readonly</code> on copies without a TTL, Code 774,
+<code>table_readonly = 0</code>, and a copy with a TTL staying writable. The 25.12 to
+26.9 upgrade, where a copy made by 25.12 stayed writable. A removed TTL file
+turning the tables with a TTL into <code>_1</code> copies. The <code>Old:</code> and <code>New:</code> lines
+(the 24.1, 24.8 and 25.12 source prints the same). <code>zgrep</code> after a real log
+rotation. <code>all_metric_log</code> with <code>merge_rotated_tables</code>.</li>
+<li>The compose commands and <code>diskvet.sh report --docker auto</code> (0.3.1) ran with
+Langfuse's ClickHouse service (25.12), and so did the <code>zgrep</code> command, with
+a gzipped old log file. The SigNoz commands ran on plain containers.</li>
+</ul>
+<p>Not run: 23.12, 26.7, 26.8, a real SigNoz install, Kubernetes, a copy over
+50 GB.</p>
+<h2 id="sources">Sources</h2>
+<ul>
+<li>System tables overview (rename on schema change, unlimited growth): <a href="https://clickhouse.com/docs/reference/system-tables/overview">https://clickhouse.com/docs/reference/system-tables/overview</a>
+</li>
+<li>
+<code>SystemLog.cpp</code> in 26.9 (the comparison, the <code>Old:</code> and <code>New:</code> lines, the first free <code>_N</code>, <code>table_readonly</code> only for non-replicated copies without a TTL): <a href="https://github.com/ClickHouse/ClickHouse/blob/v26.9.1.1629-stable/src/Interpreters/SystemLog.cpp">https://github.com/ClickHouse/ClickHouse/blob/v26.9.1.1629-stable/src/Interpreters/SystemLog.cpp</a>
+</li>
+<li>
+<code>table_readonly</code> setting and PR #95079 (26.7): <a href="https://clickhouse.com/docs/reference/settings/merge-tree-settings/table#table_readonly">https://clickhouse.com/docs/reference/settings/merge-tree-settings/table#table_readonly</a>, <a href="https://github.com/ClickHouse/ClickHouse/pull/95079">https://github.com/ClickHouse/ClickHouse/pull/95079</a>
+</li>
+<li>Changelog (26.7 <code>table_readonly</code> for copies, 26.8 <code>create_union_system_log_tables</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/CHANGELOG.md">https://github.com/ClickHouse/ClickHouse/blob/master/CHANGELOG.md</a>
+</li>
+<li>DROP and <code>SYNC</code>, the Atomic engine, the drop delay: <a href="https://clickhouse.com/docs/reference/statements/drop">https://clickhouse.com/docs/reference/statements/drop</a>, <a href="https://clickhouse.com/docs/reference/engines/database-engines/atomic">https://clickhouse.com/docs/reference/engines/database-engines/atomic</a>, <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec</a>
+</li>
+<li>
+<code>max_table_size_to_drop</code> as a query setting (23.12, PR #57452): <a href="https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop</a>, <a href="https://github.com/ClickHouse/ClickHouse/pull/57452">https://github.com/ClickHouse/ClickHouse/pull/57452</a>
+</li>
+<li>Cases: <a href="https://github.com/getsentry/snuba/issues/7311">https://github.com/getsentry/snuba/issues/7311</a>, <a href="https://github.com/ClickHouse/ClickHouse/issues/84639">https://github.com/ClickHouse/ClickHouse/issues/84639</a>, <a href="https://github.com/ClickHouse/ClickHouse/issues/81068">https://github.com/ClickHouse/ClickHouse/issues/81068</a>, <a href="https://github.com/ClickHouse/ClickHouse/issues/93778">https://github.com/ClickHouse/ClickHouse/issues/93778</a>, <a href="https://github.com/SigNoz/signoz/issues/12050">https://github.com/SigNoz/signoz/issues/12050</a>, <a href="https://github.com/langfuse/langfuse-k8s/issues/333">https://github.com/langfuse/langfuse-k8s/issues/333</a>, <a href="https://github.com/langfuse/langfuse/issues/13123">https://github.com/langfuse/langfuse/issues/13123</a>, <a href="https://github.com/lmnr-ai/lmnr/issues/2176">https://github.com/lmnr-ai/lmnr/issues/2176</a>, <a href="https://github.com/ClickHouse/ClickStack-helm-charts/pull/275">https://github.com/ClickHouse/ClickStack-helm-charts/pull/275</a>
+</li>
+</ul>
+<h2 id="check-it-with-diskvet">Check it with diskvet</h2>
+<p><a href="https://github.com/Protemir/diskvet">diskvet</a> is a free, open-source,
+read-only script. Its report lists the <code>_N</code> copies with their sizes and prints
+the <code>DROP</code> statements, with the flag for a copy over the drop limit. Read
+<code>checks.sql</code> before you run it (SigNoz: <code>--docker signoz-clickhouse</code>):</p>
+<pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
+sh diskvet.sh report --docker auto &gt; report.md</code></pre>
+<hr>
+<p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.</p>
+    </article>
+    <p class="small muted guide-source"><a href="../">All disk errors and fixes</a> · <a href="https://github.com/Protemir/diskvet/blob/main/docs/fix/clickhouse-system-log-copies.md">Source on GitHub</a></p>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="../../guide/">Guide</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">Report a problem</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">Report a security issue</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet is free and open source (Apache-2.0).</p>
+    <p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.
+      Langfuse, SigNoz and ClickStack are trademarks of their respective owners and are mentioned only to describe compatibility.</p>
+  </div>
+</footer>
+<script src="../../langs.js" defer></script>
+</body>
+</html>

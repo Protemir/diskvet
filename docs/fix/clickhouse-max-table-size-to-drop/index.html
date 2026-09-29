@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClickHouse® Code 359: Table or Partition was not dropped (max_table_size_to_drop, 50 GB) · diskvet</title>
+  <meta name="description" content="TRUNCATE or DROP over 50 GB fails with Code 359 TABLE_SIZE_EXCEEDS_MAX_DROP_SIZE_LIMIT. Lift the limit for one statement or use the force_drop_table flag.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../../style.css">
+  <meta property="og:title" content="ClickHouse® Code 359: Table or Partition was not dropped (max_table_size_to_drop, 50 GB)">
+  <meta property="og:description" content="TRUNCATE or DROP over 50 GB fails with Code 359 TABLE_SIZE_EXCEEDS_MAX_DROP_SIZE_LIMIT. Lift the limit for one statement or use the force_drop_table flag.">
+  <meta property="og:url" content="https://diskvet.dev/fix/clickhouse-max-table-size-to-drop/">
+  <meta property="og:type" content="article">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://diskvet.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="diskvet: what fills the disk of the ClickHouse® in self-hosted Langfuse, SigNoz and ClickStack, and the fix; sh diskvet.sh report --docker auto">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://diskvet.dev/fix/clickhouse-max-table-size-to-drop/">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="../../">diskvet</a>
+    <div class="header-right">
+      <nav aria-label="Main">
+        <ul>
+          <li><a href="../../">Home</a></li>
+          <li><a href="../../guide/">Guide</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a></li>
+          <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+        </ul>
+      </nav>
+      <nav class="langs" aria-label="Language">
+        <details>
+          <summary><svg class="globe" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8h13M8 1.5c1.9 2 2.8 4.1 2.8 6.5S9.9 12.5 8 14.5M8 1.5C6.1 3.5 5.2 5.6 5.2 8s.9 4.5 2.8 6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg> English</summary>
+          <ul>
+            <li><a href="./" hreflang="en" lang="en" aria-current="page">English</a></li>
+            <li><a href="../../es/guide/" hreflang="es" lang="es">Español</a></li>
+            <li><a href="../../pt/guide/" hreflang="pt" lang="pt-BR">Português</a></li>
+            <li><a href="../../ru/guide/" hreflang="ru" lang="ru">Русский</a></li>
+            <li><a href="../../ja/guide/" hreflang="ja" lang="ja">日本語</a></li>
+            <li><a href="../../ko/guide/" hreflang="ko" lang="ko">한국어</a></li>
+            <li><a href="../../zh/guide/" hreflang="zh-Hans" lang="zh-Hans">中文</a></li>
+          </ul>
+        </details>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow">
+    <article class="guide">
+<h1 id="clickhouse-code-359-table-or-partition-was-not-dropped-max_table_size_to_drop-50-gb">ClickHouse® Code 359: Table or Partition was not dropped (max_table_size_to_drop, 50 GB)</h1>
+<p>You run <code>TRUNCATE</code>, <code>DROP TABLE</code> or <code>ALTER TABLE ... DROP PARTITION</code>, and
+ClickHouse® refuses:</p>
+<pre><code>Received exception from server (version 25.12.11):
+Code: 359. DB::Exception: Received from localhost:9000. DB::Exception: Table or Partition in default.t was not dropped.
+Reason:
+1. Size (368.00 B) is greater than max_[table/partition]_size_to_drop (1.00 B)
+2. File '/var/lib/clickhouse/flags/force_drop_table' intended to force DROP doesn't exist
+How to fix this:
+1. Either increase (or set to zero) max_[table/partition]_size_to_drop in server config
+2. Either pass a bigger (or set to zero) max_[table/partition]_size_to_drop through query settings
+3. Either create forcing file /var/lib/clickhouse/flags/force_drop_table and make sure that ClickHouse has write permission for it.
+Example:
+sudo touch '/var/lib/clickhouse/flags/force_drop_table' &amp;&amp; sudo chmod 666 '/var/lib/clickhouse/flags/force_drop_table'. (TABLE_SIZE_EXCEEDS_MAX_DROP_SIZE_LIMIT)
+(query: TRUNCATE TABLE t)
+</code></pre>
+<p>This is <code>TRUNCATE TABLE t</code> on ClickHouse 25.12.11, a test server with both
+limits set to 1 byte. 24.1.2, 24.8.14 and 26.9.1 print the same text; only the
+version and the size differ. On a real server, the <code>1. Size</code> line shows your
+size against the default, for example
+<code>Size (113.41 GB) is greater than max_[table/partition]_size_to_drop (50.00 GB)</code>
+(<a href="https://github.com/ClickHouse/ClickHouse/issues/72967">ClickHouse #72967</a>).
+If your error lists only two ways to fix it, without "through query
+settings", your server is older than 23.12: use the flag (Fix B).</p>
+<h2 id="short-answer">Short answer</h2>
+<p>ClickHouse won't <code>DROP</code>, <code>TRUNCATE</code> or <code>DROP PARTITION</code> anything bigger than
+<code>max_table_size_to_drop</code> (tables) or <code>max_partition_size_to_drop</code>
+(partitions). Both default to 50,000,000,000 bytes: 50 GB, about 46.57 GiB.
+Add the setting to that one statement:</p>
+<pre><code>TRUNCATE TABLE system.text_log SETTINGS max_table_size_to_drop = 0;</code></pre>
+<p>For <code>DROP PARTITION</code>, the setting is <code>max_partition_size_to_drop</code>.</p>
+<h2 id="check">Check</h2>
+<p>Which limits does your server use, and what is over them? Save this as
+<code>drop-limit.sql</code>:</p>
+<pre><code>SELECT name, value FROM system.server_settings
+WHERE name IN ('max_table_size_to_drop', 'max_partition_size_to_drop');
+
+WITH (SELECT toUInt64(value) FROM system.server_settings
+      WHERE name = 'max_table_size_to_drop') AS lim
+SELECT database, table, formatReadableSize(sum(bytes_on_disk)) AS size
+FROM system.parts
+WHERE active
+GROUP BY database, table
+HAVING lim &gt; 0 AND sum(bytes_on_disk) &gt; lim
+ORDER BY sum(bytes_on_disk) DESC;
+
+WITH (SELECT toUInt64(value) FROM system.server_settings
+      WHERE name = 'max_partition_size_to_drop') AS lim
+SELECT database, table, partition_id, formatReadableSize(sum(bytes_on_disk)) AS size
+FROM system.parts
+WHERE active
+GROUP BY database, table, partition_id
+HAVING lim &gt; 0 AND sum(bytes_on_disk) &gt; lim
+ORDER BY sum(bytes_on_disk) DESC LIMIT 20;</code></pre>
+<p>Run it read-only, as <code>size.sql</code> in the
+<a href="../../guide/#1-what-is-using-the-disk-check-clickhouse-disk-usage-by-table">guide</a>,
+plus <code>--multiquery</code> (the 24.1 client needs it for a file with several queries):</p>
+<pre><code># Langfuse
+docker compose exec -T clickhouse sh -c \
+  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --multiquery --format PrettyCompact' &lt; drop-limit.sql
+# SigNoz
+docker exec -i signoz-clickhouse clickhouse-client --readonly=1 --multiquery --format PrettyCompact &lt; drop-limit.sql</code></pre>
+<p>A <code>value</code> of <code>0</code> means no limit. If only the first table prints, nothing is
+over it: the client prints nothing for an empty result. The size that counts
+is the sum of <code>bytes_on_disk</code> of the active parts
+(<a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/MergeTreeData.cpp">MergeTreeData.cpp</a>).
+The error prints it in decimal units (GB), <code>formatReadableSize</code> in binary ones
+(GiB): a table shown as 47 GiB is already over 50 GB.</p>
+<h2 id="fix">Fix</h2>
+<p>Open a client with write access (<a href="../../guide/#2-how-do-i-free-the-disk-space-right-now">guide, section 2</a>).</p>
+<h3 id="fix-a-lift-the-limit-for-one-statement">Fix A: lift the limit for one statement</h3>
+<pre><code>TRUNCATE TABLE system.text_log SETTINGS max_table_size_to_drop = 0;
+DROP TABLE system.text_log_2 SYNC SETTINGS max_table_size_to_drop = 0;
+ALTER TABLE system.trace_log DROP PARTITION ID '202605' SETTINGS max_partition_size_to_drop = 0;</code></pre>
+<p>These are three examples; run only the one you need. Each one deletes data:
+<code>TRUNCATE</code> deletes all rows, <code>DROP TABLE</code> the whole table, <code>DROP PARTITION</code>
+one partition. If you drop a live system log such as <code>system.text_log</code>,
+ClickHouse creates it again, empty, at the next log flush; a <code>_2</code> copy stays
+gone.</p>
+<ul>
+<li>
+<strong>Partitions have their own setting.</strong> <code>DROP PARTITION ... SETTINGS max_table_size_to_drop = 0</code> still fails with Code 359.</li>
+<li>
+<strong>Take the partition from the check.</strong> <code>PARTITION ID</code> takes the <code>partition_id</code> column as printed. System logs are partitioned by month by default (<code>toYYYYMM(event_date)</code>), so <code>202605</code> is May 2026.</li>
+<li>
+<strong><code>DROP TABLE</code> needs <code>SYNC</code> to free the space now.</strong> The <code>system</code> database is Atomic: after a plain <code>DROP</code> the data stays on disk for <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec"><code>database_atomic_delay_before_drop_table_sec</code></a> (480 s), and <code>system.dropped_tables</code> lists the table until then. Put <code>SYNC</code> before <code>SETTINGS</code>: after it, <code>SYNC</code> is a syntax error (Code 62). In our tests <code>TRUNCATE</code> and <code>DROP PARTITION</code> freed the space at once.</li>
+<li>
+<strong>Only this statement.</strong> The query setting replaces the server value for the statement it is on (<a href="https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop">docs</a>). <code>SET max_table_size_to_drop = 0</code> works too, but then every later <code>DROP TABLE</code> and <code>TRUNCATE</code> in that session runs without the guard.</li>
+<li>
+<strong>ClickHouse 23.12 and newer.</strong> The query setting came with <a href="https://github.com/ClickHouse/ClickHouse/pull/57452">PR #57452</a>. We didn't run 23.12; 24.1.2 and newer work. On older servers, use Fix B.</li>
+</ul>
+<h3 id="fix-b-the-one-time-flag-file">Fix B: the one-time flag file</h3>
+<p>Create the flag, then run the plain statement:</p>
+<pre><code>docker compose exec clickhouse sh -c 'touch /var/lib/clickhouse/flags/force_drop_table &amp;&amp; chmod 666 /var/lib/clickhouse/flags/force_drop_table'</code></pre>
+<pre><code>TRUNCATE TABLE system.text_log;</code></pre>
+<p>(SigNoz: <code>docker exec signoz-clickhouse sh -c '...'</code> with the same command.)
+The path is the one in the stock image. The <code>2. File</code> line of your error shows
+the flag path your server uses: the <code>flags</code> folder in its data path
+(<a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/Server.cpp">Server.cpp</a>).</p>
+<p>Traps:</p>
+<ul>
+<li>
+<p><strong>One flag, one big table.</strong> ClickHouse deletes the flag when the first <code>DROP</code>, <code>TRUNCATE</code> or <code>DROP PARTITION</code> over the limit uses it (<a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp"><code>checkCanBeDropped</code></a>). The next big table fails again, so create the flag before each one. <a href="https://github.com/SigNoz/signoz/issues/10819">SigNoz #10819</a> creates it once and then truncates seven logs: if two of them are over the limit, the second one fails.</p>
+</li>
+<li>
+<p><strong>It works on any table.</strong> The flag lets the next big drop through, whichever table it is. Smaller statements leave it in place, so it can wait for days. Run only the statement you mean, and remove a flag you didn't use:</p>
+<pre><code>docker compose exec clickhouse rm -f /var/lib/clickhouse/flags/force_drop_table</code></pre>
+</li>
+<li>
+<p><strong>A failed statement uses it up too.</strong> On a full disk, <code>TRUNCATE</code> deletes the flag and then fails with Code 243 (seen on all four versions under Tested on).</p>
+</li>
+<li>
+<p><strong>Kubernetes</strong> (not run): <code>kubectl exec -n NAMESPACE POD -c CONTAINER -- sh -c 'touch FLAG &amp;&amp; chmod 666 FLAG'</code>, with <code>FLAG</code> the path from the <code>2. File</code> line. Not every chart keeps the data in <code>/var/lib/clickhouse</code>: the Bitnami-based Langfuse chart keeps it under <code>/bitnami/clickhouse</code>. Each ClickHouse pod has its own system logs (plain <code>MergeTree</code> tables by default, not replicated) and its own flag, so check and clean each pod; the Langfuse chart 1.x runs 3. Which pod and container each Helm chart runs: <a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md">Kubernetes recipe</a>. Fix A needs no file in the pod, so it is simpler there.</p>
+</li>
+</ul>
+<h3 id="dont-raise-the-limit-in-the-server-config">Don't raise the limit in the server config</h3>
+<p><code>&lt;max_table_size_to_drop&gt;0&lt;/max_table_size_to_drop&gt;</code> in <code>config.d</code> works
+without a restart
+(<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop">docs</a>).
+But then no table on the server is protected, your own data included, until
+you undo it. For a one-time cleanup, use Fix A.</p>
+<h3 id="disk-already-100-full">Disk already 100% full?</h3>
+<p>The plain <code>TRUNCATE</code> of a big table still fails with Code 359 first. With
+<code>SETTINGS max_table_size_to_drop = 0</code> it then fails with Code 243
+(<code>NOT_ENOUGH_SPACE</code>), and so does <code>DROP PARTITION</code>. <code>DROP TABLE ... SYNC SETTINGS max_table_size_to_drop = 0</code> worked and freed the space at once (seen
+on all four versions under Tested on). What still works and what to drop: the
+<a href="../clickhouse-not-enough-space/">Code 243 page</a>.</p>
+<h2 id="why-it-happens">Why it happens</h2>
+<p>The limit is there to stop an accidental <code>DROP</code> of a big table (the comment on
+the default in <code>Context.cpp</code>). Your own tables rarely need a <code>TRUNCATE</code>.
+ClickHouse's own logs do: by default <code>trace_log</code> and <code>text_log</code> have no TTL,
+and on a busy server they can pass 50 GB. Public cases:</p>
+<ul>
+<li>
+<a href="https://github.com/orgs/langfuse/discussions/15024">Langfuse discussion #15024</a>: <code>text_log</code> was 59.20 GiB.</li>
+<li>
+<a href="https://github.com/langfuse/langfuse/issues/13123">Langfuse #13123</a>: <code>trace_log</code> was 66.86 GiB. A cleanup script in the comments there runs <code>SET max_table_size_to_drop = 0</code> before its <code>TRUNCATE</code>s.</li>
+<li>
+<a href="https://github.com/comet-ml/opik/issues/6224">Opik #6224</a>: <code>trace_log</code> was 66.42 GiB.</li>
+<li>
+<a href="https://github.com/ClickHouse/ClickStack-helm-charts/issues/191">ClickStack Helm chart #191</a>: <code>trace_log</code> reached ~97 GB and filled a 108 GB volume.</li>
+<li>
+<a href="https://github.com/ClickHouse/ClickHouse/issues/81068">ClickHouse #81068</a>: <code>text_log_2</code>, an old copy of <code>text_log</code>, was 70.16 GiB. Dropping a copy over the limit needs the same setting (<a href="../clickhouse-system-log-copies/">system log copies</a>).</li>
+</ul>
+<p>After the cleanup, add a TTL so the logs don't grow back:
+<a href="../clickhouse-trace-log-huge/">trace_log page</a> and
+<a href="../../guide/#4-how-do-i-set-a-ttl-on-clickhouse-system-logs">guide, section 4</a>.</p>
+<h2 id="tested-on">Tested on</h2>
+<p>ClickHouse 24.1.2.5, 24.8.14.39, 25.12.11.4 and 26.9.1.1629 (stock
+<code>clickhouse/clickhouse-server</code> images), with both limits set to 1 byte in
+<code>config.d</code>. On all four:</p>
+<ul>
+<li>
+<code>TRUNCATE</code>, <code>DROP PARTITION</code> and <code>DROP TABLE</code> fail with Code 359, and so
+does <code>DROP PARTITION ... SETTINGS max_table_size_to_drop = 0</code>.</li>
+<li>Fix A, <code>SET</code> and the flag work. The flag is gone after one big drop and
+stays after a drop under the limit.</li>
+<li>
+<code>system.server_settings</code> shows the 50,000,000,000 default for both limits.</li>
+<li>A <code>config.d</code> file with <code>0</code> works without a restart.</li>
+<li>
+<code>drop-limit.sql</code> runs with the commands above.</li>
+<li>The full disk (a 150 MB tmpfs) gives the results in the section above.</li>
+<li>
+<code>system</code> is an Atomic database. After a plain <code>DROP TABLE</code> of a system log
+copy, its folder stays and <code>system.dropped_tables</code> lists it.
+<code>DROP TABLE ... SYNC SETTINGS max_table_size_to_drop = 0</code> removes the folder
+at once, and <code>... SETTINGS max_table_size_to_drop = 0 SYNC</code> fails with
+Code 62.</li>
+<li>
+<code>DROP PARTITION ID</code> with <code>max_partition_size_to_drop = 0</code> works.</li>
+</ul>
+<p>On 24.1 and 26.9, a 60 MB table in two partitions went down to 30 MB right
+after <code>DROP PARTITION ID</code> and to under 100 KB right after <code>TRUNCATE</code>. On 24.8,
+25.12 and 26.9, the system logs are <code>MergeTree</code> tables partitioned by
+<code>toYYYYMM(event_date)</code>, and a <code>system.query_log</code> dropped with <code>SYNC</code> was back
+after <code>SYSTEM FLUSH LOGS</code>.</p>
+<p>The <code>docker compose</code> commands ran on 26.9, in a compose service <code>clickhouse</code>
+set up like Langfuse's (<code>user: "101:101"</code>, <code>CLICKHOUSE_USER</code>,
+<code>CLICKHOUSE_PASSWORD</code>). The SigNoz <code>docker exec</code> commands ran with our own
+container name. On 24.8, 25.12 and 26.9 the Fix A block ran as written, as one
+file with <code>--multiquery</code>, and so did Fix B. <code>text_log_2</code> was made with
+<code>RENAME TABLE</code>, and <code>DROP PARTITION ID</code> also ran on 202609, the one partition
+with data. 24.1.2 has no <code>system.text_log</code> by default (it is commented out in
+its <code>config.xml</code>), so there the <code>text_log</code> statements fail with Code 60
+(<code>UNKNOWN_TABLE</code>).</p>
+<p>Not run: 23.12, Kubernetes, a real 50 GB table.</p>
+<h2 id="sources">Sources</h2>
+<ul>
+<li>Server settings <code>max_table_size_to_drop</code> (with <code>force_drop_table</code>) and <code>max_partition_size_to_drop</code>: <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/server-settings/settings/max-table#max_table_size_to_drop</a>, <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/max#max_partition_size_to_drop">https://clickhouse.com/docs/reference/settings/server-settings/settings/max#max_partition_size_to_drop</a>
+</li>
+<li>Both as query settings (they replace the server value): <a href="https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop</a>
+</li>
+<li>Query-level override, merged for 23.12: <a href="https://github.com/ClickHouse/ClickHouse/pull/57452">https://github.com/ClickHouse/ClickHouse/pull/57452</a> (request: <a href="https://github.com/ClickHouse/ClickHouse/issues/44715">https://github.com/ClickHouse/ClickHouse/issues/44715</a>; 23.12 changelog: <a href="https://github.com/ClickHouse/ClickHouse/blob/master/docs/changelogs/archive/v23.12.1.1368-stable.md">https://github.com/ClickHouse/ClickHouse/blob/master/docs/changelogs/archive/v23.12.1.1368-stable.md</a>)</li>
+<li>The check, the error text and the flag removal (<code>checkCanBeDropped</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp</a>
+</li>
+<li>The size that counts (active parts) and the query setting: <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/MergeTreeData.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Storages/MergeTree/MergeTreeData.cpp</a>
+</li>
+<li>TRUNCATE and DROP PARTITION: <a href="https://clickhouse.com/docs/reference/statements/truncate">https://clickhouse.com/docs/reference/statements/truncate</a>, <a href="https://clickhouse.com/docs/reference/statements/alter/partition">https://clickhouse.com/docs/reference/statements/alter/partition</a>
+</li>
+<li>DROP and <code>SYNC</code> ("dropped without delay"), and the delay itself: <a href="https://clickhouse.com/docs/reference/statements/drop">https://clickhouse.com/docs/reference/statements/drop</a>, <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec</a>
+</li>
+<li>The <code>flags</code> folder in the data path: <a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/Server.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/Server.cpp</a>
+</li>
+<li>Error texts: with 113.41 GB <a href="https://github.com/ClickHouse/ClickHouse/issues/72967">https://github.com/ClickHouse/ClickHouse/issues/72967</a>, an old one with two ways to fix it <a href="https://github.com/ClickHouse/ClickHouse/issues/9802">https://github.com/ClickHouse/ClickHouse/issues/9802</a>
+</li>
+</ul>
+<h2 id="check-it-with-diskvet">Check it with diskvet</h2>
+<p><a href="https://github.com/Protemir/diskvet">diskvet</a> is a free, open-source,
+read-only script. Its report prints the <code>TRUNCATE</code> and <code>DROP</code> commands for your
+big logs. For a table over or near the limit it adds the flag command, with the
+data path your server reports, and on 24.1 and newer the
+<code>SETTINGS max_table_size_to_drop = 0</code> form. Read <code>checks.sql</code> before you run it
+(SigNoz: <code>--docker signoz-clickhouse</code>):</p>
+<pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
+sh diskvet.sh report --docker auto &gt; report.md</code></pre>
+<p>The short version is in the
+<a href="../../guide/#truncate-fails-with-code-359-tables-over-50-gb">guide</a>.</p>
+<hr>
+<p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.</p>
+    </article>
+    <p class="small muted guide-source"><a href="../">All disk errors and fixes</a> · <a href="https://github.com/Protemir/diskvet/blob/main/docs/fix/clickhouse-max-table-size-to-drop.md">Source on GitHub</a></p>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="../../guide/">Guide</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">Report a problem</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">Report a security issue</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet is free and open source (Apache-2.0).</p>
+    <p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.
+      Langfuse, SigNoz and ClickStack are trademarks of their respective owners and are mentioned only to describe compatibility.</p>
+  </div>
+</footer>
+<script src="../../langs.js" defer></script>
+</body>
+</html>

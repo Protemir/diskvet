@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClickHouse®: Cannot log message in OwnAsyncSplitChannel channel · diskvet</title>
+  <meta name="description" content="ClickHouse can't write its log file, floods stderr and Docker's json log, and burns CPU. Why it happens and how to stop it.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../../style.css">
+  <meta property="og:title" content="ClickHouse®: Cannot log message in OwnAsyncSplitChannel channel">
+  <meta property="og:description" content="ClickHouse can't write its log file, floods stderr and Docker's json log, and burns CPU. Why it happens and how to stop it.">
+  <meta property="og:url" content="https://diskvet.dev/fix/clickhouse-cannot-log-message-ownasyncsplitchannel/">
+  <meta property="og:type" content="article">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://diskvet.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="diskvet: what fills the disk of the ClickHouse® in self-hosted Langfuse, SigNoz and ClickStack, and the fix; sh diskvet.sh report --docker auto">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://diskvet.dev/fix/clickhouse-cannot-log-message-ownasyncsplitchannel/">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="../../">diskvet</a>
+    <div class="header-right">
+      <nav aria-label="Main">
+        <ul>
+          <li><a href="../../">Home</a></li>
+          <li><a href="../../guide/">Guide</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a></li>
+          <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+        </ul>
+      </nav>
+      <nav class="langs" aria-label="Language">
+        <details>
+          <summary><svg class="globe" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8h13M8 1.5c1.9 2 2.8 4.1 2.8 6.5S9.9 12.5 8 14.5M8 1.5C6.1 3.5 5.2 5.6 5.2 8s.9 4.5 2.8 6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg> English</summary>
+          <ul>
+            <li><a href="./" hreflang="en" lang="en" aria-current="page">English</a></li>
+            <li><a href="../../es/guide/" hreflang="es" lang="es">Español</a></li>
+            <li><a href="../../pt/guide/" hreflang="pt" lang="pt-BR">Português</a></li>
+            <li><a href="../../ru/guide/" hreflang="ru" lang="ru">Русский</a></li>
+            <li><a href="../../ja/guide/" hreflang="ja" lang="ja">日本語</a></li>
+            <li><a href="../../ko/guide/" hreflang="ko" lang="ko">한국어</a></li>
+            <li><a href="../../zh/guide/" hreflang="zh-Hans" lang="zh-Hans">中文</a></li>
+          </ul>
+        </details>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow">
+    <article class="guide">
+<h1 id="clickhouse-cannot-log-message-in-ownasyncsplitchannel-channel">ClickHouse®: Cannot log message in OwnAsyncSplitChannel channel</h1>
+<p><code>docker logs</code> shows this message again and again, each time with a stack trace
+(the file can also be <code>clickhouse-server.err.log</code>):</p>
+<pre><code>Cannot log message in OwnAsyncSplitChannel channel: Poco::Exception. Code: 1000, e.code() = 0, File access error: /var/log/clickhouse-server/clickhouse-server.log, Stack trace (when copying this message, always include the lines below):
+
+0. Poco::RotateBySizeStrategy::mustRotate(Poco::LogFile*) @ 0x00000000223def83
+1. Poco::FileChannel::log(Poco::Message const&amp;) @ 0x00000000223b7f49
+2. DB::OwnFormattingChannel::logExtended(DB::ExtendedLogMessage const&amp;) @ 0x000000001daa95d9
+3. DB::OwnRunnableForChannel::run() @ 0x000000001dab33ac
+4. Poco::ThreadImpl::runnableEntry(void*) @ 0x00000000223e5e4f
+5. ? @ 0x0000000000094ac3
+6. clone @ 0x0000000000125a84
+ (version 25.12.11.4 (official build))
+</code></pre>
+<h2 id="short-answer">Short answer</h2>
+<p>ClickHouse® can't write <code>/var/log/clickhouse-server/clickhouse-server.log</code>,
+usually because that disk is full. Every log line then fails, and ClickHouse
+prints the error with a stack trace to stderr instead. Docker stores stderr in
+the container's <code>*-json.log</code>, which has no size limit by default. Before
+ClickHouse 26.7, freeing space doesn't stop it. Only a restart does.</p>
+<p>What it costs:</p>
+<ul>
+<li>In our test on 25.12, with no queries running: about 105% CPU (4% before), and the container log grew by 30 to 45 MB a second, to 7.7 GB in under 4 minutes. After one failed query, <code>clickhouse-server.err.log</code> looped too, and CPU went to about 120%.</li>
+<li>
+<a href="https://github.com/langfuse/langfuse/issues/16339">Langfuse #16339</a>: an 89.1 GiB container log filled a 244 GiB disk, and <code>docker exec</code> failed with <code>no space left on device</code>.</li>
+<li>
+<a href="https://github.com/Openpanel-dev/openpanel/issues/324">OpenPanel #324</a>: about 140% CPU on an idle server for 20+ days.</li>
+</ul>
+<h2 id="which-versions">Which versions</h2>
+<p>This message comes from asynchronous logging, on by default since 25.7. The
+retry that prints it came with
+<a href="https://github.com/ClickHouse/ClickHouse/pull/88814">PR #88814</a>, in 25.8.11,
+25.9.4 and 25.10. What a full log disk does, by version:</p>
+<ul>
+<li>
+<strong>25.8.11 to 26.6:</strong> the loop on this page. Langfuse's compose file uses 25.12.</li>
+<li>
+<strong>26.7 and later:</strong> no loop for a full disk. Other write errors can still send a stack trace to stderr for every log line (see <a href="#why-it-happens">Why it happens</a>).</li>
+<li>
+<strong>25.6 and older:</strong> each log line goes to stderr as <code>Cannot add message to the log:</code>, with the line and a stack trace. There is no loop: in our 24.8 test CPU stayed at about 3%. But the log file stayed stuck after we freed space, so the container log keeps growing until you restart.</li>
+<li>
+<strong>25.7, 25.8.1 to 25.8.10, 25.9.2 and 25.9.3:</strong> in our 25.8.5 test the logging thread for the file stopped. Nothing went to the container log, and the file stayed stuck after we freed space. PR #88814 says the server could also abort.</li>
+</ul>
+<p>Below 26.7 the fix is the same for all of them: free the space, then restart.</p>
+<h2 id="check">Check</h2>
+<p>On the host, find what is full:</p>
+<pre><code>df -h
+sudo sh -c 'du -h /var/lib/docker/containers/*/*-json.log | sort -h | tail -5'
+docker compose exec clickhouse sh -c 'df -h /var/log/clickhouse-server; du -sh /var/log/clickhouse-server'</code></pre>
+<p>Is it happening now? Count the message in the last lines of the container
+log. Any count above 0 means yes. The second pattern is the message on 25.6
+and older, where one message with its stack trace took 17 to 29 lines in our
+test. Normally the stock image writes only a few startup lines there (under
+1 KB in our tests); the server log goes to the files.</p>
+<pre><code>docker compose logs --tail 100 clickhouse | grep -cE 'Cannot log message|Cannot add message to the log'</code></pre>
+<p>Then check the version and the free space from inside ClickHouse. Save this as
+<code>check.sql</code>:</p>
+<pre><code>SELECT version();
+SELECT name, path,
+       formatReadableSize(free_space) AS free,
+       formatReadableSize(total_space) AS total
+FROM system.disks;
+SELECT formatReadableSize(sum(bytes_on_disk)) AS parts FROM system.parts;</code></pre>
+<p>Run it read-only, as in <a href="../../guide/#1-what-is-using-the-disk-check-clickhouse-disk-usage-by-table">guide section 1</a>
+(Langfuse's compose file sets the user and password inside the container;
+for SigNoz, use the <code>docker exec</code> command from that section):</p>
+<pre><code>docker compose exec -T clickhouse sh -c \
+  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' &lt; check.sql</code></pre>
+<p>Below 26.7, the log stays stuck until you restart
+(<a href="#which-versions">Which versions</a>). Docker keeps container logs and named
+volumes under <code>/var/lib/docker</code> by default, so the logs, the log volume and the
+data usually share one disk. If <code>df -h</code> shows much more used than <code>parts</code>, the
+space is outside ClickHouse's tables.</p>
+<h2 id="fix">Fix</h2>
+<p><strong>1. Cap Docker's container logs.</strong> Add a <code>logging:</code> block to every service in
+<code>docker-compose.yml</code>, as in the <a href="../../guide/#are-docker-container-logs-filling-the-disk">guide</a>:</p>
+<pre><code>    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"</code></pre>
+<p><strong>2. Free the space, then restart.</strong> If <code>/var/log/clickhouse-server</code> itself is
+full, first delete ClickHouse's rotated files (<code>clickhouse-server.log.0.gz</code>,
+<code>.1.gz</code> and so on). They hold old server logs only. The current <code>.log</code> files
+stay:</p>
+<pre><code>docker compose exec clickhouse sh -c 'rm -f /var/log/clickhouse-server/*.log.*.gz'</code></pre>
+<p>Then recreate the containers, because log options apply only to new ones. This
+restarts every service in the compose file, deletes each old container's log
+file (in #16339 that freed 81 GiB) and ends the loop:</p>
+<pre><code>docker compose up -d --force-recreate</code></pre>
+<p>If <code>docker compose exec</code> fails with <code>no space left on device</code>, as in #16339,
+remove the ClickHouse container instead: that deletes its container log.
+Before you do, check where the data is:</p>
+<pre><code>docker inspect -f '{{range .Mounts}}{{.Type}} {{.Name}} {{.Destination}}{{println}}{{end}}' $(docker compose ps -aq clickhouse)</code></pre>
+<p>On the <code>/var/lib/clickhouse</code> line you want <code>bind</code> or a named volume, as in
+Langfuse's compose file. A name of 64 hex characters is an anonymous volume:
+a new container gets a new, empty one. In our test the table was gone after
+<code>rm -sf</code> and <code>up -d</code>, while <code>up -d --force-recreate</code> kept it. With an
+anonymous volume, free space some other way and use <code>--force-recreate</code>.</p>
+<pre><code>docker compose rm -sf clickhouse     # stop and remove the container, not its volumes
+docker compose up -d</code></pre>
+<p>Once there is space, run the <code>--force-recreate</code> command above too, so the
+other services get the log cap. Don't run <code>docker compose down -v</code>: <code>-v</code>
+deletes the named volumes, and your data with them.</p>
+<p><strong>3. Check.</strong> <code>docker compose logs --tail 5 clickhouse</code> should end with the
+startup lines, not a stack trace. If you freed space without recreating, run
+<code>docker compose restart clickhouse</code> first: before 26.7 only a restart ends the loop.</p>
+<p><strong>4. Cap ClickHouse's own log files.</strong> The stock image's <code>config.xml</code> sets
+<code>trace</code> level, rotation at 1000M and up to 10 old files. Mount this as a
+<code>config.d</code> file and restart, as in the <a href="../../guide/#are-clickhouses-own-log-files-big">guide</a>:</p>
+<pre><code>&lt;clickhouse&gt;
+    &lt;logger&gt;&lt;level&gt;information&lt;/level&gt;&lt;size&gt;100M&lt;/size&gt;&lt;count&gt;10&lt;/count&gt;&lt;/logger&gt;
+&lt;/clickhouse&gt;</code></pre>
+<p><strong>5. Upgrade.</strong> The fix for a full disk is in ClickHouse 26.7 and later.
+Langfuse's <a href="https://github.com/langfuse/langfuse/blob/main/docker-compose.yml">compose file</a>
+uses <code>clickhouse-server:25.12</code>, which doesn't have it. On Langfuse, update
+Langfuse before you move ClickHouse to 26.8 or newer
+(<a href="../../guide/#6-upgrading-clickhouse-check-this-first">guide section 6</a>).</p>
+<p><strong>On Kubernetes</strong>, the kubelet rotates container logs (by default at 10 MiB,
+keeping 5 files, see the
+<a href="https://kubernetes.io/docs/concepts/cluster-administration/logging/#log-rotation">Kubernetes docs</a>),
+so step 1 is for Docker only. If ClickHouse's log folder fills there, free the
+space, then restart the pod. We didn't test this on Kubernetes.</p>
+<p>Traps:</p>
+<ul>
+<li>
+<strong>Free space before you restart.</strong> On 25.12, a restart with the log disk still full started the loop again right away.</li>
+<li>
+<strong>A log cap doesn't stop the loop.</strong> With <code>50m</code> × 3 the container log stayed under 150 MB in our test, but CPU stayed at about 105% until the restart.</li>
+<li>
+<strong>Use <code>--tail</code> with <code>docker compose logs</code>.</strong> Without it, Docker reads the whole file: for a 2.6 GB log it still hadn't finished after 90 seconds in our test, against half a second with <code>--tail</code>.</li>
+<li>
+<strong>Don't truncate or rotate <code>*-json.log</code> by hand.</strong> Docker's docs say only the Docker daemon should touch these files, and Langfuse's README (<a href="https://github.com/langfuse/langfuse/pull/16363">PR #16363</a>) says the same.</li>
+<li>
+<strong>A host <code>logrotate</code> isn't needed.</strong> OpenPanel #324 suspected one had replaced the log file under ClickHouse. We didn't test that. ClickHouse rotates its own files.</li>
+</ul>
+<h2 id="why-it-happens">Why it happens</h2>
+<p>Before 26.7 (we read the 25.12 source; <code>LogFile_STD.cpp</code> and <code>FileChannel.cpp</code>
+are the same in 24.1 and 24.8):</p>
+<ol>
+<li>A write to the log file fails, for example on a full disk. For "no space left" the code has a handler that deletes the oldest rotated log or empties the current one. In our 25.12 test the log wasn't emptied: it kept its size (116 KiB) and stopped changing. Either way, the file stream stays in an error state.</li>
+<li>Before each message, ClickHouse checks the file size for rotation (<code>RotateBySizeStrategy::mustRotate</code>). In that error state the check throws <code>File access error</code>. Nothing resets the state, so it throws every time, even after you free space.</li>
+<li>On 25.8.11 to 26.6, the logging thread prints the error to stderr and tries the same message again, with no pause. So the server spins even with no queries. Each log file has its own thread, so an error message starts a second loop on <code>clickhouse-server.err.log</code>.</li>
+</ol>
+<p><a href="https://github.com/ClickHouse/ClickHouse/pull/93127">PR #93127</a> ("fix LogFile
+recovery after disk full error", merged 2026-07-02) resets the stream after a
+failed write. We checked <code>LogFile_STD.cpp</code> at these tags. The fix is in
+v26.7.1.1315-stable, v26.8.15.10-lts and v26.9.1.1629-stable. It is not in
+v26.6.8.7-stable, v26.3.36.6-lts, v25.12.12.1-stable or v25.8.33.6-lts.</p>
+<p>On 26.9 our full log disk gave no loop: ClickHouse emptied its log, nothing
+went to the container log, CPU stayed at about 4%, and logging went on after
+we freed space. Per
+<a href="https://github.com/ClickHouse/ClickHouse/issues/68438">ClickHouse #68438</a>, a
+log file that can't be written for other reasons (permissions, a read-only
+file system, <code>chattr +i</code>) still sends a stack trace to stderr for every log
+line on 26.9. We didn't run that case.</p>
+<p><em>Tested on stock <code>clickhouse/clickhouse-server</code> images 25.12.11.4 and
+26.9.1.1629, Docker 29.3.0 (Docker Desktop on Windows, 12 CPUs) and Compose
+v5.1.0, with a 2 MiB tmpfs as the log folder, and a compose file like
+Langfuse's (named volumes, user 101:101). We ran <code>df</code> and <code>du</code> on the host as
+root in a helper container on Docker Desktop's VM, without <code>sudo</code>. The rotated
+file names come from a test with <code>&lt;size&gt;1M&lt;/size&gt;&lt;count&gt;3&lt;/count&gt;</code>. For
+<a href="#which-versions">Which versions</a> and the anonymous volume case we also ran
+24.8.14.39 and 25.8.5.17 with the same 2 MiB tmpfs log folder.</em></p>
+<h2 id="sources">Sources</h2>
+<ul>
+<li>ClickHouse PR #93127, the fix (merged into 26.7): <a href="https://github.com/ClickHouse/ClickHouse/pull/93127">https://github.com/ClickHouse/ClickHouse/pull/93127</a>
+</li>
+<li>ClickHouse PR #88814, the retry and this message in the async logging thread (25.8.11, 25.9.4, 25.10): <a href="https://github.com/ClickHouse/ClickHouse/pull/88814">https://github.com/ClickHouse/ClickHouse/pull/88814</a>
+</li>
+<li>
+<code>OwnSplitChannel.cpp</code> at 24.8 (<code>Cannot add message to the log</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/v24.8.14.39-lts/src/Loggers/OwnSplitChannel.cpp">https://github.com/ClickHouse/ClickHouse/blob/v24.8.14.39-lts/src/Loggers/OwnSplitChannel.cpp</a>
+</li>
+<li>ClickHouse #68438, logging doesn't recover after a full disk; unwritable files on 26.9: <a href="https://github.com/ClickHouse/ClickHouse/issues/68438">https://github.com/ClickHouse/ClickHouse/issues/68438</a>
+</li>
+<li>Earlier reports: ClickHouse #54433 (2023) <a href="https://github.com/ClickHouse/ClickHouse/issues/54433">https://github.com/ClickHouse/ClickHouse/issues/54433</a>, #101444 (clickhouse-keeper into syslog) <a href="https://github.com/ClickHouse/ClickHouse/issues/101444">https://github.com/ClickHouse/ClickHouse/issues/101444</a>
+</li>
+<li>
+<code>LogFile_STD.cpp</code> without and with the fix: <a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.12.1-stable/base/poco/Foundation/src/LogFile_STD.cpp">https://github.com/ClickHouse/ClickHouse/blob/v25.12.12.1-stable/base/poco/Foundation/src/LogFile_STD.cpp</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/v26.7.1.1315-stable/base/poco/Foundation/src/LogFile_STD.cpp">https://github.com/ClickHouse/ClickHouse/blob/v26.7.1.1315-stable/base/poco/Foundation/src/LogFile_STD.cpp</a>
+</li>
+<li>
+<code>FileChannel.cpp</code> (the "no space left" handler) and <code>PurgeStrategy.cpp</code>: <a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.12.1-stable/base/poco/Foundation/src/FileChannel.cpp">https://github.com/ClickHouse/ClickHouse/blob/v25.12.12.1-stable/base/poco/Foundation/src/FileChannel.cpp</a>, <a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.12.1-stable/base/poco/Foundation/src/PurgeStrategy.cpp">https://github.com/ClickHouse/ClickHouse/blob/v25.12.12.1-stable/base/poco/Foundation/src/PurgeStrategy.cpp</a>
+</li>
+<li>
+<code>OwnSplitChannel.cpp</code> at 25.12 (one thread per log file, the retry and the stderr message): <a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.12.1-stable/src/Loggers/OwnSplitChannel.cpp">https://github.com/ClickHouse/ClickHouse/blob/v25.12.12.1-stable/src/Loggers/OwnSplitChannel.cpp</a>
+</li>
+<li>Server log settings (<code>logger</code>: <code>level</code>, <code>size</code>, <code>count</code>): <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger</a>
+</li>
+<li>Docker json-file driver (<code>max-size</code> defaults to -1; files are for the daemon only): <a href="https://docs.docker.com/engine/logging/drivers/json-file/">https://docs.docker.com/engine/logging/drivers/json-file/</a>
+</li>
+<li>Docker volumes (stored under <code>/var/lib/docker/volumes</code>, not removed with the container): <a href="https://docs.docker.com/engine/storage/volumes/">https://docs.docker.com/engine/storage/volumes/</a>
+</li>
+<li>Kubernetes log rotation (<code>containerLogMaxSize</code> 10Mi, <code>containerLogMaxFiles</code> 5): <a href="https://kubernetes.io/docs/concepts/cluster-administration/logging/#log-rotation">https://kubernetes.io/docs/concepts/cluster-administration/logging/#log-rotation</a>
+</li>
+<li>Langfuse #16339, 89.1 GiB container log: <a href="https://github.com/langfuse/langfuse/issues/16339">https://github.com/langfuse/langfuse/issues/16339</a>
+</li>
+<li>Langfuse PR #16363, Docker log rotation in the README: <a href="https://github.com/langfuse/langfuse/pull/16363">https://github.com/langfuse/langfuse/pull/16363</a>
+</li>
+<li>Langfuse <code>docker-compose.yml</code> (ClickHouse 25.12, log volume): <a href="https://github.com/langfuse/langfuse/blob/main/docker-compose.yml">https://github.com/langfuse/langfuse/blob/main/docker-compose.yml</a>
+</li>
+<li>OpenPanel #324, idle CPU from the log loop: <a href="https://github.com/Openpanel-dev/openpanel/issues/324">https://github.com/Openpanel-dev/openpanel/issues/324</a>
+</li>
+</ul>
+<p>For the other checks, <a href="https://github.com/Protemir/diskvet">diskvet</a> is a free,
+read-only script. It can't see Docker's log files, but it shows how much of
+the disk is outside ClickHouse's parts. Download it as in
+<a href="../../guide/#7-check-everything-at-once">guide section 7</a>, then run it in the
+folder with <code>docker-compose.yml</code>:</p>
+<pre><code>sh diskvet.sh report --docker auto &gt; report.md</code></pre>
+<hr>
+<p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.</p>
+    </article>
+    <p class="small muted guide-source"><a href="../">All disk errors and fixes</a> · <a href="https://github.com/Protemir/diskvet/blob/main/docs/fix/clickhouse-cannot-log-message-ownasyncsplitchannel.md">Source on GitHub</a></p>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="../../guide/">Guide</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">Report a problem</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">Report a security issue</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet is free and open source (Apache-2.0).</p>
+    <p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.
+      Langfuse, SigNoz and ClickStack are trademarks of their respective owners and are mentioned only to describe compatibility.</p>
+  </div>
+</footer>
+<script src="../../langs.js" defer></script>
+</body>
+</html>

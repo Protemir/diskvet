@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClickHouse® Code 243: Cannot reserve 1.00 MiB, not enough space · diskvet</title>
+  <meta name="description" content="ClickHouse says Cannot reserve 1.00 MiB, not enough space (NOT_ENOUGH_SPACE). At 100% even TRUNCATE fails. What still works and how to free space.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../../style.css">
+  <meta property="og:title" content="ClickHouse® Code 243: Cannot reserve 1.00 MiB, not enough space">
+  <meta property="og:description" content="ClickHouse says Cannot reserve 1.00 MiB, not enough space (NOT_ENOUGH_SPACE). At 100% even TRUNCATE fails. What still works and how to free space.">
+  <meta property="og:url" content="https://diskvet.dev/fix/clickhouse-not-enough-space/">
+  <meta property="og:type" content="article">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://diskvet.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="diskvet: what fills the disk of the ClickHouse® in self-hosted Langfuse, SigNoz and ClickStack, and the fix; sh diskvet.sh report --docker auto">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://diskvet.dev/fix/clickhouse-not-enough-space/">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="../../">diskvet</a>
+    <div class="header-right">
+      <nav aria-label="Main">
+        <ul>
+          <li><a href="../../">Home</a></li>
+          <li><a href="../../guide/">Guide</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a></li>
+          <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+        </ul>
+      </nav>
+      <nav class="langs" aria-label="Language">
+        <details>
+          <summary><svg class="globe" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8h13M8 1.5c1.9 2 2.8 4.1 2.8 6.5S9.9 12.5 8 14.5M8 1.5C6.1 3.5 5.2 5.6 5.2 8s.9 4.5 2.8 6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg> English</summary>
+          <ul>
+            <li><a href="./" hreflang="en" lang="en" aria-current="page">English</a></li>
+            <li><a href="../../es/guide/" hreflang="es" lang="es">Español</a></li>
+            <li><a href="../../pt/guide/" hreflang="pt" lang="pt-BR">Português</a></li>
+            <li><a href="../../ru/guide/" hreflang="ru" lang="ru">Русский</a></li>
+            <li><a href="../../ja/guide/" hreflang="ja" lang="ja">日本語</a></li>
+            <li><a href="../../ko/guide/" hreflang="ko" lang="ko">한국어</a></li>
+            <li><a href="../../zh/guide/" hreflang="zh-Hans" lang="zh-Hans">中文</a></li>
+          </ul>
+        </details>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow">
+    <article class="guide">
+<h1 id="clickhouse-code-243-cannot-reserve-100-mib-not-enough-space">ClickHouse® Code 243: Cannot reserve 1.00 MiB, not enough space</h1>
+<p>Every insert into ClickHouse® fails with this error:</p>
+<pre><code>Code: 243. DB::Exception: Received from localhost:9000. DB::Exception: Cannot reserve 1.00 MiB, not enough space. (NOT_ENOUGH_SPACE)
+</code></pre>
+<p>With async inserts the message ends in <code>: While executing WaitForAsyncInsert</code>.
+The Langfuse worker logs it that way. So does a plain <code>INSERT ... VALUES</code> on
+ClickHouse 26.2 and newer, where <code>async_insert</code> is on by default
+(<a href="https://github.com/ClickHouse/ClickHouse/blob/v26.9.1.1629-stable/src/Core/SettingsChangesHistory.cpp#L505">settings history</a>).
+<code>INSERT ... SELECT</code> is not async, so its message ends as above, also on 26.9.</p>
+<h2 id="short-answer">Short answer</h2>
+<p>The disk or Kubernetes volume with ClickHouse's data is full, and ClickHouse
+refuses every write. At 100% even <code>TRUNCATE</code> fails with the same error.
+<code>DROP TABLE ... SYNC</code> still works and gives the space back at once. If
+ClickHouse's own log tables are what's big (they usually are, <code>system.trace_log</code>
+first), drop the biggest ones, then add a TTL so they don't fill up again.</p>
+<h2 id="what-still-works-on-a-full-disk">What still works on a full disk</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Statement</th>
+<th>With <code>df</code> at 100%</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SELECT</code></td>
+<td>works</td>
+</tr>
+<tr>
+<td>
+<code>INSERT</code>, <code>TRUNCATE TABLE</code> (also on <code>system.query_log</code>), <code>ALTER TABLE ... DROP PARTITION</code>
+</td>
+<td>fail with Code 243</td>
+</tr>
+<tr>
+<td><code>DROP TABLE</code></td>
+<td>succeeds, but frees nothing for about 8 minutes</td>
+</tr>
+<tr>
+<td><code>DROP TABLE ... SYNC</code></td>
+<td>succeeds and frees the space at once</td>
+</tr>
+</tbody>
+</table></div>
+<p>A plain <code>DROP TABLE</code> in an Atomic database (the default) only marks the table
+as dropped. The data goes after <code>database_atomic_delay_before_drop_table_sec</code>,
+480 seconds by default (<code>table_dropped_time</code> in <code>system.dropped_tables</code>
+shows when). <code>SYNC</code> skips the wait.</p>
+<h2 id="check">Check</h2>
+<p>How full is the disk? In the folder with Langfuse's <code>docker-compose.yml</code>:</p>
+<pre><code>docker compose exec clickhouse df -h /var/lib/clickhouse /var/log/clickhouse-server</code></pre>
+<p>SigNoz: <code>docker exec signoz-clickhouse df -h /var/lib/clickhouse</code>. On
+Kubernetes each ClickHouse pod has its own volume and its own system logs, so
+run the checks and the fix in the pod whose volume is full
+(<a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md#two-kinds-of-disk-full">two kinds of "disk full"</a>).</p>
+<p>What does ClickHouse see? Save this as <code>disks.sql</code>:</p>
+<pre><code>SELECT name, path, formatReadableSize(free_space) AS free,
+       formatReadableSize(unreserved_space) AS unreserved,
+       formatReadableSize(keep_free_space) AS keep_free
+FROM system.disks;
+SELECT formatReadableSize(sum(bytes_on_disk)) AS all_parts FROM system.parts;</code></pre>
+<p>Run it read-only, the same way as <code>size.sql</code> in
+<a href="../../guide/#1-what-is-using-the-disk-check-clickhouse-disk-usage-by-table">section 1 of the guide</a>:</p>
+<pre><code>docker compose exec -T clickhouse sh -c \
+  'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --readonly=1 --format PrettyCompact' &lt; disks.sql</code></pre>
+<p><code>unreserved</code> is the free space minus what running inserts and merges have
+reserved. <code>free</code> and <code>unreserved</code> already leave out <code>keep_free</code>. An insert
+needs at least 1 MiB unreserved, a big one about its own size: 10,000 rows of
+1,000 bytes gave <code>Cannot reserve 9.61 MiB</code> (9.62 MiB on 24.8). Then run
+<code>size.sql</code> to see what is big.</p>
+<h2 id="fix">Fix</h2>
+<h3 id="clickhouses-own-logs-are-big">ClickHouse's own logs are big</h3>
+<p>In the write-access client from <a href="../../guide/#2-how-do-i-free-the-disk-space-right-now">section 2 of the guide</a>,
+drop the biggest log:</p>
+<pre><code>DROP TABLE system.trace_log SYNC SETTINGS max_table_size_to_drop = 0;</code></pre>
+<ul>
+<li>This deletes only ClickHouse's diagnostics, not your traces. It can't be undone. ClickHouse creates the table again, empty, at its next log flush.</li>
+<li>Don't leave out <code>SYNC</code>: without it the space comes back only after about 8 minutes. Keep <code>SYNC</code> before <code>SETTINGS</code>: the other order fails with a syntax error (Code 62).</li>
+<li>
+<code>max_table_size_to_drop = 0</code> lifts the 50 GB drop limit for this one statement (ClickHouse 23.12+; <a href="../clickhouse-max-table-size-to-drop/">Code 359 page</a>).</li>
+<li>Do the same for <code>text_log</code> or any other big <code>system</code> log from <code>size.sql</code>, old copies like <code>trace_log_0</code> included (<a href="../clickhouse-system-log-copies/">system log copies</a>). Once there is room again, the guide's <code>TRUNCATE</code> works too.</li>
+<li>The logs start growing again right away. Once there is room, add a TTL as in <a href="../../guide/#4-how-do-i-set-a-ttl-on-clickhouse-system-logs">section 4 of the guide</a>. A TTL alone won't get you out of a full disk: ClickHouse deletes expired rows during merges (<a href="../../guide/#step-5-check-the-result">guide, step 5</a>), and a merge reserves space first.</li>
+</ul>
+<h3 id="the-space-is-outside-the-tables">The space is outside the tables</h3>
+<p><code>df</code> shows much more used than <code>all_parts</code>?</p>
+<ul>
+<li>
+<strong>Rotated server logs.</strong> ClickHouse renames old log files to <code>clickhouse-server.log.0.gz</code>, <code>.1.gz</code> and so on. It doesn't need them, and rotation goes on after you delete them. They fill the data disk only if <code>/var/log/clickhouse-server</code> is on it: compare the two lines of <code>df</code> above. Delete them with <code>docker compose exec clickhouse sh -c 'rm /var/log/clickhouse-server/*.gz'</code>, then make the logs smaller (<a href="../../guide/#are-clickhouses-own-log-files-big">ClickHouse's own log files</a>).</li>
+<li>
+<strong>Docker's container logs</strong> are on the host, under <code>/var/lib/docker/containers</code>. Docker keeps named volumes (Langfuse's compose uses them) under <code>/var/lib/docker</code> too, so these logs usually fill the same disk: <a href="../../guide/#are-docker-container-logs-filling-the-disk">Docker container logs</a>.</li>
+<li>
+<strong>Anything else on the host.</strong> With a named volume, <code>df</code> in the container shows the file system that holds <code>/var/lib/docker</code>. Images, other volumes and files outside Docker count too. <code>docker system df</code> shows Docker's part.</li>
+<li>
+<strong>Other folders in the data directory.</strong> <code>docker compose exec clickhouse sh -c 'du -sh /var/lib/clickhouse/*'</code> shows which one is big. <code>tmp/</code> holds temporary files of running queries (see below). <code>store/</code> also holds tables dropped without <code>SYNC</code> until their <code>table_dropped_time</code>, and detached parts until you remove them (<a href="../../guide/#are-old-parts-stuck-on-disk-inactive-and-detached-parts">old parts stuck on disk</a>). <code>all_parts</code> counts neither.</li>
+</ul>
+<h3 id="your-own-data-is-big">Your own data is big</h3>
+<p>Grow the disk. On Kubernetes, see
+<a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md#more-room-on-the-volume">more room on the volume</a>.
+Rows removed by a lightweight <code>DELETE</code> take space until their parts are
+rewritten (<a href="../../guide/#why-do-deleted-rows-still-take-space">deleted rows</a>).
+Don't delete folders under <code>/var/lib/clickhouse/store</code> by hand: ClickHouse
+still counts on those files. Once there is room, remove data with SQL.</p>
+<h3 id="keep-a-reserve-for-next-time">Keep a reserve for next time</h3>
+<p><code>keep_free_space_bytes</code> makes ClickHouse stop writing while some space is
+still free. Save this as <code>clickhouse-reserve.xml</code>:</p>
+<pre><code>&lt;clickhouse&gt;
+    &lt;storage_configuration&gt;&lt;disks&gt;&lt;default&gt;
+        &lt;keep_free_space_bytes&gt;1073741824&lt;/keep_free_space_bytes&gt;
+    &lt;/default&gt;&lt;/disks&gt;&lt;/storage_configuration&gt;
+&lt;/clickhouse&gt;</code></pre>
+<p>Mount it into <code>config.d</code> and restart ClickHouse like the TTL file (guide
+section 4, steps 2 and 3). On Kubernetes, put it where your chart takes the
+TTL file (XML or YAML, depending on the chart:
+<a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md#charts-at-a-glance">Kubernetes recipe</a>), so that a
+pod restart or a <code>helm upgrade</code> keeps it.</p>
+<p>Code 243 then comes while 1 GiB is still free. Inserts and <code>TRUNCATE</code> fail,
+but <code>DROP TABLE ... SYNC</code> still works, so you can drop the big logs with the
+reserve in place. If you need <code>TRUNCATE</code> or other writes to clean up, set the
+value to <code>0</code> and run <code>SYSTEM RELOAD CONFIG</code> (no restart). When <code>disks.sql</code>
+shows <code>keep_free</code> as <code>0.00 B</code>, free the space, then put the value back and
+reload again. If <code>keep_free</code> still shows the old value, restart ClickHouse
+(<code>docker compose restart clickhouse</code>).</p>
+<h2 id="same-error-bigger-number">Same error, bigger number</h2>
+<p>Merges and mutations reserve space for the new part before they write it, so
+you can see <code>Cannot reserve 145.10 GiB, not enough space</code>
+(<a href="https://github.com/ClickHouse/ClickHouse/discussions/45154">discussion #45154</a>)
+or <code>Not enough space for mutating part</code>
+(<a href="https://github.com/ClickHouse/ClickHouse/issues/48392">#48392</a>) while <code>df</code>
+still shows free space. In the <a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/Compaction/CompactionStatistics.cpp#L29-L36">source</a>,
+a merge starts only if unreserved space is at least twice the size of its
+source parts, and it reserves 1.1 times that size. A mutation, such as
+<code>APPLY DELETED MASK</code> or <code>MATERIALIZE TTL</code>, needs 1.1 times the part. So a
+100 GiB merge waits for 200 GiB of unreserved space.</p>
+<h2 id="no-space-left-on-device-instead">"No space left on device" instead</h2>
+<p>When the OS itself refuses a write, you get errno 28 instead of Code 243.
+<code>clickhouse-client</code> on 26.9 printed this for an insert (25.12 prints the same
+lines):</p>
+<pre><code>Code: 75. DB::Exception: Received from localhost:9000. DB::ErrnoException. DB::ErrnoException: Cannot write to file /var/lib/clickhouse/store/029/029b54a8-e639-4b20-b8be-ffee49035daf/tmp_insert_all_1_1_0/s.bin: , errno: 28, strerror: No space left on device
+Total space: 150.00 MiB
+Available space: 84.05 MiB
+Total inodes: 2.03 million
+Available inodes: 2.03 million
+Mount point: /var/lib/clickhouse
+Filesystem: tmpfs. (CANNOT_WRITE_TO_FILE_DESCRIPTOR)
+</code></pre>
+<p><code>Available space</code> isn't 0: it matched <code>df</code> right after the error, when
+ClickHouse had already removed the half-written part. A <code>CREATE TABLE</code> on a
+disk with 0 bytes free fails the same way, on <code>format_version.txt</code> (24.8, 25.12
+and 26.9).</p>
+<p>Reservations count only ClickHouse's planned writes. In the test for this page,
+another process (<code>dd</code>) filled the disk during the insert. Temporary files of
+big queries in <code>/var/lib/clickhouse/tmp</code> can do it too
+(<a href="https://github.com/ClickHouse/ClickHouse/issues/17744">#17744</a>, a join that
+spilled to disk). Check <code>df -h</code> and <code>df -i</code>: without free inodes you get errno
+28 with free space left
+(<a href="https://github.com/ClickHouse/ClickHouse/issues/6252">#6252</a>: inserts failed
+with 75% of the disk free, most likely because the inodes had run out). If even
+<code>docker exec</code> fails with
+<code>OCI runtime exec failed: write /tmp/runc-process...: no space left on device</code>
+(<a href="https://github.com/plausible/community-edition/issues/256">Plausible CE #256</a>,
+not reproduced here), the host's disk is full. Free space on the host first.</p>
+<h2 id="what-it-does-to-the-apps">What it does to the apps</h2>
+<ul>
+<li>
+<strong>Langfuse.</strong> The worker logs <code>Cannot reserve 1.00 MiB, not enough space: While executing WaitForAsyncInsert</code> (<a href="https://github.com/langfuse/langfuse/issues/17862">#17862</a>, <a href="https://github.com/OnRamp-2026/onramp-api/issues/268">OnRamp #268</a>). In OnRamp #268 the 8 Gi PVC was full and no new traces arrived for more than 23 hours; the worker called it a <code>non-retryable error</code>. The #17862 reporter saw the worker drop records after its retries ran out.</li>
+<li>
+<strong>Laminar.</strong> In a comment on <a href="https://github.com/lmnr-ai/lmnr/issues/2176">lmnr #2176</a>, <code>TRUNCATE TABLE system.trace_log</code> failed at 100%, and they had to grow the PVC and restart the pod before any cleanup could run. Ingestion had been dead for six weeks: the consumer kept retrying, the SDK got success and every pod stayed <code>Running</code>.</li>
+<li>
+<strong>Opik.</strong> In <a href="https://github.com/comet-ml/opik/issues/6224">#6224</a> Redis on the same disk went read-only, and span ingestion returned HTTP 500.</li>
+<li>
+<strong>ClickStack.</strong> In <a href="https://github.com/ClickHouse/ClickStack-helm-charts/issues/191">ClickStack-helm-charts #191</a> a ~97 GB <code>trace_log</code> filled a 108 GB PVC, and the user tables ended up with 125+ broken parts.</li>
+</ul>
+<h2 id="why-it-happens">Why it happens</h2>
+<p>Before ClickHouse writes a new part (an insert, a merge or a mutation), it
+reserves disk space for it: at least 1 MiB
+(<a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/MergeTreeData.cpp#L178"><code>RESERVATION_MIN_ESTIMATION_SIZE</code></a>).
+If less than that is unreserved after <code>keep_free_space_bytes</code>, the write fails
+with Code 243. On self-hosted Langfuse, SigNoz and ClickStack the space usually
+goes to ClickHouse's own logs, which have no size limit by default
+(<a href="../../guide/#3-why-are-trace_log-and-text_log-so-big">section 3 of the guide</a>).</p>
+<h2 id="tested-on">Tested on</h2>
+<p>Stock <code>clickhouse/clickhouse-server</code> images 24.8.14.39, 25.12.11.4 and
+26.9.1.1629 (Docker 29.3.0 on Docker Desktop for Windows, Compose 5.1.0). The
+compose service <code>clickhouse</code> was set up like Langfuse's (<code>user: "101:101"</code>,
+<code>CLICKHOUSE_USER</code>, <code>CLICKHOUSE_PASSWORD</code>, a logs volume), with the data folder
+on a 150 MiB tmpfs.</p>
+<ul>
+<li>On all three: the Code 243 text and the table above; <code>disks.sql</code>; the <code>DROP ... SYNC</code> fix, and Code 62 with <code>SYNC</code> after <code>SETTINGS</code>; the guide's <code>TRUNCATE</code> once there was room; <code>table_dropped_time</code> 480 seconds after a plain <code>DROP</code>; the <code>du</code> line; a dropped and a detached table left out of <code>all_parts</code> but still in <code>store/</code>; errno 28 from <code>CREATE TABLE</code>.</li>
+<li>The reserve file, on all three: <code>keep_free</code> 1.00 GiB; inserts and <code>TRUNCATE</code> failed with Code 243 while <code>df</code> showed over 100 MiB free; <code>DROP ... SYNC</code> worked; <code>SYSTEM RELOAD CONFIG</code> switched the value both ways; <code>docker compose restart clickhouse</code> picked up a change to <code>0</code>.</li>
+<li>The 8-minute wait was timed on 26.9: a 143 MiB table left <code>df</code> about 480 seconds after its <code>DROP</code>.</li>
+<li>Errno 28 from an insert: 25.12 and 26.9 (on 24.8 our <code>dd</code> run didn't hit it).</li>
+<li>Only on 26.9: the <code>WaitForAsyncInsert</code> ending for <code>INSERT ... VALUES</code>; Code 243 with a 50 MiB reserve and 51 MiB free; log rotation (with <code>&lt;size&gt;1M&lt;/size&gt;</code>) and the <code>rm</code> line; diskvet 0.3.1.</li>
+<li>The SigNoz <code>docker exec</code> line ran with our own container name. <code>docker system df</code> ran on the same host.</li>
+<li>Not run: 23.12 and 26.2 (those versions come from the linked source), Kubernetes, a real Langfuse, SigNoz or ClickStack install, a full host disk, the reserve on a Linux host.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<ul>
+<li>DROP and <code>SYNC</code>: <a href="https://clickhouse.com/docs/reference/statements/drop">https://clickhouse.com/docs/reference/statements/drop</a>
+</li>
+<li>Atomic database, delayed deletion: <a href="https://clickhouse.com/docs/engines/database-engines/atomic">https://clickhouse.com/docs/engines/database-engines/atomic</a>
+</li>
+<li>
+<code>database_atomic_delay_before_drop_table_sec</code> (480): <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec</a>
+</li>
+<li>system.dropped_tables: <a href="https://clickhouse.com/docs/reference/system-tables/dropped_tables">https://clickhouse.com/docs/reference/system-tables/dropped_tables</a>
+</li>
+<li>system.disks: <a href="https://clickhouse.com/docs/reference/system-tables/disks">https://clickhouse.com/docs/reference/system-tables/disks</a>
+</li>
+<li>
+<code>keep_free_space_bytes</code>: <a href="https://clickhouse.com/docs/engines/table-engines/mergetree-family/mergetree#table_engine-mergetree-multiple-volumes">https://clickhouse.com/docs/engines/table-engines/mergetree-family/mergetree#table_engine-mergetree-multiple-volumes</a>
+</li>
+<li>
+<code>max_table_size_to_drop</code>: <a href="https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop">https://clickhouse.com/docs/reference/settings/session-settings/max#max_table_size_to_drop</a>
+</li>
+<li>Query-level <code>max_table_size_to_drop</code> since 23.12: <a href="https://github.com/ClickHouse/ClickHouse/pull/57452">https://github.com/ClickHouse/ClickHouse/pull/57452</a>
+</li>
+<li>
+<code>async_insert</code> on by default since 26.2: <a href="https://github.com/ClickHouse/ClickHouse/blob/v26.9.1.1629-stable/src/Core/SettingsChangesHistory.cpp#L505">https://github.com/ClickHouse/ClickHouse/blob/v26.9.1.1629-stable/src/Core/SettingsChangesHistory.cpp#L505</a>
+</li>
+<li>Minimum reservation, error text: <a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/MergeTreeData.cpp">https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/MergeTreeData.cpp</a>
+</li>
+<li>Merge and mutation coefficients: <a href="https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/Compaction/CompactionStatistics.cpp">https://github.com/ClickHouse/ClickHouse/blob/v25.12.11.4-stable/src/Storages/MergeTree/Compaction/CompactionStatistics.cpp</a>
+</li>
+</ul>
+<h2 id="check-it-with-diskvet">Check it with diskvet</h2>
+<p><a href="https://github.com/Protemir/diskvet">diskvet</a> is a free, open-source,
+read-only script. It shows the free space on ClickHouse's disk, a rough
+forecast of when it fills up, and how much of the disk is outside ClickHouse's
+parts. Download it as in <a href="../../guide/#7-check-everything-at-once">section 7 of the guide</a>
+and run it once:</p>
+<pre><code>sh diskvet.sh report --docker auto &gt; report.md</code></pre>
+<hr>
+<p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.</p>
+    </article>
+    <p class="small muted guide-source"><a href="../">All disk errors and fixes</a> · <a href="https://github.com/Protemir/diskvet/blob/main/docs/fix/clickhouse-not-enough-space.md">Source on GitHub</a></p>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="../../guide/">Guide</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">Report a problem</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">Report a security issue</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet is free and open source (Apache-2.0).</p>
+    <p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.
+      Langfuse, SigNoz and ClickStack are trademarks of their respective owners and are mentioned only to describe compatibility.</p>
+  </div>
+</footer>
+<script src="../../langs.js" defer></script>
+</body>
+</html>

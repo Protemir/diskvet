@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClickHouse® Code 36: TTL parameters should be specified directly inside 'engine' · diskvet</title>
+  <meta name="description" content="ClickHouse exits with Code 36 after you add a TTL for opentelemetry_span_log. Put the TTL inside &lt;engine> or switch the log off.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%231f5fbf'/%3E%3Crect%20x='3'%20y='9'%20width='2'%20height='4'%20fill='%23fff'/%3E%3Crect%20x='7'%20y='6'%20width='2'%20height='7'%20fill='%23fff'/%3E%3Crect%20x='11'%20y='3'%20width='2'%20height='10'%20fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../../style.css">
+  <meta property="og:title" content="ClickHouse® Code 36: TTL parameters should be specified directly inside 'engine'">
+  <meta property="og:description" content="ClickHouse exits with Code 36 after you add a TTL for opentelemetry_span_log. Put the TTL inside &lt;engine> or switch the log off.">
+  <meta property="og:url" content="https://diskvet.dev/fix/clickhouse-system-log-ttl-inside-engine/">
+  <meta property="og:type" content="article">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://diskvet.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="diskvet: what fills the disk of the ClickHouse® in self-hosted Langfuse, SigNoz and ClickStack, and the fix; sh diskvet.sh report --docker auto">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://diskvet.dev/fix/clickhouse-system-log-ttl-inside-engine/">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="logo" href="../../">diskvet</a>
+    <div class="header-right">
+      <nav aria-label="Main">
+        <ul>
+          <li><a href="../../">Home</a></li>
+          <li><a href="../../guide/">Guide</a></li>
+          <li><a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a></li>
+          <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+        </ul>
+      </nav>
+      <nav class="langs" aria-label="Language">
+        <details>
+          <summary><svg class="globe" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8h13M8 1.5c1.9 2 2.8 4.1 2.8 6.5S9.9 12.5 8 14.5M8 1.5C6.1 3.5 5.2 5.6 5.2 8s.9 4.5 2.8 6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg> English</summary>
+          <ul>
+            <li><a href="./" hreflang="en" lang="en" aria-current="page">English</a></li>
+            <li><a href="../../es/guide/" hreflang="es" lang="es">Español</a></li>
+            <li><a href="../../pt/guide/" hreflang="pt" lang="pt-BR">Português</a></li>
+            <li><a href="../../ru/guide/" hreflang="ru" lang="ru">Русский</a></li>
+            <li><a href="../../ja/guide/" hreflang="ja" lang="ja">日本語</a></li>
+            <li><a href="../../ko/guide/" hreflang="ko" lang="ko">한국어</a></li>
+            <li><a href="../../zh/guide/" hreflang="zh-Hans" lang="zh-Hans">中文</a></li>
+          </ul>
+        </details>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap narrow">
+    <article class="guide">
+<h1 id="clickhouse-code-36-ttl-parameters-should-be-specified-directly-inside-engine">ClickHouse® Code 36: TTL parameters should be specified directly inside 'engine'</h1>
+<p>You added a <code>config.d</code> file with TTLs for the system logs, restarted, and now
+ClickHouse® doesn't start. Its error log says:</p>
+<pre><code>&lt;Error&gt; Application: Code: 36. DB::Exception: If 'engine' is specified for system table, TTL parameters should be specified directly inside 'engine' and 'ttl' setting doesn't make sense. (BAD_ARGUMENTS), Stack trace (when copying this message, always include the lines below):
+</code></pre>
+<p>The line starts with the date and time. ClickHouse 24.8, 25.12 and 26.9 print
+the same text. It also appears once more, after <code>Caught exception while loading metadata:</code>. <code>docker ps -a</code> shows the container as <code>Exited (36)</code>, or as
+<code>Restarting (36)</code> with <code>restart: always</code>.</p>
+<h2 id="short-answer">Short answer</h2>
+<p>Your file sets <code>&lt;ttl&gt;</code> for a system log that the config also defines with
+<code>&lt;engine&gt;</code>. In the stock <code>config.xml</code> that log is <code>opentelemetry_span_log</code>: it
+is the only stock log with an <code>&lt;engine&gt;</code> in every version checked, 24.1 to
+26.9. ClickHouse refuses the combination and exits at startup. Put the TTL
+inside the <code>&lt;engine&gt;</code> string, or switch that log off.</p>
+<h2 id="check">Check</h2>
+<p><code>docker compose logs clickhouse</code> may not show the error. The stock images
+print the server log to the console only with a TTY (the <code>&lt;console&gt;</code> comment
+in <code>config.xml</code>). Without one, the output stops at <code>Logging errors to /var/log/clickhouse-server/clickhouse-server.err.log</code>. Copy the error log out
+of the container. This works on a stopped one too:</p>
+<pre><code>docker cp "$(docker compose ps -aq clickhouse)":/var/log/clickhouse-server/clickhouse-server.err.log .
+grep 'Code: 36' clickhouse-server.err.log | tail -n 2</code></pre>
+<p>Two stacks ship their own <code>config.xml</code>, and it changes this step:</p>
+<ul>
+<li>
+<strong>SigNoz</strong>, from its last compose file (v0.129.0; later releases install
+through Foundry): the file sets <code>tty: true</code>, so the error is in
+<code>docker compose logs clickhouse</code> too. SigNoz's <code>config.xml</code> writes the log
+as JSON, so the text is in the <code>message</code> field. The container is
+<code>signoz-clickhouse</code>: outside the compose folder, put that name in place of
+<code>"$(docker compose ps -aq clickhouse)"</code>.</li>
+<li>
+<strong>ClickStack</strong>, from its compose file: the service is <code>ch-server</code>, and its
+<code>config.xml</code> logs only to the console. There is no <code>clickhouse-server.err.log</code>, so run
+<code>docker compose logs ch-server</code>. Use <code>ch-server</code> in place of <code>clickhouse</code> in
+the commands below.</li>
+</ul>
+<p>Now find the logs that have an <code>&lt;engine&gt;</code>. ClickHouse writes the config it
+built from <code>config.xml</code> and all <code>config.d</code> files to <code>preprocessed_configs/</code>.
+This prints its engines without saving the file, which can hold secrets from
+your config:</p>
+<pre><code>docker cp "$(docker compose ps -aq clickhouse)":/var/lib/clickhouse/preprocessed_configs/config.xml - | tar -xO |
+  awk '/^[ \t]*&lt;[a-z_]+_log&gt;/ {name = $1} /^[ \t]*&lt;engine&gt;/, /&lt;\/engine&gt;/ {print name, $0}'</code></pre>
+<p>With the stock config of 25.3 and later it prints:</p>
+<pre><code>&lt;opentelemetry_span_log&gt;         &lt;engine&gt;
+&lt;opentelemetry_span_log&gt;             engine MergeTree
+&lt;opentelemetry_span_log&gt;             partition by toYYYYMM(finish_date)
+&lt;opentelemetry_span_log&gt;             order by (finish_date, finish_time_us)
+&lt;opentelemetry_span_log&gt;         &lt;/engine&gt;
+</code></pre>
+<p>The stock config up to 25.2 (all of 24.x) and the <code>config.xml</code> of
+<a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml">SigNoz</a>
+and
+<a href="https://github.com/ClickHouse/ClickStack/blob/463e1ab65b92cfc76c6dfd8ed22bcffed9d0807f/docker/clickhouse/local/config.xml">ClickStack</a>
+sort by <code>(finish_date, finish_time_us, trace_id)</code>, so there the <code>order by</code>
+line ends in <code>trace_id)</code>.</p>
+<p>Don't give any log in this list a <code>&lt;ttl&gt;</code> in your file. Keep its
+<code>PARTITION BY</code> and <code>ORDER BY</code> for fix 1.</p>
+<p>When the server runs, this query shows the table's current engine. Run it
+read-only, as in <a href="../../guide/#1-what-is-using-the-disk-check-clickhouse-disk-usage-by-table">section 1 of the guide</a>:</p>
+<pre><code>SELECT engine_full FROM system.tables
+WHERE database = 'system' AND name = 'opentelemetry_span_log';</code></pre>
+<h2 id="fix">Fix</h2>
+<p>Pick one of the three, then recreate the container (<code>docker-compose.yml</code> didn't change):</p>
+<pre><code>docker compose up -d --force-recreate clickhouse
+docker compose ps clickhouse</code></pre>
+<h3 id="fix-1-put-the-ttl-inside-engine">Fix 1: put the TTL inside <code>&lt;engine&gt;</code>
+</h3>
+<p>Replace the <code>opentelemetry_span_log</code> section of your file with this one. Use
+the <code>PARTITION BY</code> and <code>ORDER BY</code> from the check. This one has the keys of
+25.3 and later; up to 25.2 and on SigNoz and ClickStack, end the <code>ORDER BY</code>
+with <code>, trace_id)</code>:</p>
+<pre><code>&lt;opentelemetry_span_log&gt;
+    &lt;engine&gt;ENGINE = MergeTree PARTITION BY toYYYYMM(finish_date) ORDER BY (finish_date, finish_time_us) TTL finish_date + INTERVAL 7 DAY DELETE&lt;/engine&gt;
+&lt;/opentelemetry_span_log&gt;</code></pre>
+<p>Three traps:</p>
+<ul>
+<li>
+<strong>No <code>&lt;ttl&gt;</code> next to it.</strong> A section with both <code>&lt;engine&gt;</code> and <code>&lt;ttl&gt;</code> still fails with Code 36.</li>
+<li>
+<strong>The column is <code>finish_date</code>.</strong> This log has no <code>event_date</code> column, so don't copy the TTL of the other logs.</li>
+<li>
+<strong>Not only <code>&lt;ttl&gt;</code>.</strong> With an <code>&lt;engine&gt;</code>, ClickHouse also refuses <code>&lt;partition_by&gt;</code>, <code>&lt;order_by&gt;</code>, <code>&lt;storage_policy&gt;</code> and <code>&lt;settings&gt;</code> for that log, each with its own Code 36 message (<a href="https://github.com/ClickHouse/ClickHouse/blob/37b5e007f5d85cd264ef7fb22dd5b5b935580d2f/src/Interpreters/SystemLog.cpp#L173-L194">source</a>).</li>
+</ul>
+<h3 id="fix-2-switch-the-log-off">Fix 2: switch the log off</h3>
+<pre><code>&lt;opentelemetry_span_log remove="1"/&gt;</code></pre>
+<p>This is how Langfuse's <a href="https://langfuse.com/self-hosting/configuration/scaling">scaling docs</a>
+do it; Langfuse doesn't read this table
+(<a href="https://github.com/langfuse/langfuse/issues/13123">#13123</a>). <code>remove</code>
+doesn't delete a table that already exists: it keeps its old rows, and
+ClickHouse no longer writes to it. Drop it in the write-access client from
+<a href="../../guide/#2-how-do-i-free-the-disk-space-right-now">section 2 of the guide</a>:</p>
+<pre><code>DROP TABLE system.opentelemetry_span_log;</code></pre>
+<p><code>DROP</code> can't be undone. Over 50 GB, add <code>SETTINGS max_table_size_to_drop = 0</code>
+(<a href="../../guide/#truncate-fails-with-code-359-tables-over-50-gb">Code 359</a>).</p>
+<h3 id="fix-3-take-the-section-out">Fix 3: take the section out</h3>
+<p>Delete the <code>opentelemetry_span_log</code> section from your file. The server starts,
+but this log still has no TTL and keeps every span written to it. In Langfuse
+#13123 it was 64.53 MiB, next to a 66.86 GiB <code>trace_log</code>.</p>
+<h2 id="after-the-fix">After the fix</h2>
+<p>Right after the restart, an existing <code>opentelemetry_span_log</code> can still show no
+TTL. ClickHouse applies the new engine when it next flushes that log: it
+renames the old table to <code>opentelemetry_span_log_0</code> (<code>_1</code> if a <code>_0</code> is already
+there), with all its old rows and its old engine, and creates a new one with
+the TTL. To make that happen now, run this in the write-access client:</p>
+<pre><code>SYSTEM FLUSH LOGS;
+
+SELECT name, extract(engine_full, 'TTL [^S]*') AS ttl
+FROM system.tables
+WHERE database = 'system' AND name LIKE 'opentelemetry_span_log%';</code></pre>
+<p>With fix 1 you should see <code>TTL finish_date + toIntervalDay(7)</code> on
+<code>opentelemetry_span_log</code>, and an empty <code>ttl</code> on <code>opentelemetry_span_log_0</code>.
+Drop each copy the query lists (there is none if the table didn't exist
+before). <code>DROP</code> can't be undone:</p>
+<pre><code>DROP TABLE system.opentelemetry_span_log_0;</code></pre>
+<p>The other logs your file gave a TTL get a copy too, such as <code>query_log_0</code>.
+<a href="../../guide/#step-4-drop-the-old-trace_log_0-copies">Step 4 of the guide</a>
+writes the <code>DROP</code> for all these copies.</p>
+<h2 id="kubernetes">Kubernetes</h2>
+<p>Charts that run the ClickHouse operator, such as Langfuse's chart 2.x, take
+this config as YAML: the log becomes <code>engine: "..."</code> with the same text.
+SigNoz's chart defines 14 more system logs with their own <code>&lt;engine&gt;</code>, among
+them <code>query_log</code>, <code>part_log</code>, <code>trace_log</code> and <code>metric_log</code>
+(<a href="https://github.com/SigNoz/charts/blob/8aa479daf5d25a751ba9cf7a5df99dfbed80bc6c/charts/clickhouse/templates/clickhouse-operator/configmaps/etc-configd-files.yaml">source</a>),
+so there a <code>&lt;ttl&gt;</code> for any of them stops ClickHouse too. Change their TTL
+with the chart's values instead: <code>clickhouse.clickhouseOperator.&lt;logName&gt;.ttl</code>,
+in days, with the log name in camelCase, such as <code>queryLog</code>
+(<a href="https://github.com/SigNoz/charts/blob/8aa479daf5d25a751ba9cf7a5df99dfbed80bc6c/charts/signoz/values.yaml">values</a>).
+The
+<a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md#troubleshooting">Kubernetes recipe</a>
+shows how to read the crashed pod's log, and which values key takes the TTL
+for each chart.</p>
+<h2 id="why-it-happens">Why it happens</h2>
+<p>ClickHouse merges each <code>config.d</code> file into <code>config.xml</code>: a section with the
+same name is merged with the stock one, child by child
+(<a href="https://clickhouse.com/docs/concepts/features/configuration/server-config/configuration-files">docs</a>).
+Your <code>&lt;opentelemetry_span_log&gt;</code> with a <code>&lt;ttl&gt;</code> lands next to the stock
+<code>&lt;engine&gt;</code>.</p>
+<p>The stock config defines this log with an <code>&lt;engine&gt;</code> because it has no
+<code>event_time</code>, only a start and a finish time, and it is sorted by finish time
+(<a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml"><code>config.xml</code></a>).
+The <a href="https://clickhouse.com/docs/reference/system-tables/overview">docs</a> say
+that <code>engine</code> "conflicts with partition_by and ttl": set together, the server
+raises an exception and exits. This holds for any system log that your config
+defines with <code>&lt;engine&gt;</code>, not only this one.
+<a href="https://github.com/ClickHouse/ClickHouse/issues/88366">ClickHouse #88366</a>,
+which asks for a TTL without touching the stock config, is still open.</p>
+<h2 id="tested-on">Tested on</h2>
+<p>Stock <code>clickhouse/clickhouse-server</code> 24.8.14.39, 25.12.11.4 and 26.9.1.1629
+in Docker: the error and the two log lines, the <code>docker cp</code> and <code>awk</code> checks,
+the <code>engine_full</code> query, the five Code 36 checks, all three fixes, the <code>_0</code>
+copy and both <code>DROP</code>s. On 24.8 and 26.9 only: the error in <code>docker logs</code> with
+a TTY, fix 1 with <code>trace_id</code> in the <code>ORDER BY</code>, <code>SETTINGS max_table_size_to_drop = 0</code> against a lower server limit, and the TTL file of
+diskvet 0.3.1. On 26.9 only: the compose commands, <code>restart: always</code>, the
+<code>_1</code> copy and the <code>query_log_0</code> copy, and ClickStack's <code>config.xml</code> with the
+failing file (the error in <code>docker logs</code> without a TTY, no <code>err.log</code>; its
+compose file uses 26.1). SigNoz v0.129.0's <code>config.xml</code> on 25.5.11 with a TTY: the error
+as JSON in <code>docker logs</code> and in <code>err.log</code>, and the <code>awk</code> check. The
+<code>&lt;engine&gt;</code> list and the <code>trace_id</code> change: the stock <code>config.xml</code> of the
+images 24.1.2, 24.3.18, 25.5.11 and 25.8.5, and of the source tags 24.10,
+24.12 and 25.1 to 25.4. SigNoz's compose files and chart were read, not run,
+and so was the Kubernetes part.</p>
+<h2 id="sources">Sources</h2>
+<ul>
+<li>System tables overview (<code>engine</code> conflicts with <code>partition_by</code> and <code>ttl</code>): <a href="https://clickhouse.com/docs/reference/system-tables/overview">https://clickhouse.com/docs/reference/system-tables/overview</a>
+</li>
+<li>Configuration files (merging, <code>remove</code>, preprocessed files): <a href="https://clickhouse.com/docs/concepts/features/configuration/server-config/configuration-files">https://clickhouse.com/docs/concepts/features/configuration/server-config/configuration-files</a>
+</li>
+<li>Default <code>config.xml</code> (<code>opentelemetry_span_log</code> with <code>&lt;engine&gt;</code>, console logging only with a TTY): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml">https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml</a>
+</li>
+<li>The five checks in <code>SystemLog.cpp</code>: <a href="https://github.com/ClickHouse/ClickHouse/blob/37b5e007f5d85cd264ef7fb22dd5b5b935580d2f/src/Interpreters/SystemLog.cpp#L173-L194">https://github.com/ClickHouse/ClickHouse/blob/37b5e007f5d85cd264ef7fb22dd5b5b935580d2f/src/Interpreters/SystemLog.cpp#L173-L194</a>
+</li>
+<li>ClickHouse #88366, TTL for <code>opentelemetry_span_log</code>: <a href="https://github.com/ClickHouse/ClickHouse/issues/88366">https://github.com/ClickHouse/ClickHouse/issues/88366</a>
+</li>
+<li>Langfuse scaling docs (<code>remove="1"</code>, TTL inside <code>&lt;engine&gt;</code>): <a href="https://langfuse.com/self-hosting/configuration/scaling">https://langfuse.com/self-hosting/configuration/scaling</a>
+</li>
+<li>Langfuse #13123 (table sizes, tables Langfuse reads): <a href="https://github.com/langfuse/langfuse/issues/13123">https://github.com/langfuse/langfuse/issues/13123</a>
+</li>
+<li>SigNoz v0.129.0 ClickHouse <code>config.xml</code>: <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml</a>
+</li>
+<li>SigNoz v0.129.0 compose file (<code>tty: true</code>, <code>signoz-clickhouse</code>): <a href="https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml">https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/docker/docker-compose.yaml</a>
+</li>
+<li>SigNoz v0.130.0 deploy README (compose files deprecated, Foundry): <a href="https://github.com/SigNoz/signoz/blob/v0.130.0/deploy/README.md">https://github.com/SigNoz/signoz/blob/v0.130.0/deploy/README.md</a>
+</li>
+<li>SigNoz chart, the logs it defines with <code>&lt;engine&gt;</code>: <a href="https://github.com/SigNoz/charts/blob/8aa479daf5d25a751ba9cf7a5df99dfbed80bc6c/charts/clickhouse/templates/clickhouse-operator/configmaps/etc-configd-files.yaml">https://github.com/SigNoz/charts/blob/8aa479daf5d25a751ba9cf7a5df99dfbed80bc6c/charts/clickhouse/templates/clickhouse-operator/configmaps/etc-configd-files.yaml</a>
+</li>
+<li>SigNoz chart values (<code>clickhouseOperator.&lt;logName&gt;.ttl</code>): <a href="https://github.com/SigNoz/charts/blob/8aa479daf5d25a751ba9cf7a5df99dfbed80bc6c/charts/signoz/values.yaml">https://github.com/SigNoz/charts/blob/8aa479daf5d25a751ba9cf7a5df99dfbed80bc6c/charts/signoz/values.yaml</a>
+</li>
+<li>ClickStack compose file (<code>ch-server</code>): <a href="https://github.com/ClickHouse/ClickStack/blob/463e1ab65b92cfc76c6dfd8ed22bcffed9d0807f/docker-compose.yml">https://github.com/ClickHouse/ClickStack/blob/463e1ab65b92cfc76c6dfd8ed22bcffed9d0807f/docker-compose.yml</a>
+</li>
+<li>ClickStack <code>config.xml</code> (console only, no log files, <code>trace_id</code> in the span log's <code>ORDER BY</code>): <a href="https://github.com/ClickHouse/ClickStack/blob/463e1ab65b92cfc76c6dfd8ed22bcffed9d0807f/docker/clickhouse/local/config.xml">https://github.com/ClickHouse/ClickStack/blob/463e1ab65b92cfc76c6dfd8ed22bcffed9d0807f/docker/clickhouse/local/config.xml</a>
+</li>
+</ul>
+<p>The full TTL setup is in <a href="../../guide/#step-2-add-a-ttl-file-in-configd">step 2 of the guide</a>.
+Once the server runs again, <a href="https://github.com/Protemir/diskvet">diskvet</a>
+checks all system logs at once. It is a free, read-only script. The TTL file
+it prints already puts this TTL inside <code>&lt;engine&gt;</code>, with the keys of your
+table. Read <code>checks.sql</code> before you run it:</p>
+<pre><code>curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/diskvet.sh
+curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
+sh diskvet.sh report --docker auto &gt; report.md</code></pre>
+<hr>
+<p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.</p>
+    </article>
+    <p class="small muted guide-source"><a href="../">All disk errors and fixes</a> · <a href="https://github.com/Protemir/diskvet/blob/main/docs/fix/clickhouse-system-log-ttl-inside-engine.md">Source on GitHub</a></p>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/Protemir/diskvet">GitHub</a></li>
+      <li><a href="../../guide/">Guide</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/issues/new/choose">Report a problem</a></li>
+      <li><a href="https://github.com/Protemir/diskvet/security/advisories/new">Report a security issue</a></li>
+      <li><a href="mailto:support@diskvet.dev">support@diskvet.dev</a></li>
+    </ul>
+    <p>diskvet is free and open source (Apache-2.0).</p>
+    <p>ClickHouse is a registered trademark of ClickHouse, Inc. diskvet is not affiliated with ClickHouse, Inc.
+      Langfuse, SigNoz and ClickStack are trademarks of their respective owners and are mentioned only to describe compatibility.</p>
+  </div>
+</footer>
+<script src="../../langs.js" defer></script>
+</body>
+</html>
