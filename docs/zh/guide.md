@@ -332,6 +332,14 @@ sh diskvet.sh report --docker auto > report.md
 
 如果是 SigNoz，请使用 `--docker signoz-clickhouse`。
 
+Kubernetes 中的 ClickHouse 同样可以检查，方法是通过 `kubectl exec` 进入它的 Pod：
+
+```sh
+sh diskvet.sh report --k8s auto > report.md
+```
+
+用 `--k8s NAMESPACE/POD` 可以指定 Pod。密码始终留在 Pod 内，diskvet 只需要 Pod 的 `get` 和 `list` 权限以及 `pods/exec`。各个 Helm Chart 用的是哪个 Pod、修复要改在哪里，见英文的 [Kubernetes 说明](https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md)。
+
 它只从 `system.*` 表（`system.tables`、`system.parts`、`system.disks`、`system.detached_parts`、`system.mutations`、`system.part_log` 等）读取元数据，并在 `readonly=2` 和资源限制下运行。它从不读取你的表中的数据行、`system.query_log` 或查询文本，也不会向任何地方发送任何数据。不会有任何操作自动执行：每一条修复命令都由你自己阅读并执行。
 
 每小时检查一次、在磁盘写满之前发出预警的版本即将推出（免费内测将于 2026 年 10 月开始）。

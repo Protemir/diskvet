@@ -430,6 +430,17 @@ sh diskvet.sh report --docker auto > report.md
 
 Para o SigNoz, use `--docker signoz-clickhouse`.
 
+Também funciona com o ClickHouse no Kubernetes, via `kubectl exec` no pod dele:
+
+```sh
+sh diskvet.sh report --k8s auto > report.md
+```
+
+Com `--k8s NAMESPACE/POD` você escolhe o pod. A senha não sai do pod, e o
+diskvet só precisa de `get` e `list` em pods e de `pods/exec`. Qual pod cada
+chart do Helm cria e onde entram as correções:
+[receita para Kubernetes](https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md) (em inglês).
+
 Ele lê apenas metadados das tabelas `system.*` (`system.tables`,
 `system.parts`, `system.disks`, `system.detached_parts`, `system.mutations`,
 `system.part_log` e mais algumas), com `readonly=2` e limites de recursos. Ele

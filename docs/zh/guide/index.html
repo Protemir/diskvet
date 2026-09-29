@@ -270,6 +270,9 @@ GROUP BY database, table, partition_id;</code></pre>
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
 sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 <p>如果是 SigNoz，请使用 <code>--docker signoz-clickhouse</code>。</p>
+<p>Kubernetes 中的 ClickHouse 同样可以检查，方法是通过 <code>kubectl exec</code> 进入它的 Pod：</p>
+<pre><code>sh diskvet.sh report --k8s auto &gt; report.md</code></pre>
+<p>用 <code>--k8s NAMESPACE/POD</code> 可以指定 Pod。密码始终留在 Pod 内，diskvet 只需要 Pod 的 <code>get</code> 和 <code>list</code> 权限以及 <code>pods/exec</code>。各个 Helm Chart 用的是哪个 Pod、修复要改在哪里，见英文的 <a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md">Kubernetes 说明</a>。</p>
 <p>它只从 <code>system.*</code> 表（<code>system.tables</code>、<code>system.parts</code>、<code>system.disks</code>、<code>system.detached_parts</code>、<code>system.mutations</code>、<code>system.part_log</code> 等）读取元数据，并在 <code>readonly=2</code> 和资源限制下运行。它从不读取你的表中的数据行、<code>system.query_log</code> 或查询文本，也不会向任何地方发送任何数据。不会有任何操作自动执行：每一条修复命令都由你自己阅读并执行。</p>
 <p>每小时检查一次、在磁盘写满之前发出预警的版本即将推出（免费内测将于 2026 年 10 月开始）。</p>
 <h2 id="参考资料">参考资料</h2>

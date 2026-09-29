@@ -270,6 +270,9 @@ GROUP BY database, table, partition_id;</code></pre>
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
 sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 <p>SigNoz の場合は <code>--docker signoz-clickhouse</code> を指定します。</p>
+<p>Kubernetes 上の ClickHouse にも対応しています。<code>kubectl exec</code> で Pod の中からチェックします。</p>
+<pre><code>sh diskvet.sh report --k8s auto &gt; report.md</code></pre>
+<p><code>--k8s NAMESPACE/POD</code> で Pod を指定できます。パスワードは Pod の外に出ません。必要な権限は、Pod に対する <code>get</code> と <code>list</code>、そして <code>pods/exec</code> だけです。Helm チャートごとにどの Pod が使われ、修正をどこに入れるかは、<a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md">Kubernetes のレシピ</a>（英語）を参照してください。</p>
 <p>diskvet が読み取るのは、<code>system.*</code> テーブル（<code>system.tables</code>、<code>system.parts</code>、<code>system.disks</code>、<code>system.detached_parts</code>、<code>system.mutations</code>、<code>system.part_log</code> など）のメタデータだけで、<code>readonly=2</code> とリソース制限を付けて実行します。自分のテーブルの行、<code>system.query_log</code>、クエリのテキストは一切読み取らず、どこにもデータを送信しません。修正が自動で実行されることはなく、各修正の内容を確認したうえで自分で実行します。</p>
 <p>1 時間ごとにチェックし、ディスクがいっぱいになる前に警告するバージョンを準備中です（2026 年 10 月に無料ベータを開始予定）。</p>
 <h2 id="参考資料">参考資料</h2>

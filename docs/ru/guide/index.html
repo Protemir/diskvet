@@ -364,6 +364,12 @@ GROUP BY database, table, partition_id;</code></pre>
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
 sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 <p>Для SigNoz используйте <code>--docker signoz-clickhouse</code>.</p>
+<p>ClickHouse в Kubernetes тоже можно проверить — через <code>kubectl exec</code> в его под:</p>
+<pre><code>sh diskvet.sh report --k8s auto &gt; report.md</code></pre>
+<p><code>--k8s NAMESPACE/POD</code> выбирает конкретный под. Пароль не покидает под, а
+diskvet нужны только <code>get</code> и <code>list</code> для подов и <code>pods/exec</code>. Какой под создаёт
+каждый Helm-чарт и куда вносить исправления, написано в
+<a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md">рецепте для Kubernetes</a> (по-английски).</p>
 <p>Скрипт читает только метаданные из таблиц <code>system.*</code> (<code>system.tables</code>,
 <code>system.parts</code>, <code>system.disks</code>, <code>system.detached_parts</code>, <code>system.mutations</code>,
 <code>system.part_log</code> и ещё нескольких), с <code>readonly=2</code> и ограничениями ресурсов.

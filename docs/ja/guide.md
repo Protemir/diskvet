@@ -332,6 +332,14 @@ sh diskvet.sh report --docker auto > report.md
 
 SigNoz の場合は `--docker signoz-clickhouse` を指定します。
 
+Kubernetes 上の ClickHouse にも対応しています。`kubectl exec` で Pod の中からチェックします。
+
+```sh
+sh diskvet.sh report --k8s auto > report.md
+```
+
+`--k8s NAMESPACE/POD` で Pod を指定できます。パスワードは Pod の外に出ません。必要な権限は、Pod に対する `get` と `list`、そして `pods/exec` だけです。Helm チャートごとにどの Pod が使われ、修正をどこに入れるかは、[Kubernetes のレシピ](https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md)（英語）を参照してください。
+
 diskvet が読み取るのは、`system.*` テーブル（`system.tables`、`system.parts`、`system.disks`、`system.detached_parts`、`system.mutations`、`system.part_log` など）のメタデータだけで、`readonly=2` とリソース制限を付けて実行します。自分のテーブルの行、`system.query_log`、クエリのテキストは一切読み取らず、どこにもデータを送信しません。修正が自動で実行されることはなく、各修正の内容を確認したうえで自分で実行します。
 
 1 時間ごとにチェックし、ディスクがいっぱいになる前に警告するバージョンを準備中です（2026 年 10 月に無料ベータを開始予定）。

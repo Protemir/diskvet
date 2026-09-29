@@ -351,6 +351,12 @@ you run it):</p>
 curl -fsSLO https://github.com/Protemir/diskvet/releases/latest/download/checks.sql
 sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 <p>For SigNoz, use <code>--docker signoz-clickhouse</code>.</p>
+<p>ClickHouse in Kubernetes works too, through <code>kubectl exec</code> into its pod:</p>
+<pre><code>sh diskvet.sh report --k8s auto &gt; report.md</code></pre>
+<p><code>--k8s NAMESPACE/POD</code> picks the pod. The password stays inside the pod, and
+diskvet needs only <code>get</code> and <code>list</code> on pods and <code>pods/exec</code>. Which pod each
+Helm chart runs and where its fixes go:
+<a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md">Kubernetes recipe</a>.</p>
 <p>It reads only metadata from <code>system.*</code> tables (<code>system.tables</code>,
 <code>system.parts</code>, <code>system.disks</code>, <code>system.detached_parts</code>, <code>system.mutations</code>,
 <code>system.part_log</code> and a few more), with <code>readonly=2</code> and resource limits. It
