@@ -342,18 +342,25 @@ with SigNoz's installation, whether the operator 0.21.2 restarts the pod for
 a changed file, and the image version.
 
 Add to the values you deploy SigNoz with. The file name must sort after the
-operator's `01-clickhouse-*` files:
+operator's `01-clickhouse-*` files. List only logs the chart doesn't define,
+such as `text_log` (on in the stock config since 24.8):
 
 ```yaml
 clickhouse:
   files:
     config.d/zz-diskvet-ttl.xml: |
       <clickhouse>
-          <trace_log>
+          <text_log>
               <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
-          </trace_log>
+          </text_log>
       </clickhouse>
 ```
+
+**Tested** outside Kubernetes, on the stock images 25.5.11 and 25.12.11
+with a copy of the chart's `01-clickhouse-05-trace_log.xml` (template values
+filled in) in `config.d/`: this file gives `text_log` its TTL, and the same
+file with `<trace_log>` in place of `<text_log>` stops ClickHouse with
+Code 36.
 
 Logs that already have a TTL from the chart are changed with
 `clickhouse.clickhouseOperator.<logName>.ttl` (days; the log name in
