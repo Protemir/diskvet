@@ -107,7 +107,7 @@ so lines older than that are gone.</p>
 <p>Save the <code>DROP</code> generator from
 <a href="../../guide/#step-4-drop-the-old-trace_log_0-copies">step 4 of the guide</a> as
 <code>drop-gen.sql</code>:</p>
-<pre><code>SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
+<pre><code>SELECT 'DROP TABLE system.' || name || ' SYNC SETTINGS max_table_size_to_drop = 0;'
 FROM system.tables
 WHERE database = 'system' AND match(name, '_log_[0-9]+$');</code></pre>
 <p>Write the statements to a file, read it, then run it:</p>
@@ -126,7 +126,7 @@ mean. Then run <code>copies.sql</code> again: it should return nothing.</p>
 <p>Traps:</p>
 <ul>
 <li>
-<p><strong>The space comes back 8 minutes later.</strong> The <code>system</code> database uses the Atomic engine. A plain <code>DROP</code> only marks the table as dropped, and the data is deleted after <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec"><code>database_atomic_delay_before_drop_table_sec</code></a> (480 s). <code>SELECT table FROM system.dropped_tables</code> lists the tables still waiting. To free the space at once, put <code>SYNC</code> before <code>SETTINGS</code>: <code>DROP TABLE system.trace_log_0 SYNC SETTINGS max_table_size_to_drop = 0;</code>. After <code>SETTINGS</code>, <code>SYNC</code> is a syntax error (Code 62). On a full disk, use the <code>SYNC</code> form (<a href="../clickhouse-not-enough-space/">Code 243 page</a>).</p>
+<p><strong>Keep <code>SYNC</code>.</strong> The <code>system</code> database uses the Atomic engine. A <code>DROP</code> without <code>SYNC</code> only marks the table as dropped, and the data is deleted after <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec"><code>database_atomic_delay_before_drop_table_sec</code></a> (480 s), 8 minutes later. <code>SELECT table FROM system.dropped_tables</code> lists the tables still waiting. <code>SYNC</code> deletes the data at once. It goes before <code>SETTINGS</code>: after <code>SETTINGS</code>, <code>SYNC</code> is a syntax error (Code 62). On a full disk, that is what gets the space back now (<a href="../clickhouse-not-enough-space/">Code 243 page</a>).</p>
 </li>
 <li>
 <p><strong>Big copies need the setting.</strong> A copy over the default limit of 50 GB fails without <code>SETTINGS max_table_size_to_drop = 0</code>, with Code 359 (<a href="../clickhouse-max-table-size-to-drop/">Code 359 page</a>). The query setting needs ClickHouse 23.12 or newer (<a href="https://github.com/ClickHouse/ClickHouse/pull/57452">PR #57452</a>).</p>

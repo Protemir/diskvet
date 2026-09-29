@@ -146,8 +146,9 @@ do it; Langfuse doesn't read this table
 doesn't delete a table that already exists: it keeps its old rows, and
 ClickHouse no longer writes to it. Drop it in the write-access client from
 <a href="../../guide/#2-how-do-i-free-the-disk-space-right-now">section 2 of the guide</a>:</p>
-<pre><code>DROP TABLE system.opentelemetry_span_log;</code></pre>
-<p><code>DROP</code> can't be undone. Over 50 GB, add <code>SETTINGS max_table_size_to_drop = 0</code>
+<pre><code>DROP TABLE system.opentelemetry_span_log SYNC;</code></pre>
+<p><code>DROP</code> can't be undone. <code>SYNC</code> gives the space back at once, not 8 minutes
+later. Over 50 GB, add <code>SETTINGS max_table_size_to_drop = 0</code> after <code>SYNC</code>
 (<a href="../../guide/#truncate-fails-with-code-359-tables-over-50-gb">Code 359</a>).</p>
 <h3 id="fix-3-take-the-section-out">Fix 3: take the section out</h3>
 <p>Delete the <code>opentelemetry_span_log</code> section from your file. The server starts,
@@ -168,7 +169,7 @@ WHERE database = 'system' AND name LIKE 'opentelemetry_span_log%';</code></pre>
 <code>opentelemetry_span_log</code>, and an empty <code>ttl</code> on <code>opentelemetry_span_log_0</code>.
 Drop each copy the query lists (there is none if the table didn't exist
 before). <code>DROP</code> can't be undone:</p>
-<pre><code>DROP TABLE system.opentelemetry_span_log_0;</code></pre>
+<pre><code>DROP TABLE system.opentelemetry_span_log_0 SYNC;</code></pre>
 <p>The other logs your file gave a TTL get a copy too, such as <code>query_log_0</code>.
 <a href="../../guide/#step-4-drop-the-old-trace_log_0-copies">Step 4 of the guide</a>
 writes the <code>DROP</code> for all these copies.</p>
@@ -227,6 +228,8 @@ and so was the Kubernetes part.</p>
 <li>The five checks in <code>SystemLog.cpp</code>: <a href="https://github.com/ClickHouse/ClickHouse/blob/37b5e007f5d85cd264ef7fb22dd5b5b935580d2f/src/Interpreters/SystemLog.cpp#L173-L194">https://github.com/ClickHouse/ClickHouse/blob/37b5e007f5d85cd264ef7fb22dd5b5b935580d2f/src/Interpreters/SystemLog.cpp#L173-L194</a>
 </li>
 <li>ClickHouse #88366, TTL for <code>opentelemetry_span_log</code>: <a href="https://github.com/ClickHouse/ClickHouse/issues/88366">https://github.com/ClickHouse/ClickHouse/issues/88366</a>
+</li>
+<li>DROP and <code>SYNC</code>, the drop delay: <a href="https://clickhouse.com/docs/reference/statements/drop">https://clickhouse.com/docs/reference/statements/drop</a>, <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec</a>
 </li>
 <li>Langfuse scaling docs (<code>remove="1"</code>, TTL inside <code>&lt;engine&gt;</code>): <a href="https://langfuse.com/self-hosting/configuration/scaling">https://langfuse.com/self-hosting/configuration/scaling</a>
 </li>

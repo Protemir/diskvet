@@ -127,10 +127,11 @@ ClickHouse no longer writes to it. Drop it in the write-access client from
 [section 2 of the guide](../guide.md#2-how-do-i-free-the-disk-space-right-now):
 
 ```sql
-DROP TABLE system.opentelemetry_span_log;
+DROP TABLE system.opentelemetry_span_log SYNC;
 ```
 
-`DROP` can't be undone. Over 50 GB, add `SETTINGS max_table_size_to_drop = 0`
+`DROP` can't be undone. `SYNC` gives the space back at once, not 8 minutes
+later. Over 50 GB, add `SETTINGS max_table_size_to_drop = 0` after `SYNC`
 ([Code 359](../guide.md#truncate-fails-with-code-359-tables-over-50-gb)).
 
 ### Fix 3: take the section out
@@ -161,7 +162,7 @@ Drop each copy the query lists (there is none if the table didn't exist
 before). `DROP` can't be undone:
 
 ```sql
-DROP TABLE system.opentelemetry_span_log_0;
+DROP TABLE system.opentelemetry_span_log_0 SYNC;
 ```
 
 The other logs your file gave a TTL get a copy too, such as `query_log_0`.
@@ -227,6 +228,7 @@ and so was the Kubernetes part.
 - Default `config.xml` (`opentelemetry_span_log` with `<engine>`, console logging only with a TTY): https://github.com/ClickHouse/ClickHouse/blob/master/programs/server/config.xml
 - The five checks in `SystemLog.cpp`: https://github.com/ClickHouse/ClickHouse/blob/37b5e007f5d85cd264ef7fb22dd5b5b935580d2f/src/Interpreters/SystemLog.cpp#L173-L194
 - ClickHouse #88366, TTL for `opentelemetry_span_log`: https://github.com/ClickHouse/ClickHouse/issues/88366
+- DROP and `SYNC`, the drop delay: https://clickhouse.com/docs/reference/statements/drop, https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec
 - Langfuse scaling docs (`remove="1"`, TTL inside `<engine>`): https://langfuse.com/self-hosting/configuration/scaling
 - Langfuse #13123 (table sizes, tables Langfuse reads): https://github.com/langfuse/langfuse/issues/13123
 - SigNoz v0.129.0 ClickHouse `config.xml`: https://github.com/SigNoz/signoz/blob/v0.129.0/deploy/common/clickhouse/config.xml

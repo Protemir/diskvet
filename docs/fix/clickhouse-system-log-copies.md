@@ -77,7 +77,7 @@ Save the `DROP` generator from
 `drop-gen.sql`:
 
 ```sql
-SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
+SELECT 'DROP TABLE system.' || name || ' SYNC SETTINGS max_table_size_to_drop = 0;'
 FROM system.tables
 WHERE database = 'system' AND match(name, '_log_[0-9]+$');
 ```
@@ -102,7 +102,7 @@ mean. Then run `copies.sql` again: it should return nothing.
 
 Traps:
 
-- **The space comes back 8 minutes later.** The `system` database uses the Atomic engine. A plain `DROP` only marks the table as dropped, and the data is deleted after [`database_atomic_delay_before_drop_table_sec`](https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec) (480 s). `SELECT table FROM system.dropped_tables` lists the tables still waiting. To free the space at once, put `SYNC` before `SETTINGS`: `DROP TABLE system.trace_log_0 SYNC SETTINGS max_table_size_to_drop = 0;`. After `SETTINGS`, `SYNC` is a syntax error (Code 62). On a full disk, use the `SYNC` form ([Code 243 page](clickhouse-not-enough-space.md)).
+- **Keep `SYNC`.** The `system` database uses the Atomic engine. A `DROP` without `SYNC` only marks the table as dropped, and the data is deleted after [`database_atomic_delay_before_drop_table_sec`](https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec) (480 s), 8 minutes later. `SELECT table FROM system.dropped_tables` lists the tables still waiting. `SYNC` deletes the data at once. It goes before `SETTINGS`: after `SETTINGS`, `SYNC` is a syntax error (Code 62). On a full disk, that is what gets the space back now ([Code 243 page](clickhouse-not-enough-space.md)).
 - **Big copies need the setting.** A copy over the default limit of 50 GB fails without `SETTINGS max_table_size_to_drop = 0`, with Code 359 ([Code 359 page](clickhouse-max-table-size-to-drop.md)). The query setting needs ClickHouse 23.12 or newer ([PR #57452](https://github.com/ClickHouse/ClickHouse/pull/57452)).
 - **On 26.7 and newer, a new copy without a TTL is read-only.** When 26.7 or newer makes a copy of a plain `MergeTree` log that has no TTL, it sets `table_readonly` on it ([PR #95079](https://github.com/ClickHouse/ClickHouse/pull/95079)). On 26.9 the copy's `engine_full` then ends with `table_readonly = true`. Copies with a TTL, `ReplicatedMergeTree` copies and copies made by an older version stay writable. On a read-only copy, the fixes suggested in [snuba #7311](https://github.com/getsentry/snuba/issues/7311), `ALTER TABLE system.trace_log_3 MODIFY TTL ...` or `TRUNCATE`, fail with the error below (26.9.1.1629). `DROP` still works. To keep the table instead, `ALTER TABLE system.query_log_0 MODIFY SETTING table_readonly = 0` turns this off ([docs](https://clickhouse.com/docs/reference/settings/merge-tree-settings/table#table_readonly)).
 

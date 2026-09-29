@@ -233,10 +233,15 @@ tail -n 20 clickhouse-server.err.log</code></pre>
 <a href="https://github.com/getsentry/snuba/issues/7311">Sentry snuba #7311</a>).</p>
 <p>This query writes the <code>DROP</code> statements for you. Read them, then paste them
 into the client:</p>
-<pre><code>SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
+<pre><code>SELECT 'DROP TABLE system.' || name || ' SYNC SETTINGS max_table_size_to_drop = 0;'
 FROM system.tables
 WHERE database = 'system' AND match(name, '_log_[0-9]+$');</code></pre>
 <p>ClickHouse no longer writes to these tables. <code>DROP</code> can't be undone.</p>
+<p><code>SYNC</code> gives the space back at once. Without it, the <code>system</code> database
+(Atomic) keeps the data on disk for 8 minutes
+(<a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec"><code>database_atomic_delay_before_drop_table_sec</code></a> = 480 s).
+<code>SYNC</code> goes before <code>SETTINGS</code>; after it, the statement fails with Code 62
+(<code>SYNTAX_ERROR</code>).</p>
 <h3 id="step-5-check-the-result">Step 5: check the result</h3>
 <p>Run the step 1 query again. Every big log should show a TTL, and no <code>_N</code> names
 should be left.</p>
@@ -391,6 +396,8 @@ it gets built if enough people ask, and it will be free.</p>
 <li>The flag is removed after use (<code>checkCanBeDropped</code>): <a href="https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp">https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp</a>
 </li>
 <li>TRUNCATE: <a href="https://clickhouse.com/docs/reference/statements/truncate">https://clickhouse.com/docs/reference/statements/truncate</a>
+</li>
+<li>DROP TABLE ... SYNC, <code>database_atomic_delay_before_drop_table_sec</code> (480 s): <a href="https://clickhouse.com/docs/reference/statements/drop">https://clickhouse.com/docs/reference/statements/drop</a>, <a href="https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec">https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec</a>
 </li>
 <li>
 <code>opentelemetry_span_log</code> TTL error: <a href="https://github.com/ClickHouse/ClickHouse/issues/88366">https://github.com/ClickHouse/ClickHouse/issues/88366</a>

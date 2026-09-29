@@ -234,12 +234,18 @@ This query writes the `DROP` statements for you. Read them, then paste them
 into the client:
 
 ```sql
-SELECT 'DROP TABLE system.' || name || ' SETTINGS max_table_size_to_drop = 0;'
+SELECT 'DROP TABLE system.' || name || ' SYNC SETTINGS max_table_size_to_drop = 0;'
 FROM system.tables
 WHERE database = 'system' AND match(name, '_log_[0-9]+$');
 ```
 
 ClickHouse no longer writes to these tables. `DROP` can't be undone.
+
+`SYNC` gives the space back at once. Without it, the `system` database
+(Atomic) keeps the data on disk for 8 minutes
+([`database_atomic_delay_before_drop_table_sec`](https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec) = 480 s).
+`SYNC` goes before `SETTINGS`; after it, the statement fails with Code 62
+(`SYNTAX_ERROR`).
 
 ### Step 5: check the result
 
@@ -449,6 +455,7 @@ ClickHouse documentation and source:
 - Query-level override since 23.12: https://github.com/ClickHouse/ClickHouse/pull/57452
 - The flag is removed after use (`checkCanBeDropped`): https://github.com/ClickHouse/ClickHouse/blob/master/src/Interpreters/Context.cpp
 - TRUNCATE: https://clickhouse.com/docs/reference/statements/truncate
+- DROP TABLE ... SYNC, `database_atomic_delay_before_drop_table_sec` (480 s): https://clickhouse.com/docs/reference/statements/drop, https://clickhouse.com/docs/reference/settings/server-settings/settings/other#database_atomic_delay_before_drop_table_sec
 - `opentelemetry_span_log` TTL error: https://github.com/ClickHouse/ClickHouse/issues/88366
 - MergeTree settings: `merge_with_ttl_timeout` (14400 s) https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout, `old_parts_lifetime` (480 s) https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime, `max_bytes_to_merge_at_max_space_in_pool` (150 GiB) https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool
 - Server log rotation (`logger`: `level`, `size`, `count`): https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger
