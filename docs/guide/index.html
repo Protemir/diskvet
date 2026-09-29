@@ -323,9 +323,11 @@ freed ~360 GiB per replica in ~17 minutes.</p>
 <code>patch-</code> partitions
 (<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56"><code>helpers.ts</code></a>),
 and a <code>DELETE</code> writes those only with <code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update</code>
-on a table with a <code>_block_number</code> column. With the default <code>alter_update</code>
+on a table with the <code>_block_number</code> and <code>_block_offset</code> columns
+(<a href="https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements">requirements</a>).
+With the default <code>alter_update</code>
 (<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137"><code>env.ts</code></a>),
-and on v3's tables, which have no such column, it finds nothing: run
+and on v3's tables, which have neither column, it finds nothing: run
 <code>APPLY DELETED MASK</code> yourself.</p>
 <h3 id="are-old-parts-stuck-on-disk-inactive-and-detached-parts">Are old parts stuck on disk? (inactive and detached parts)</h3>
 <pre><code>SELECT database, table, count() AS parts,
@@ -423,6 +425,7 @@ it gets built if enough people ask, and it will be free.</p>
 </li>
 <li>Lightweight DELETE: <a href="https://clickhouse.com/docs/reference/statements/delete">https://clickhouse.com/docs/reference/statements/delete</a>
 </li>
+<li>A <code>lightweight_update</code> DELETE writes <code>patch-</code> parts only on a table with the <code>_block_number</code> and <code>_block_offset</code> columns: <a href="https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements">https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements</a> (tested on 25.12 and 26.9: with <code>_block_number</code> alone it falls back to a mutation)</li>
 <li>APPLY DELETED MASK: <a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask</a>
 </li>
 <li>system.parts: <a href="https://clickhouse.com/docs/reference/system-tables/parts">https://clickhouse.com/docs/reference/system-tables/parts</a>

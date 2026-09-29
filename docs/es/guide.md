@@ -377,9 +377,11 @@ desactivada por defecto: `LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`
 selecciona las particiones `patch-`
 ([`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)),
 y un `DELETE` solo las escribe con `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update`
-en una tabla con una columna `_block_number`. Con el valor por defecto, `alter_update`
+en una tabla con las columnas `_block_number` y `_block_offset`
+([requisitos](https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements)).
+Con el valor por defecto, `alter_update`
 ([`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137)),
-y en las tablas de v3, que no tienen esa columna, no encuentra nada: ejecuta
+y en las tablas de v3, que no tienen ninguna de las dos, no encuentra nada: ejecuta
 `APPLY DELETED MASK` tú mismo.
 
 ### ¿Hay partes antiguas atascadas en el disco? (partes inactivas y separadas)
@@ -494,6 +496,7 @@ Documentación y código fuente de ClickHouse:
 - Ajustes de MergeTree: `merge_with_ttl_timeout` (14400 s) https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout, `old_parts_lifetime` (480 s) https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime, `max_bytes_to_merge_at_max_space_in_pool` (150 GiB) https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool
 - Rotación del log del servidor (`logger`: `level`, `size`, `count`): https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger
 - Eliminación ligera (lightweight DELETE): https://clickhouse.com/docs/reference/statements/delete
+- Un DELETE con `lightweight_update` solo escribe partes `patch-` en una tabla con las columnas `_block_number` y `_block_offset`: https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements (probado en 25.12 y 26.9: con `_block_number` solo, recurre a una mutación)
 - APPLY DELETED MASK: https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask
 - system.parts: https://clickhouse.com/docs/reference/system-tables/parts
 - system.detached_parts: https://clickhouse.com/docs/reference/system-tables/detached_parts

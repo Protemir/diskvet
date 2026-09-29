@@ -277,7 +277,7 @@ ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
 
 **주의:** 이 작업은 비용이 큰 뮤테이션(heavyweight mutation)입니다. 영향을 받는 파트를 다시 쓰기 때문에 새 사본이 들어갈 여유 공간이 필요하고, 디스크에 부하를 줍니다. 사용량이 적은 시간대에 실행하고, `SELECT * FROM system.mutations WHERE NOT is_done` 쿼리로 진행 상황을 지켜보십시오. #13969에서는 약 17분 만에 레플리카당 약 360 GiB가 확보되었습니다.
 
-v3.179.0부터 Langfuse worker에는 클리너가 있으며, 기본값은 꺼져 있습니다. `LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`로 켭니다([PR #14035](https://github.com/langfuse/langfuse/pull/14035)). 하지만 이 클리너는 `patch-` 파티션만 대상으로 삼으며([`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)), `DELETE`가 이런 파티션을 만드는 것은 `_block_number` 컬럼이 있는 테이블에서 `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update`를 설정했을 때뿐입니다. 기본 삭제 모드인 `alter_update`([`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137))에서는, 그리고 이런 컬럼이 없는 v3의 테이블에서는 클리너가 아무것도 찾지 못합니다. `APPLY DELETED MASK`는 직접 실행하십시오.
+v3.179.0부터 Langfuse worker에는 클리너가 있으며, 기본값은 꺼져 있습니다. `LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`로 켭니다([PR #14035](https://github.com/langfuse/langfuse/pull/14035)). 하지만 이 클리너는 `patch-` 파티션만 대상으로 삼으며([`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)), `DELETE`가 이런 파티션을 만드는 것은 `_block_number`와 `_block_offset` 컬럼이 있는 테이블([요구 사항](https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements))에서 `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update`를 설정했을 때뿐입니다. 기본 삭제 모드인 `alter_update`([`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137))에서는, 그리고 이런 컬럼이 없는 v3의 테이블에서는 클리너가 아무것도 찾지 못합니다. `APPLY DELETED MASK`는 직접 실행하십시오.
 
 ### 오래된 파트가 디스크에 남아 있는가? (비활성 파트와 분리된 파트)
 
@@ -362,6 +362,7 @@ ClickHouse 문서와 소스 코드:
 - MergeTree 설정: `merge_with_ttl_timeout`(14400초) https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout, `old_parts_lifetime`(480초) https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime, `max_bytes_to_merge_at_max_space_in_pool`(150 GiB) https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool
 - 서버 로그 로테이션(`logger`: `level`, `size`, `count`): https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger
 - 경량 DELETE(lightweight DELETE): https://clickhouse.com/docs/reference/statements/delete
+- `lightweight_update` 모드의 DELETE는 `_block_number`와 `_block_offset` 컬럼이 있는 테이블에서만 `patch-` 파트를 씁니다: https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements (25.12와 26.9에서 확인: `_block_number`만 있으면 뮤테이션으로 처리됨)
 - APPLY DELETED MASK: https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask
 - system.parts: https://clickhouse.com/docs/reference/system-tables/parts
 - system.detached_parts: https://clickhouse.com/docs/reference/system-tables/detached_parts

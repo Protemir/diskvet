@@ -238,7 +238,7 @@ ORDER BY sum(bytes_on_disk) DESC;</code></pre>
 <p>그런 다음 파티션 하나씩 삭제 마스크를 적용합니다(<a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">APPLY DELETED MASK</a>).</p>
 <pre><code>ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';</code></pre>
 <p><strong>주의:</strong> 이 작업은 비용이 큰 뮤테이션(heavyweight mutation)입니다. 영향을 받는 파트를 다시 쓰기 때문에 새 사본이 들어갈 여유 공간이 필요하고, 디스크에 부하를 줍니다. 사용량이 적은 시간대에 실행하고, <code>SELECT * FROM system.mutations WHERE NOT is_done</code> 쿼리로 진행 상황을 지켜보십시오. #13969에서는 약 17분 만에 레플리카당 약 360 GiB가 확보되었습니다.</p>
-<p>v3.179.0부터 Langfuse worker에는 클리너가 있으며, 기본값은 꺼져 있습니다. <code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code>로 켭니다(<a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>). 하지만 이 클리너는 <code>patch-</code> 파티션만 대상으로 삼으며(<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56"><code>helpers.ts</code></a>), <code>DELETE</code>가 이런 파티션을 만드는 것은 <code>_block_number</code> 컬럼이 있는 테이블에서 <code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update</code>를 설정했을 때뿐입니다. 기본 삭제 모드인 <code>alter_update</code>(<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137"><code>env.ts</code></a>)에서는, 그리고 이런 컬럼이 없는 v3의 테이블에서는 클리너가 아무것도 찾지 못합니다. <code>APPLY DELETED MASK</code>는 직접 실행하십시오.</p>
+<p>v3.179.0부터 Langfuse worker에는 클리너가 있으며, 기본값은 꺼져 있습니다. <code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code>로 켭니다(<a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>). 하지만 이 클리너는 <code>patch-</code> 파티션만 대상으로 삼으며(<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56"><code>helpers.ts</code></a>), <code>DELETE</code>가 이런 파티션을 만드는 것은 <code>_block_number</code>와 <code>_block_offset</code> 컬럼이 있는 테이블(<a href="https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements">요구 사항</a>)에서 <code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update</code>를 설정했을 때뿐입니다. 기본 삭제 모드인 <code>alter_update</code>(<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137"><code>env.ts</code></a>)에서는, 그리고 이런 컬럼이 없는 v3의 테이블에서는 클리너가 아무것도 찾지 못합니다. <code>APPLY DELETED MASK</code>는 직접 실행하십시오.</p>
 <h3 id="오래된-파트가-디스크에-남아-있는가-비활성-파트와-분리된-파트">오래된 파트가 디스크에 남아 있는가? (비활성 파트와 분리된 파트)</h3>
 <pre><code>SELECT database, table, count() AS parts,
        formatReadableSize(sum(bytes_on_disk)) AS size,
@@ -311,6 +311,8 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 </li>
 <li>경량 DELETE(lightweight DELETE): <a href="https://clickhouse.com/docs/reference/statements/delete">https://clickhouse.com/docs/reference/statements/delete</a>
 </li>
+<li>
+<code>lightweight_update</code> 모드의 DELETE는 <code>_block_number</code>와 <code>_block_offset</code> 컬럼이 있는 테이블에서만 <code>patch-</code> 파트를 씁니다: <a href="https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements">https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements</a> (25.12와 26.9에서 확인: <code>_block_number</code>만 있으면 뮤테이션으로 처리됨)</li>
 <li>APPLY DELETED MASK: <a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask</a>
 </li>
 <li>system.parts: <a href="https://clickhouse.com/docs/reference/system-tables/parts">https://clickhouse.com/docs/reference/system-tables/parts</a>

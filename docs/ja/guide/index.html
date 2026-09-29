@@ -238,7 +238,7 @@ ORDER BY sum(bytes_on_disk) DESC;</code></pre>
 <p>次に、パーティションを 1 つずつ指定して削除マスクを適用します（<a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">APPLY DELETED MASK</a>）。</p>
 <pre><code>ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';</code></pre>
 <p><strong>注意</strong>：これはヘビーウェイトなミューテーション（mutation）です。対象のパーツを書き直すため、新しいコピーを書き込むための空き容量が必要になり、ディスクにも負荷がかかります。ピーク時間帯を避けて実行し、<code>SELECT * FROM system.mutations WHERE NOT is_done</code> で進行状況を確認してください。#13969 では、約 17 分でレプリカ 1 台あたり約 360 GiB が空きました。</p>
-<p>v3.179.0 以降の Langfuse worker にはクリーナーがあり、<code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code> で有効になります（デフォルトは無効。<a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>）。ただし、クリーナーが対象にするのは名前が <code>patch-</code> で始まるパーティションだけです（<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56"><code>helpers.ts</code></a>）。<code>DELETE</code> がこうしたパーティションを書き込むのは、<code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update</code> を設定し、<code>_block_number</code> 列のあるテーブルから削除した場合に限られます。デフォルトの <code>alter_update</code>（<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137"><code>env.ts</code></a>）のままの場合も、この列がない v3 のテーブルの場合も、クリーナーは何も見つけません。<code>APPLY DELETED MASK</code> は自分で実行してください。</p>
+<p>v3.179.0 以降の Langfuse worker にはクリーナーがあり、<code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code> で有効になります（デフォルトは無効。<a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>）。ただし、クリーナーが対象にするのは名前が <code>patch-</code> で始まるパーティションだけです（<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56"><code>helpers.ts</code></a>）。<code>DELETE</code> がこうしたパーティションを書き込むのは、<code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update</code> を設定し、<code>_block_number</code> 列と <code>_block_offset</code> 列のあるテーブル（<a href="https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements">要件</a>）から削除した場合に限られます。デフォルトの <code>alter_update</code>（<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137"><code>env.ts</code></a>）のままの場合も、これらの列がない v3 のテーブルの場合も、クリーナーは何も見つけません。<code>APPLY DELETED MASK</code> は自分で実行してください。</p>
 <h3 id="古いパーツがディスクに残っていないか非アクティブなパーツとデタッチされたパーツ">古いパーツがディスクに残っていないか（非アクティブなパーツとデタッチされたパーツ）</h3>
 <pre><code>SELECT database, table, count() AS parts,
        formatReadableSize(sum(bytes_on_disk)) AS size,
@@ -311,6 +311,8 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 </li>
 <li>論理削除（lightweight DELETE）：<a href="https://clickhouse.com/docs/reference/statements/delete">https://clickhouse.com/docs/reference/statements/delete</a>
 </li>
+<li>
+<code>lightweight_update</code> の DELETE が <code>patch-</code> パーツを書き込むのは、<code>_block_number</code> 列と <code>_block_offset</code> 列のあるテーブルだけ：<a href="https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements%EF%BC%8825.12">https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements（25.12</a> と 26.9 で確認。<code>_block_number</code> 列だけではミューテーションになる）</li>
 <li>APPLY DELETED MASK：<a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask</a>
 </li>
 <li>system.parts：<a href="https://clickhouse.com/docs/reference/system-tables/parts">https://clickhouse.com/docs/reference/system-tables/parts</a>

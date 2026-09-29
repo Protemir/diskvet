@@ -372,9 +372,11 @@ ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
 ([`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)),
 а `DELETE` записывает такие партиции, только если задано
 `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update` и у таблицы есть
-столбец `_block_number`. Со значением по умолчанию `alter_update`
+столбцы `_block_number` и `_block_offset`
+([требования](https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements)).
+Со значением по умолчанию `alter_update`
 ([`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137)),
-а также на таблицах v3, где такого столбца нет, она ничего не находит:
+а также на таблицах v3, где этих столбцов нет, она ничего не находит:
 выполните `APPLY DELETED MASK` сами.
 
 ### Старые куски застряли на диске? (неактивные и отсоединённые куски)
@@ -487,6 +489,7 @@ diskvet нужны только `get` и `list` для подов и `pods/exec`
 - Настройки MergeTree: `merge_with_ttl_timeout` (14400 с) https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout, `old_parts_lifetime` (480 с) https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime, `max_bytes_to_merge_at_max_space_in_pool` (150 ГиБ) https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool
 - Ротация логов сервера (`logger`: `level`, `size`, `count`): https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger
 - Облегчённый DELETE: https://clickhouse.com/docs/reference/statements/delete
+- DELETE в режиме `lightweight_update` пишет куски `patch-`, только если у таблицы есть столбцы `_block_number` и `_block_offset`: https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements (проверено на 25.12 и 26.9: с одним `_block_number` он откатывается к мутации)
 - APPLY DELETED MASK: https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask
 - system.parts: https://clickhouse.com/docs/reference/system-tables/parts
 - system.detached_parts: https://clickhouse.com/docs/reference/system-tables/detached_parts
