@@ -431,8 +431,9 @@ It reads only metadata from `system.*` tables (`system.tables`,
 never reads rows of your tables, `system.query_log` or query texts, and sends
 nothing anywhere. Nothing runs by itself: you read each fix and run it.
 
-An hourly version that warns before the disk fills is coming (a free beta opens in
-October 2026).
+An hourly version that emails you before the disk fills is planned. If you'd
+use it, say so in [Early access](https://github.com/Protemir/diskvet/discussions/1):
+it gets built if enough people ask, and it will be free.
 
 ## Sources
 

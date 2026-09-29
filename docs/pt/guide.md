@@ -448,8 +448,10 @@ nunca lê as linhas das suas tabelas, nem o `system.query_log`, nem o texto das
 consultas, e não envia nada para lugar nenhum. Nada é executado sozinho: você lê cada
 correção e a executa.
 
-Uma versão que roda a cada hora e avisa antes de o disco encher está a caminho
-(um beta gratuito será aberto em outubro de 2026).
+Está planejada uma versão que roda a cada hora e manda um e-mail antes de o disco
+encher. Se ela for útil para você, diga no
+[Early access](https://github.com/Protemir/diskvet/discussions/1): ela será feita se
+houver pedidos suficientes, e será gratuita.
 
 ## Fontes
 

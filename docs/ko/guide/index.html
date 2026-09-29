@@ -274,7 +274,7 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 <pre><code>sh diskvet.sh report --k8s auto &gt; report.md</code></pre>
 <p><code>--k8s NAMESPACE/POD</code>로 파드를 지정할 수 있습니다. 비밀번호는 파드 밖으로 나가지 않으며, 필요한 권한은 파드에 대한 <code>get</code>, <code>list</code>와 <code>pods/exec</code>뿐입니다. Helm 차트별로 어떤 파드가 쓰이고 수정을 어디에 적용하는지는 <a href="https://github.com/Protemir/diskvet/blob/main/docs/recipes/kubernetes.md">Kubernetes 레시피</a>(영어)를 참고하십시오.</p>
 <p>diskvet은 <code>system.*</code> 테이블(<code>system.tables</code>, <code>system.parts</code>, <code>system.disks</code>, <code>system.detached_parts</code>, <code>system.mutations</code>, <code>system.part_log</code> 등)의 메타데이터만 읽으며, <code>readonly=2</code>와 리소스 제한을 걸고 실행됩니다. 사용자 테이블의 행, <code>system.query_log</code>, 쿼리 텍스트는 절대 읽지 않고, 어디에도 데이터를 보내지 않습니다. 자동으로 실행되는 수정은 없습니다. 각 수정 명령은 직접 읽어 보고 실행합니다.</p>
-<p>매시간 점검하고 디스크가 가득 차기 전에 경고하는 버전을 준비하고 있습니다(2026년 10월 무료 베타 시작 예정).</p>
+<p>매시간 점검하고 디스크가 가득 차기 전에 이메일로 알려 주는 버전을 계획하고 있습니다. 사용하고 싶다면 <a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a>에 알려 주십시오. 원하는 사람이 충분히 모이면 만들 예정이며, 무료로 제공됩니다.</p>
 <h2 id="참고-자료">참고 자료</h2>
 <p>ClickHouse 문서와 소스 코드:</p>
 <ul>

@@ -342,7 +342,7 @@ sh diskvet.sh report --k8s auto > report.md
 
 它只从 `system.*` 表（`system.tables`、`system.parts`、`system.disks`、`system.detached_parts`、`system.mutations`、`system.part_log` 等）读取元数据，并在 `readonly=2` 和资源限制下运行。它从不读取你的表中的数据行、`system.query_log` 或查询文本，也不会向任何地方发送任何数据。不会有任何操作自动执行：每一条修复命令都由你自己阅读并执行。
 
-每小时检查一次、在磁盘写满之前发出预警的版本即将推出（免费内测将于 2026 年 10 月开始）。
+计划推出一个每小时检查一次、在磁盘写满之前发邮件提醒的版本。如果你会用到，请在 [Early access](https://github.com/Protemir/diskvet/discussions/1) 里说一声：想要的人够多就会做，而且免费。
 
 ## 参考资料
 

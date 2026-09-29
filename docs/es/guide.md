@@ -452,8 +452,10 @@ lee filas de tus tablas, ni `system.query_log`, ni textos de consultas, y no
 envía nada a ninguna parte. Nada se ejecuta por sí solo: tú lees cada
 corrección y la ejecutas.
 
-Pronto habrá una versión que revisará el servidor cada hora y avisará antes de
-que el disco se llene (la beta gratuita empezará en octubre de 2026).
+Está prevista una versión que revise el servidor cada hora y te avise por correo
+antes de que el disco se llene. Si te interesa, dilo en
+[Early access](https://github.com/Protemir/diskvet/discussions/1): se hará si la piden
+suficientes personas, y será gratuita.
 
 ## Fuentes
 

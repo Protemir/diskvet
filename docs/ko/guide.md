@@ -342,7 +342,7 @@ sh diskvet.sh report --k8s auto > report.md
 
 diskvet은 `system.*` 테이블(`system.tables`, `system.parts`, `system.disks`, `system.detached_parts`, `system.mutations`, `system.part_log` 등)의 메타데이터만 읽으며, `readonly=2`와 리소스 제한을 걸고 실행됩니다. 사용자 테이블의 행, `system.query_log`, 쿼리 텍스트는 절대 읽지 않고, 어디에도 데이터를 보내지 않습니다. 자동으로 실행되는 수정은 없습니다. 각 수정 명령은 직접 읽어 보고 실행합니다.
 
-매시간 점검하고 디스크가 가득 차기 전에 경고하는 버전을 준비하고 있습니다(2026년 10월 무료 베타 시작 예정).
+매시간 점검하고 디스크가 가득 차기 전에 이메일로 알려 주는 버전을 계획하고 있습니다. 사용하고 싶다면 [Early access](https://github.com/Protemir/diskvet/discussions/1)에 알려 주십시오. 원하는 사람이 충분히 모이면 만들 예정이며, 무료로 제공됩니다.
 
 ## 참고 자료
 

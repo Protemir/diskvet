@@ -169,8 +169,8 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # 本机
     </section>
 
     <section aria-labelledby="beta-title">
-      <h2 id="beta-title">每小时体检：10 月免费内测</h2>
-      <p>脚本免费，而且会一直免费。但单次运行无法告诉你磁盘究竟什么时候会满。这正是我现在在做的部分：</p>
+      <h2 id="beta-title">每小时体检：计划中，免费</h2>
+      <p>脚本免费，而且会一直免费。但单次运行无法告诉你磁盘究竟什么时候会满。计划中的每小时版本要补上的正是这一部分：</p>
       <ul>
         <li>每小时一次快照：内容就是 <code>sh diskvet.sh --print-payload</code> 打印的那段 JSON，没有别的；</li>
         <li>在磁盘写满<strong>之前</strong>发邮件提醒，而且只在状态变化时发送；</li>
@@ -179,10 +179,10 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # 本机
       </ul>
       <p>你不需要自己部署任何服务，也不需要开放端口：由你的服务器主动向外发送一份签名的小快照，没有任何外部连接进来。主机名、IP、用户名、查询文本和错误信息永远不会发送；你自己的表名只会以加盐哈希的形式离开服务器。</p>
       <div class="callout">
-        <p><strong>想参加？</strong>到
+        <p><strong>会用吗？</strong>到
           <a href="https://github.com/Protemir/diskvet/discussions/1">Early access 讨论帖（#1）</a>留言，说明你的
-          ClickHouse 运行在什么环境里、磁盘大概有多大。可以用中文留言，但回复可能是英文。内测开放时，你会在那里收到回复。请不要在那里写公司名或主机名：这是公开讨论帖。</p>
-        <p class="small muted">完全免费：无需绑卡，也无需选择套餐。脚本本身同样免费、开源。位于哈萨克斯坦的服务器目前只能使用本地报告。</p>
+          ClickHouse 运行在什么环境里、磁盘大概有多大。可以用中文留言，但回复可能是英文。想要的人够多就会做，到时你会在那里收到回复。请不要在那里写公司名或主机名：这是公开讨论帖。</p>
+        <p class="small muted">将会完全免费：无需绑卡，也无需选择套餐。目前还没有确定日期。脚本本身同样免费、开源。位于哈萨克斯坦的服务器目前只能使用本地报告。</p>
       </div>
       <p>发现脚本漏掉的问题，或者修复建议有误？请<a href="https://github.com/Protemir/diskvet/issues/new/choose">提交 issue</a>，这是你能提供的最大帮助。可以用中文写，但回复可能是英文。</p>
     </section>

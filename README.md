@@ -696,15 +696,16 @@ and a logged-in `gh`, which renders the Markdown).
 
 ## Early access
 
-The script is free and stays free. Separately, I'm building the part a
+The script is free and stays free. Separately, I've planned the part a
 one-off run can't do: an hourly snapshot (exactly the `--print-payload` JSON,
 nothing more), an email **before** the disk fills, a signal when snapshots stop
-arriving, and a short weekly report. It opens in October 2026 and is free: no
-card, no plan to pick.
+arriving, and a short weekly report. It isn't built yet and has no date. It
+gets built if enough people ask for it, and it will be free: no card, no plan
+to pick.
 
-**Want in? Comment in [Early access (discussion #1)](https://github.com/Protemir/diskvet/discussions/1)**
-with what runs your ClickHouse and roughly how big the disk is; you'll get a
-reply there when the beta opens. Found a problem the script misses, or a wrong
+**Would you use it? Comment in [Early access (discussion #1)](https://github.com/Protemir/diskvet/discussions/1)**
+with what runs your ClickHouse and roughly how big the disk is; if it gets
+built, you'll get a reply there. Found a problem the script misses, or a wrong
 fix? [Open an issue](https://github.com/Protemir/diskvet/issues/new/choose) —
 that's the most useful thing you can do.
 

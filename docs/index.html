@@ -190,9 +190,9 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # local 
     </section>
 
     <section aria-labelledby="beta-title">
-      <h2 id="beta-title">Hourly check-ups: free beta in October</h2>
+      <h2 id="beta-title">Hourly check-ups: planned, and free</h2>
       <p>The script is free and stays free. A single run can't tell when the disk will really run out.
-        That is the part I'm building now:</p>
+        That is what the planned hourly version adds:</p>
       <ul>
         <li>an hourly snapshot: exactly the JSON that <code>sh diskvet.sh --print-payload</code> prints, nothing more;</li>
         <li>an email <strong>before</strong> the disk fills, only when a state changes;</li>
@@ -203,11 +203,12 @@ sh diskvet.sh report --host 127.0.0.1 --user diskvet --password '...'   # local 
         nothing connects in. Host names, IPs, users, query texts and errors are never sent; your own
         table names leave your server only as salted hashes.</p>
       <div class="callout">
-        <p><strong>Want in?</strong> Comment in
+        <p><strong>Would you use it?</strong> Comment in
           <a href="https://github.com/Protemir/diskvet/discussions/1">Early access (discussion #1)</a>
-          with what runs your ClickHouse and roughly how big the disk is. You'll get a reply there
-          when the beta opens. Please don't post company or host names there: it's a public thread.</p>
-        <p class="small muted">It's free: no card, no plan to pick. The script stays free and open source.
+          with what runs your ClickHouse and roughly how big the disk is. It gets built if enough
+          people ask, and you'll get a reply there if it does. Please don't post company or host
+          names there: it's a public thread.</p>
+        <p class="small muted">It will be free: no card, no plan to pick. No date yet. The script stays free and open source.
           Servers in Kazakhstan: local report only, for now.</p>
       </div>
       <p>Found a problem the script misses, or a wrong fix?

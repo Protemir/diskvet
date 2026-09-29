@@ -342,7 +342,7 @@ sh diskvet.sh report --k8s auto > report.md
 
 diskvet が読み取るのは、`system.*` テーブル（`system.tables`、`system.parts`、`system.disks`、`system.detached_parts`、`system.mutations`、`system.part_log` など）のメタデータだけで、`readonly=2` とリソース制限を付けて実行します。自分のテーブルの行、`system.query_log`、クエリのテキストは一切読み取らず、どこにもデータを送信しません。修正が自動で実行されることはなく、各修正の内容を確認したうえで自分で実行します。
 
-1 時間ごとにチェックし、ディスクがいっぱいになる前に警告するバージョンを準備中です（2026 年 10 月に無料ベータを開始予定）。
+1 時間ごとにチェックし、ディスクがいっぱいになる前にメールで知らせるバージョンを計画しています。使いたい場合は [Early access](https://github.com/Protemir/diskvet/discussions/1) でお知らせください。希望者が十分に集まれば開発し、無料で提供します。
 
 ## 参考資料
 

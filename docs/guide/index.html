@@ -362,8 +362,9 @@ Helm chart runs and where its fixes go:
 <code>system.part_log</code> and a few more), with <code>readonly=2</code> and resource limits. It
 never reads rows of your tables, <code>system.query_log</code> or query texts, and sends
 nothing anywhere. Nothing runs by itself: you read each fix and run it.</p>
-<p>An hourly version that warns before the disk fills is coming (a free beta opens in
-October 2026).</p>
+<p>An hourly version that emails you before the disk fills is planned. If you'd
+use it, say so in <a href="https://github.com/Protemir/diskvet/discussions/1">Early access</a>:
+it gets built if enough people ask, and it will be free.</p>
 <h2 id="sources">Sources</h2>
 <p>ClickHouse documentation and source:</p>
 <ul>
