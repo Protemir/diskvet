@@ -73,9 +73,12 @@ only marks the rows; the space comes back when a part is merged, and old
 monthly partitions are rarely merged. Check 7 lists the partitions and prints
 `ALTER TABLE ... APPLY DELETED MASK IN PARTITION ID '...'` for each.
 
-Newer Langfuse workers have a background job for exactly this:
-`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true` (off by default; look for
-it in your version's `.env.prod.example` before relying on it).
+Since v3.179.0 the worker has a cleaner for this, off by default
+(`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`), but it picks only
+`patch-` partitions
+([its query](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)).
+With the default `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=alter_update`
+a `DELETE` writes none, so it finds nothing: run the commands from check 7.
 
 ## Before you upgrade ClickHouse to 26.8 or newer
 

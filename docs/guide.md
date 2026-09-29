@@ -354,9 +354,16 @@ it needs free space for the new copies and loads the disk. Run it off-peak and
 watch it with `SELECT * FROM system.mutations WHERE NOT is_done`. In #13969 it
 freed ~360 GiB per replica in ~17 minutes.
 
-Since v3.179.0 the Langfuse worker can do this on a schedule:
-`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true` (off by default; see
-`.env.prod.example`, [PR #14035](https://github.com/langfuse/langfuse/pull/14035)).
+Since v3.179.0 the Langfuse worker has a cleaner, off by default:
+`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`
+([PR #14035](https://github.com/langfuse/langfuse/pull/14035)). But it picks only
+`patch-` partitions
+([`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)),
+and a `DELETE` writes those only with `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update`
+on a table with a `_block_number` column. With the default `alter_update`
+([`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137)),
+and on v3's tables, which have no such column, it finds nothing: run
+`APPLY DELETED MASK` yourself.
 
 ### Are old parts stuck on disk? (inactive and detached parts)
 
@@ -482,7 +489,7 @@ Langfuse:
 - PR #16363, Docker log rotation in the README (daemon defaults, no external truncation): https://github.com/langfuse/langfuse/pull/16363
 - Discussion #13969, lightweight-deleted rows: https://github.com/orgs/langfuse/discussions/13969
 - Discussion #15024, inactive parts and 59 GiB text_log: https://github.com/orgs/langfuse/discussions/15024
-- PR #14035, deleted-mask cleaner (released in v3.179.0): https://github.com/langfuse/langfuse/pull/14035, https://github.com/langfuse/langfuse/releases/tag/v3.179.0
+- PR #14035, deleted-mask cleaner (released in v3.179.0), its query and the delete mode default: https://github.com/langfuse/langfuse/pull/14035, https://github.com/langfuse/langfuse/releases/tag/v3.179.0, https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56, https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137
 - #16858, DateTime64 on ClickHouse 26.8+: https://github.com/langfuse/langfuse/issues/16858
 - PR #16892 and v3 backport PR #16957: https://github.com/langfuse/langfuse/pull/16892, https://github.com/langfuse/langfuse/pull/16957
 - Releases with the fix: https://github.com/langfuse/langfuse/releases/tag/v4.28.0, https://github.com/langfuse/langfuse/releases/tag/v3.225.7

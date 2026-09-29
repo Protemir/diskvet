@@ -314,9 +314,16 @@ ORDER BY sum(bytes_on_disk) DESC;</code></pre>
 it needs free space for the new copies and loads the disk. Run it off-peak and
 watch it with <code>SELECT * FROM system.mutations WHERE NOT is_done</code>. In #13969 it
 freed ~360 GiB per replica in ~17 minutes.</p>
-<p>Since v3.179.0 the Langfuse worker can do this on a schedule:
-<code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code> (off by default; see
-<code>.env.prod.example</code>, <a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>).</p>
+<p>Since v3.179.0 the Langfuse worker has a cleaner, off by default:
+<code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code>
+(<a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>). But it picks only
+<code>patch-</code> partitions
+(<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56"><code>helpers.ts</code></a>),
+and a <code>DELETE</code> writes those only with <code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update</code>
+on a table with a <code>_block_number</code> column. With the default <code>alter_update</code>
+(<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137"><code>env.ts</code></a>),
+and on v3's tables, which have no such column, it finds nothing: run
+<code>APPLY DELETED MASK</code> yourself.</p>
 <h3 id="are-old-parts-stuck-on-disk-inactive-and-detached-parts">Are old parts stuck on disk? (inactive and detached parts)</h3>
 <pre><code>SELECT database, table, count() AS parts,
        formatReadableSize(sum(bytes_on_disk)) AS size,
@@ -447,7 +454,7 @@ it gets built if enough people ask, and it will be free.</p>
 </li>
 <li>Discussion #15024, inactive parts and 59 GiB text_log: <a href="https://github.com/orgs/langfuse/discussions/15024">https://github.com/orgs/langfuse/discussions/15024</a>
 </li>
-<li>PR #14035, deleted-mask cleaner (released in v3.179.0): <a href="https://github.com/langfuse/langfuse/pull/14035">https://github.com/langfuse/langfuse/pull/14035</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.179.0">https://github.com/langfuse/langfuse/releases/tag/v3.179.0</a>
+<li>PR #14035, deleted-mask cleaner (released in v3.179.0), its query and the delete mode default: <a href="https://github.com/langfuse/langfuse/pull/14035">https://github.com/langfuse/langfuse/pull/14035</a>, <a href="https://github.com/langfuse/langfuse/releases/tag/v3.179.0">https://github.com/langfuse/langfuse/releases/tag/v3.179.0</a>, <a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56">https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56</a>, <a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137">https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137</a>
 </li>
 <li>#16858, DateTime64 on ClickHouse 26.8+: <a href="https://github.com/langfuse/langfuse/issues/16858">https://github.com/langfuse/langfuse/issues/16858</a>
 </li>
