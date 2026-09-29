@@ -20,7 +20,7 @@
 #   sh diskvet.sh --help
 
 NAME=diskvet
-VERSION=0.3.1
+VERSION=0.3.2
 BETA_URL='https://github.com/Protemir/diskvet#early-access'
 
 # Git Bash on Windows rewrites arguments that look like /paths before they
