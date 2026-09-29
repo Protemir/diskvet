@@ -14,7 +14,9 @@ permissions:
 jobs:
   offline:
     # No server: SQL safety, payload privacy, report rendering from fixtures,
-    # under dash and under busybox ash + busybox awk.
+    # --k8s and --docker with fake kubectl and docker (tests/replay.sh runs
+    # tests/k8s_offline.sh and tests/docker_offline.sh), under dash and under
+    # busybox ash + busybox awk.
     runs-on: ubuntu-latest
     outputs:
       kubernetes: ${{ steps.changes.outputs.kubernetes }}
@@ -57,7 +59,7 @@ jobs:
         run: sh tests/check_sql.sh
       - name: shellcheck (POSIX sh)
         # preinstalled on ubuntu-latest
-        run: shellcheck -s sh diskvet.sh tests/*.sh tests/fixtures/fake-kubectl/*
+        run: shellcheck -s sh diskvet.sh tests/*.sh tests/fixtures/fake-kubectl/* tests/fixtures/fake-docker/*
       - name: Offline tests with dash and mawk
         run: dash tests/replay.sh
       - name: Offline tests with busybox ash and busybox awk
@@ -67,6 +69,34 @@ jobs:
           mkdir -p /tmp/bb
           busybox --install -s /tmp/bb
           PATH=/tmp/bb:$PATH busybox sh tests/replay.sh
+
+  macos:
+    # The offline tests on a Mac: macOS's own /bin/sh (bash 3.2 as sh) with the
+    # BSD awk, sed, grep and date of the system, ahead of anything Homebrew has.
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      SYSPATH: /usr/bin:/bin:/usr/sbin:/sbin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The shell and tools under test
+        run: |
+          sw_vers
+          PATH=$SYSPATH /bin/sh -c 'command -v sh awk sed grep date; /bin/sh --version | sed -n 1p; awk --version'
+      - name: checks.sql is SELECT from system.* only
+        run: PATH=$SYSPATH /bin/sh tests/check_sql.sh
+      - name: shellcheck (POSIX sh), when installed
+        # the offline job runs it on every push; here only if the image has it
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck -s sh diskvet.sh tests/*.sh tests/fixtures/fake-kubectl/* tests/fixtures/fake-docker/*
+          else
+            echo "shellcheck is not installed: skipped (the offline job runs it)"
+          fi
+      - name: Offline tests with /bin/sh and BSD awk
+        run: PATH=$SYSPATH /bin/sh tests/replay.sh
 
   clickhouse:
     # Real servers in Docker: seed problems, run the script from the host and
