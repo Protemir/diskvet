@@ -73,6 +73,13 @@ EOF
 die() { printf '%s: %s\n' "$NAME" "$*" >&2; exit 2; }
 note() { printf '%s: %s\n' "$NAME" "$*" >&2; }
 
+# For the case patterns that check what may be typed: bash takes a range such
+# as a-z in the locale's collation order, where it can match A too (macOS
+# /bin/sh, bash 3.2 with en_US.UTF-8), so the characters are spelled out.
+LOWER=abcdefghijklmnopqrstuvwxyz
+UPPER=ABCDEFGHIJKLMNOPQRSTUVWXYZ
+DIGITS=0123456789
+
 # ---------------------------------------------------------------- arguments
 cmd=report
 docker_arg=""
@@ -149,9 +156,9 @@ fi
 k8s_name() {
     case $1 in ''|-*|*-|.*|*.) return 1 ;; esac
     if [ "${3:-}" = . ]; then
-        case $1 in *[!a-z0-9.-]*) return 1 ;; esac
+        case $1 in *[!$LOWER$DIGITS.-]*) return 1 ;; esac
     else
-        case $1 in *[!a-z0-9-]*) return 1 ;; esac
+        case $1 in *[!$LOWER$DIGITS-]*) return 1 ;; esac
     fi
     [ "${#1}" -le "$2" ]
 }
@@ -160,7 +167,7 @@ k8s_name() {
 # needs them (a path with a space, say). For the commands diskvet prints.
 shq() {
     case $1 in
-        ''|*[!A-Za-z0-9._/:@+,=-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+        ''|*[!$UPPER$LOWER$DIGITS._/:@+,=-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
         *) printf '%s' "$1" ;;
     esac
 }
@@ -197,7 +204,7 @@ if [ -n "$k8s_set" ]; then
     if [ -n "$kctr_set" ]; then k8s_name "$kctr" 63 || die "not a valid Kubernetes name: $kctr"; fi
     if [ -n "$kctx_typed" ]; then
         case $kctx in
-            ''|*[!A-Za-z0-9._:/@-]*) die "--context: diskvet prints this name into the fix commands, so it accepts only letters, digits and . _ : / @ -" ;;
+            ''|*[!$UPPER$LOWER$DIGITS._:/@-]*) die "--context: diskvet prints this name into the fix commands, so it accepts only letters, digits and . _ : / @ -" ;;
         esac
     fi
     if [ -n "$replay" ] && { [ -n "$kauto" ] || [ -z "$kns" ]; }; then
@@ -210,13 +217,13 @@ fi
 # the time limit of every docker call and kubectl exec (bounded)
 if [ "$transport" != local ]; then
     case $kto in
-        ''|*[!0-9]*) die "DISKVET_EXEC_TIMEOUT must be a whole number of seconds (5 or more)" ;;
+        ''|*[!$DIGITS]*) die "DISKVET_EXEC_TIMEOUT must be a whole number of seconds (5 or more)" ;;
     esac
     [ "$kto" -ge 5 ] 2>/dev/null || die "DISKVET_EXEC_TIMEOUT must be a whole number of seconds (5 or more)"
 fi
 
 case $ttl_days in
-    ''|*[!0-9]*) die "--ttl-days must be a whole number of days" ;;
+    ''|*[!$DIGITS]*) die "--ttl-days must be a whole number of days" ;;
 esac
 [ "$ttl_days" -ge 1 ] || die "--ttl-days must be at least 1"
 
@@ -724,7 +731,7 @@ else
         fi
         if [ -n "$salt" ]; then
             case $salt in
-                *[!0-9A-Za-z_-]*) die "SALT in $env_file may contain only letters, digits, '_' and '-'" ;;
+                *[!$DIGITS$UPPER${LOWER}_-]*) die "SALT in $env_file may contain only letters, digits, '_' and '-'" ;;
             esac
             [ "${#salt}" -ge 32 ] || die "SALT in $env_file is too short (${#salt} characters, need at least 32; 64 random hex characters are best, see README)"
         else
@@ -746,8 +753,8 @@ else
     # kubectl error, no error at all) is checked with the probe once more.
     answered() {
         case $(err_line "$1") in
-            'Code: 32'[!0-9]*|'Code: 209'[!0-9]*|'Code: 210'[!0-9]*) return 1 ;;
-            'Code: '[0-9]*) return 0 ;;
+            'Code: 32'[!$DIGITS]*|'Code: 209'[!$DIGITS]*|'Code: 210'[!$DIGITS]*) return 1 ;;
+            'Code: '[$DIGITS]*) return 0 ;;
         esac
         return 1
     }
