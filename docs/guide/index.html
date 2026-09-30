@@ -317,10 +317,22 @@ ORDER BY sum(bytes_on_disk) DESC;</code></pre>
 it needs free space for the new copies and loads the disk. Run it off-peak and
 watch it with <code>SELECT * FROM system.mutations WHERE NOT is_done</code>. In #13969 it
 freed ~360 GiB per replica in ~17 minutes.</p>
+<p>If the query shows ids like <code>patch-f18f7271629a324b0d26b6ad0b83a6c2-202605</code>, the
+<code>DELETE</code> ran with <code>lightweight_delete_mode = 'lightweight_update'</code>. The mask is
+then in these small patch parts, and the big parts it applies to keep
+<code>has_lightweight_delete = 0</code>, so the query doesn't show them. With the full
+<code>patch-</code> id the command runs without an error and removes nothing. Use the plain
+id, everything after <code>patch-&lt;hash&gt;-</code> (<code>202605</code> here, <code>202605-1</code> with a tuple
+partition key), and run the command twice: the first run only writes the mask
+into the parts, the second removes the rows. Pasting both at once works:</p>
+<pre><code>ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';</code></pre>
+<p>The patch parts can stay in the query for a few minutes after that
+(<a href="../fix/clickhouse-ttl-delete-not-freeing-disk/#deleted-rows-apply-deleted-mask">test details</a>).</p>
 <p>Since v3.179.0 the Langfuse worker has a cleaner, off by default:
 <code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code>
 (<a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>). But it picks only
-<code>patch-</code> partitions
+<code>patch-</code> partitions and skips the current month
 (<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56"><code>helpers.ts</code></a>),
 and a <code>DELETE</code> writes those only with <code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update</code>
 on a table with the <code>_block_number</code> and <code>_block_offset</code> columns

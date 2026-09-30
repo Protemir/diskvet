@@ -328,10 +328,23 @@ afetadas, então precisa de espaço livre para as novas cópias e gera carga no
 disco. Execute-a fora do horário de pico e acompanhe com
 <code>SELECT * FROM system.mutations WHERE NOT is_done</code>. No #13969, ela liberou
 ~360 GiB por réplica em ~17 minutos.</p>
+<p>Se a consulta mostrar ids como <code>patch-f18f7271629a324b0d26b6ad0b83a6c2-202605</code>,
+o <code>DELETE</code> foi executado com <code>lightweight_delete_mode = 'lightweight_update'</code>.
+Nesse caso a máscara fica nessas pequenas partes de patch (patch parts), e as
+partes grandes às quais ela se aplica mantêm <code>has_lightweight_delete = 0</code>, então
+a consulta não as mostra. Com o id <code>patch-</code> completo, o comando roda sem erro e
+não remove nada. Use o id simples, tudo o que vem depois de <code>patch-&lt;hash&gt;-</code>
+(<code>202605</code> aqui, <code>202605-1</code> com uma chave de partição em tupla), e execute o
+comando duas vezes: a primeira execução só grava a máscara nas partes, a segunda
+remove as linhas. Dá para colar os dois de uma vez:</p>
+<pre><code>ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';</code></pre>
+<p>As partes de patch podem continuar aparecendo na consulta por alguns minutos
+depois disso.</p>
 <p>Desde a v3.179.0, o worker do Langfuse tem uma rotina de limpeza, desativada por
 padrão: <code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code>
 (<a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>). Mas ela pega só
-as partições <code>patch-</code>
+as partições <code>patch-</code> e pula o mês atual
 (<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56"><code>helpers.ts</code></a>),
 e um <code>DELETE</code> só grava essas partições com <code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update</code>
 em uma tabela com as colunas <code>_block_number</code> e <code>_block_offset</code>

@@ -368,10 +368,28 @@ disco. Execute-a fora do horário de pico e acompanhe com
 `SELECT * FROM system.mutations WHERE NOT is_done`. No #13969, ela liberou
 ~360 GiB por réplica em ~17 minutos.
 
+Se a consulta mostrar ids como `patch-f18f7271629a324b0d26b6ad0b83a6c2-202605`,
+o `DELETE` foi executado com `lightweight_delete_mode = 'lightweight_update'`.
+Nesse caso a máscara fica nessas pequenas partes de patch (patch parts), e as
+partes grandes às quais ela se aplica mantêm `has_lightweight_delete = 0`, então
+a consulta não as mostra. Com o id `patch-` completo, o comando roda sem erro e
+não remove nada. Use o id simples, tudo o que vem depois de `patch-<hash>-`
+(`202605` aqui, `202605-1` com uma chave de partição em tupla), e execute o
+comando duas vezes: a primeira execução só grava a máscara nas partes, a segunda
+remove as linhas. Dá para colar os dois de uma vez:
+
+```sql
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+```
+
+As partes de patch podem continuar aparecendo na consulta por alguns minutos
+depois disso.
+
 Desde a v3.179.0, o worker do Langfuse tem uma rotina de limpeza, desativada por
 padrão: `LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`
 ([PR #14035](https://github.com/langfuse/langfuse/pull/14035)). Mas ela pega só
-as partições `patch-`
+as partições `patch-` e pula o mês atual
 ([`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)),
 e um `DELETE` só grava essas partições com `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update`
 em uma tabela com as colunas `_block_number` e `_block_offset`

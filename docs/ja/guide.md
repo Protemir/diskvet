@@ -277,7 +277,16 @@ ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
 
 **注意**：これはヘビーウェイトなミューテーション（mutation）です。対象のパーツを書き直すため、新しいコピーを書き込むための空き容量が必要になり、ディスクにも負荷がかかります。ピーク時間帯を避けて実行し、`SELECT * FROM system.mutations WHERE NOT is_done` で進行状況を確認してください。#13969 では、約 17 分でレプリカ 1 台あたり約 360 GiB が空きました。
 
-v3.179.0 以降の Langfuse worker にはクリーナーがあり、`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true` で有効になります（デフォルトは無効。[PR #14035](https://github.com/langfuse/langfuse/pull/14035)）。ただし、クリーナーが対象にするのは名前が `patch-` で始まるパーティションだけです（[`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)）。`DELETE` がこうしたパーティションを書き込むのは、`CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update` を設定し、`_block_number` 列と `_block_offset` 列のあるテーブル（[要件](https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements)）から削除した場合に限られます。デフォルトの `alter_update`（[`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137)）のままの場合も、これらの列がない v3 のテーブルの場合も、クリーナーは何も見つけません。`APPLY DELETED MASK` は自分で実行してください。
+クエリに `patch-f18f7271629a324b0d26b6ad0b83a6c2-202605` のような ID が出る場合、その `DELETE` は `lightweight_delete_mode = 'lightweight_update'` で実行されています。このとき削除マスクは小さなパッチパーツ（patch part）に入っていて、マスクの対象になる大きなパーツは `has_lightweight_delete = 0` のままなので、クエリには出てきません。`patch-` で始まる ID をそのまま指定すると、コマンドはエラーなしで終わりますが、何も削除しません。`patch-<hash>-` より後ろをすべて使った通常の ID（この例では `202605`、タプルのパーティションキーなら `202605-1`）を指定して、コマンドを 2 回実行してください。1 回目はマスクをパーツに書き込むだけで、2 回目で行が削除されます。2 つまとめて貼り付けても動きます。
+
+```sql
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+```
+
+その後も数分間は、パッチパーツがクエリに出ることがあります。
+
+v3.179.0 以降の Langfuse worker にはクリーナーがあり、`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true` で有効になります（デフォルトは無効。[PR #14035](https://github.com/langfuse/langfuse/pull/14035)）。ただし、クリーナーが対象にするのは名前が `patch-` で始まるパーティションだけで、今月のパーティションは除きます（[`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)）。`DELETE` がこうしたパーティションを書き込むのは、`CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update` を設定し、`_block_number` 列と `_block_offset` 列のあるテーブル（[要件](https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements)）から削除した場合に限られます。デフォルトの `alter_update`（[`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137)）のままの場合も、これらの列がない v3 のテーブルの場合も、クリーナーは何も見つけません。`APPLY DELETED MASK` は自分で実行してください。
 
 ### 古いパーツがディスクに残っていないか（非アクティブなパーツとデタッチされたパーツ）
 
@@ -362,7 +371,7 @@ ClickHouse のドキュメントとソースコード：
 - MergeTree の設定：`merge_with_ttl_timeout`（14400 秒）https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout, `old_parts_lifetime`（480 秒）https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime, `max_bytes_to_merge_at_max_space_in_pool`（150 GiB）https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool
 - サーバーログのローテーション（`logger`：`level`、`size`、`count`）：https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger
 - 論理削除（lightweight DELETE）：https://clickhouse.com/docs/reference/statements/delete
-- `lightweight_update` の DELETE が `patch-` パーツを書き込むのは、`_block_number` 列と `_block_offset` 列のあるテーブルだけ：https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements（25.12 と 26.9 で確認。`_block_number` 列だけではミューテーションになる）
+- `lightweight_update` の DELETE が `patch-` パーツを書き込むのは、`_block_number` 列と `_block_offset` 列のあるテーブルだけ（25.12 と 26.9 で確認。`_block_number` 列だけではミューテーションになる）：https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements
 - APPLY DELETED MASK：https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask
 - system.parts：https://clickhouse.com/docs/reference/system-tables/parts
 - system.detached_parts：https://clickhouse.com/docs/reference/system-tables/detached_parts

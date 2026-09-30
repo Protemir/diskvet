@@ -238,7 +238,11 @@ ORDER BY sum(bytes_on_disk) DESC;</code></pre>
 <p>然后逐个分区应用删除掩码（<a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">APPLY DELETED MASK</a>）：</p>
 <pre><code>ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';</code></pre>
 <p><strong>注意</strong>：这是一个重量级变更（mutation）。它会重写受影响的数据片段，所以需要有空闲空间来写入重写后的新数据片段，同时会加重磁盘负载。请在业务低峰期执行，并用 <code>SELECT * FROM system.mutations WHERE NOT is_done</code> 观察进度。在 #13969 中，这个操作在约 17 分钟内为每个副本（replica）释放了约 360 GiB。</p>
-<p>从 v3.179.0 开始，Langfuse worker 自带一个清理任务，默认关闭：<code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code>（<a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>）。但它只处理 <code>patch-</code> 分区（<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56"><code>helpers.ts</code></a>），而 <code>DELETE</code> 只有在设置了 <code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update</code>、并且表里有 <code>_block_number</code> 和 <code>_block_offset</code> 列时（<a href="https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements">要求</a>），才会写出这类分区。在默认的 <code>alter_update</code> 模式下（<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137"><code>env.ts</code></a>），以及在没有这两列的 v3 表上，它什么也找不到：请自己执行 <code>APPLY DELETED MASK</code>。</p>
+<p>如果查询结果里出现 <code>patch-f18f7271629a324b0d26b6ad0b83a6c2-202605</code> 这样的 ID，说明这个 <code>DELETE</code> 是用 <code>lightweight_delete_mode = 'lightweight_update'</code> 执行的。这时删除掩码写在这些小的补丁数据片段（patch part）里，而掩码所作用的大数据片段仍然是 <code>has_lightweight_delete = 0</code>，所以查询不会列出它们。直接用完整的 <code>patch-</code> ID，命令不会报错，但什么也不会删除。请使用普通 ID，也就是 <code>patch-&lt;hash&gt;-</code> 后面的全部内容（这里是 <code>202605</code>，元组分区键则是 <code>202605-1</code>），并把命令执行两次：第一次只把掩码写入数据片段，第二次才删除这些行。两条语句一次性粘贴也可以：</p>
+<pre><code>ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';</code></pre>
+<p>之后的几分钟里，补丁数据片段可能还会出现在查询结果中。</p>
+<p>从 v3.179.0 开始，Langfuse worker 自带一个清理任务，默认关闭：<code>LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true</code>（<a href="https://github.com/langfuse/langfuse/pull/14035">PR #14035</a>）。但它只处理 <code>patch-</code> 分区，并且跳过当月的分区（<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56"><code>helpers.ts</code></a>），而 <code>DELETE</code> 只有在设置了 <code>CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update</code>、并且表里有 <code>_block_number</code> 和 <code>_block_offset</code> 列时（<a href="https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements">要求</a>），才会写出这类分区。在默认的 <code>alter_update</code> 模式下（<a href="https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137"><code>env.ts</code></a>），以及在没有这两列的 v3 表上，它什么也找不到：请自己执行 <code>APPLY DELETED MASK</code>。</p>
 <h3 id="旧的数据片段卡在磁盘上非活动和已分离的数据片段">旧的数据片段卡在磁盘上？（非活动和已分离的数据片段）</h3>
 <pre><code>SELECT database, table, count() AS parts,
        formatReadableSize(sum(bytes_on_disk)) AS size,
@@ -312,7 +316,8 @@ sh diskvet.sh report --docker auto &gt; report.md</code></pre>
 <li>轻量级 DELETE：<a href="https://clickhouse.com/docs/reference/statements/delete">https://clickhouse.com/docs/reference/statements/delete</a>
 </li>
 <li>
-<code>lightweight_update</code> 模式的 DELETE 只在有 <code>_block_number</code> 和 <code>_block_offset</code> 列的表上写出 <code>patch-</code> 数据片段：<a href="https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements%EF%BC%88%E5%9C%A8">https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements（在</a> 25.12 和 26.9 上验证过：只有 <code>_block_number</code> 时会退回为变更（mutation））</li>
+<code>lightweight_update</code> 模式的 DELETE 只在有 <code>_block_number</code> 和 <code>_block_offset</code> 列的表上写出 <code>patch-</code> 数据片段（在 25.12 和 26.9 上验证过：只有 <code>_block_number</code> 时会退回为变更（mutation））：<a href="https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements">https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements</a>
+</li>
 <li>APPLY DELETED MASK：<a href="https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask">https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask</a>
 </li>
 <li>system.parts：<a href="https://clickhouse.com/docs/reference/system-tables/parts">https://clickhouse.com/docs/reference/system-tables/parts</a>

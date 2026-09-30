@@ -365,10 +365,27 @@ ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
 `SELECT * FROM system.mutations WHERE NOT is_done`. В #13969 она освободила
 ~360 ГиБ на каждой реплике примерно за 17 минут.
 
+Если запрос показывает id вида `patch-f18f7271629a324b0d26b6ad0b83a6c2-202605`,
+значит, `DELETE` выполнялся с `lightweight_delete_mode = 'lightweight_update'`.
+Тогда маска лежит в этих маленьких patch-кусках, а у больших кусков, к которым
+она относится, остаётся `has_lightweight_delete = 0`, и запрос их не показывает.
+С полным id `patch-` команда проходит без ошибки и ничего не удаляет. Возьмите
+обычный id, всё, что идёт после `patch-<hash>-` (здесь `202605`, а при ключе
+партиционирования в виде кортежа `202605-1`), и выполните команду дважды: первый
+запуск только записывает маску в куски, второй удаляет строки. Можно вставить
+обе команды сразу:
+
+```sql
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+```
+
+После этого patch-куски могут ещё несколько минут оставаться в выводе запроса.
+
 Начиная с v3.179.0 в воркере Langfuse есть очистка по маске удаления, по
 умолчанию выключенная: `LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`
 ([PR #14035](https://github.com/langfuse/langfuse/pull/14035)). Но она берёт
-только партиции `patch-`
+только партиции `patch-` и пропускает текущий месяц
 ([`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)),
 а `DELETE` записывает такие партиции, только если задано
 `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update` и у таблицы есть

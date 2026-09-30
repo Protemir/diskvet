@@ -357,10 +357,27 @@ it needs free space for the new copies and loads the disk. Run it off-peak and
 watch it with `SELECT * FROM system.mutations WHERE NOT is_done`. In #13969 it
 freed ~360 GiB per replica in ~17 minutes.
 
+If the query shows ids like `patch-f18f7271629a324b0d26b6ad0b83a6c2-202605`, the
+`DELETE` ran with `lightweight_delete_mode = 'lightweight_update'`. The mask is
+then in these small patch parts, and the big parts it applies to keep
+`has_lightweight_delete = 0`, so the query doesn't show them. With the full
+`patch-` id the command runs without an error and removes nothing. Use the plain
+id, everything after `patch-<hash>-` (`202605` here, `202605-1` with a tuple
+partition key), and run the command twice: the first run only writes the mask
+into the parts, the second removes the rows. Pasting both at once works:
+
+```sql
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+```
+
+The patch parts can stay in the query for a few minutes after that
+([test details](fix/clickhouse-ttl-delete-not-freeing-disk.md#deleted-rows-apply-deleted-mask)).
+
 Since v3.179.0 the Langfuse worker has a cleaner, off by default:
 `LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`
 ([PR #14035](https://github.com/langfuse/langfuse/pull/14035)). But it picks only
-`patch-` partitions
+`patch-` partitions and skips the current month
 ([`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)),
 and a `DELETE` writes those only with `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update`
 on a table with the `_block_number` and `_block_offset` columns

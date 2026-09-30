@@ -277,7 +277,16 @@ ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
 
 **注意**：这是一个重量级变更（mutation）。它会重写受影响的数据片段，所以需要有空闲空间来写入重写后的新数据片段，同时会加重磁盘负载。请在业务低峰期执行，并用 `SELECT * FROM system.mutations WHERE NOT is_done` 观察进度。在 #13969 中，这个操作在约 17 分钟内为每个副本（replica）释放了约 360 GiB。
 
-从 v3.179.0 开始，Langfuse worker 自带一个清理任务，默认关闭：`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`（[PR #14035](https://github.com/langfuse/langfuse/pull/14035)）。但它只处理 `patch-` 分区（[`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)），而 `DELETE` 只有在设置了 `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update`、并且表里有 `_block_number` 和 `_block_offset` 列时（[要求](https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements)），才会写出这类分区。在默认的 `alter_update` 模式下（[`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137)），以及在没有这两列的 v3 表上，它什么也找不到：请自己执行 `APPLY DELETED MASK`。
+如果查询结果里出现 `patch-f18f7271629a324b0d26b6ad0b83a6c2-202605` 这样的 ID，说明这个 `DELETE` 是用 `lightweight_delete_mode = 'lightweight_update'` 执行的。这时删除掩码写在这些小的补丁数据片段（patch part）里，而掩码所作用的大数据片段仍然是 `has_lightweight_delete = 0`，所以查询不会列出它们。直接用完整的 `patch-` ID，命令不会报错，但什么也不会删除。请使用普通 ID，也就是 `patch-<hash>-` 后面的全部内容（这里是 `202605`，元组分区键则是 `202605-1`），并把命令执行两次：第一次只把掩码写入数据片段，第二次才删除这些行。两条语句一次性粘贴也可以：
+
+```sql
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+ALTER TABLE default.observations APPLY DELETED MASK IN PARTITION ID '202605';
+```
+
+之后的几分钟里，补丁数据片段可能还会出现在查询结果中。
+
+从 v3.179.0 开始，Langfuse worker 自带一个清理任务，默认关闭：`LANGFUSE_CLICKHOUSE_DELETED_MASK_CLEANER_ENABLED=true`（[PR #14035](https://github.com/langfuse/langfuse/pull/14035)）。但它只处理 `patch-` 分区，并且跳过当月的分区（[`helpers.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/worker/src/features/deleted-mask-cleaner/helpers.ts#L40-L56)），而 `DELETE` 只有在设置了 `CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE=lightweight_update`、并且表里有 `_block_number` 和 `_block_offset` 列时（[要求](https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements)），才会写出这类分区。在默认的 `alter_update` 模式下（[`env.ts`](https://github.com/langfuse/langfuse/blob/v3.225.11/packages/shared/src/env.ts#L135-L137)），以及在没有这两列的 v3 表上，它什么也找不到：请自己执行 `APPLY DELETED MASK`。
 
 ### 旧的数据片段卡在磁盘上？（非活动和已分离的数据片段）
 
@@ -362,7 +371,7 @@ ClickHouse 文档和源码：
 - MergeTree 设置：`merge_with_ttl_timeout`（14400 秒）https://clickhouse.com/docs/reference/settings/merge-tree-settings/merge-with#merge_with_ttl_timeout, `old_parts_lifetime`（480 秒）https://clickhouse.com/docs/reference/settings/merge-tree-settings/other#old_parts_lifetime, `max_bytes_to_merge_at_max_space_in_pool`（150 GiB）https://clickhouse.com/docs/reference/settings/merge-tree-settings/max-bytes#max_bytes_to_merge_at_max_space_in_pool
 - 服务器日志轮转（`logger`：`level`、`size`、`count`）：https://clickhouse.com/docs/reference/settings/server-settings/settings/other#logger
 - 轻量级 DELETE：https://clickhouse.com/docs/reference/statements/delete
-- `lightweight_update` 模式的 DELETE 只在有 `_block_number` 和 `_block_offset` 列的表上写出 `patch-` 数据片段：https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements（在 25.12 和 26.9 上验证过：只有 `_block_number` 时会退回为变更（mutation））
+- `lightweight_update` 模式的 DELETE 只在有 `_block_number` 和 `_block_offset` 列的表上写出 `patch-` 数据片段（在 25.12 和 26.9 上验证过：只有 `_block_number` 时会退回为变更（mutation））：https://clickhouse.com/docs/reference/statements/update#lightweight-update-requirements
 - APPLY DELETED MASK：https://clickhouse.com/docs/reference/statements/alter/apply-deleted-mask
 - system.parts：https://clickhouse.com/docs/reference/system-tables/parts
 - system.detached_parts：https://clickhouse.com/docs/reference/system-tables/detached_parts
